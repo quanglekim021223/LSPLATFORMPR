@@ -76,7 +76,7 @@ class RetryingHttpClient:
         raise AssertionError("retry loop exhausted unexpectedly")
 
     def _backoff_seconds(self, retry_number: int) -> float:
-        return float(min(60.0, (2**retry_number) + self.jitter()))
+        return min(60.0, (2.0**retry_number) + self.jitter())
 
     @staticmethod
     def _retry_after_seconds(headers: Mapping[str, str]) -> float | None:

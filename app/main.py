@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, status
@@ -27,7 +27,7 @@ def create_app(
     writer = bronze_writer or LocalBronzeWriter(config.bronze_local_path)
 
     @asynccontextmanager
-    async def lifespan(application: FastAPI) -> AsyncIterator[None]:
+    async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
         await store.initialize()
         scheduler = None
         if config.scheduler_may_run:
