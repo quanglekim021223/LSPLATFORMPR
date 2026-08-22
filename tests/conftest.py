@@ -16,6 +16,8 @@ def settings_factory(tmp_path: Path) -> Callable[..., Settings]:
         values: dict[str, Any] = {
             "app_env": "test",
             "scheduler_enabled": False,
+            "ingestion_time": "05:00",
+            "ingestion_timezone": "Asia/Ho_Chi_Minh",
             "levelup_base_url": "https://levelup.test",
             "levelup_username": "test-user",
             "levelup_password": "test-password",
@@ -41,4 +43,3 @@ def response(request: httpx.Request, status: int, payload: object) -> httpx.Resp
 
 
 Handler = Callable[[httpx.Request], httpx.Response | Awaitable[httpx.Response]]
-

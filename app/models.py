@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 from typing import Any
@@ -48,6 +48,5 @@ class CourseResult:
     records_count: int = 0
     succeeded: bool = True
     error_message: str | None = None
-
 
 
