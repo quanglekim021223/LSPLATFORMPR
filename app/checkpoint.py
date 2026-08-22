@@ -41,7 +41,9 @@ class CheckpointStore:
                     started_at TEXT NOT NULL,
                     finished_at TEXT,
                     error_message TEXT,
-                    catalog_completed INTEGER NOT NULL DEFAULT 0
+                    catalog_completed INTEGER NOT NULL DEFAULT 0,
+                    resume_eligible INTEGER NOT NULL DEFAULT 1,
+                    resume_attempts INTEGER NOT NULL DEFAULT 0
                 );
                 CREATE TABLE IF NOT EXISTS checkpoints (
                     run_id TEXT NOT NULL,
@@ -79,6 +81,18 @@ class CheckpointStore:
             }
             if "heartbeat_at" not in lock_columns:
                 connection.execute("ALTER TABLE vendor_locks ADD COLUMN heartbeat_at TEXT")
+            run_columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(runs)")
+            }
+            if "resume_eligible" not in run_columns:
+                connection.execute(
+                    "ALTER TABLE runs ADD COLUMN resume_eligible INTEGER NOT NULL DEFAULT 1"
+                )
+            if "resume_attempts" not in run_columns:
+                connection.execute(
+                    "ALTER TABLE runs ADD COLUMN resume_attempts INTEGER NOT NULL DEFAULT 0"
+                )
             connection.execute(
                 """
                 UPDATE vendor_locks SET heartbeat_at = acquired_at
@@ -126,7 +140,7 @@ class CheckpointStore:
                 connection.execute(
                     """
                     UPDATE runs
-                    SET status = ?, finished_at = ?, error_message = ?
+                    SET status = ?, finished_at = ?, error_message = ?, resume_eligible = 1
                     WHERE run_id = ? AND status = ?
                     """,
                     (
@@ -171,14 +185,29 @@ class CheckpointStore:
             )
 
     async def find_resumable_run(
-        self, vendor: str, lock_ttl_seconds: int
+        self,
+        vendor: str,
+        lock_ttl_seconds: int,
+        max_resume_attempts: int = 2,
+        resume_max_age_hours: int = 24,
     ) -> str | None:
         return await asyncio.to_thread(
-            self._find_resumable_run, vendor, lock_ttl_seconds
+            self._find_resumable_run,
+            vendor,
+            lock_ttl_seconds,
+            max_resume_attempts,
+            resume_max_age_hours,
         )
 
-    def _find_resumable_run(self, vendor: str, lock_ttl_seconds: int) -> str | None:
+    def _find_resumable_run(
+        self,
+        vendor: str,
+        lock_ttl_seconds: int,
+        max_resume_attempts: int,
+        resume_max_age_hours: int,
+    ) -> str | None:
         stale_before = (datetime.now(UTC) - timedelta(seconds=lock_ttl_seconds)).isoformat()
+        resume_after = (datetime.now(UTC) - timedelta(hours=resume_max_age_hours)).isoformat()
         with self._connect() as connection:
             row = connection.execute(
                 """
@@ -188,6 +217,9 @@ class CheckpointStore:
                   ON vendor_locks.vendor = runs.vendor
                  AND vendor_locks.run_id = runs.run_id
                 WHERE runs.vendor = ?
+                  AND runs.resume_eligible = 1
+                  AND runs.resume_attempts < ?
+                  AND runs.started_at >= ?
                   AND (
                     runs.status IN (?, ?)
                     OR (
@@ -203,6 +235,8 @@ class CheckpointStore:
                 """,
                 (
                     vendor,
+                    max_resume_attempts,
+                    resume_after,
                     RunStatus.FAILED.value,
                     RunStatus.PARTIAL_FAILURE.value,
                     RunStatus.RUNNING.value,
@@ -226,7 +260,7 @@ class CheckpointStore:
             resumable = connection.execute(
                 """
                 SELECT run_id FROM runs
-                WHERE vendor = ? AND status IN (?, ?)
+                WHERE vendor = ? AND status IN (?, ?) AND resume_eligible = 1
                 ORDER BY started_at DESC LIMIT 1
                 """,
                 (
@@ -272,29 +306,44 @@ class CheckpointStore:
                 ON CONFLICT(run_id) DO UPDATE SET
                     status = excluded.status,
                     finished_at = NULL,
-                    error_message = NULL
+                    error_message = NULL,
+                    resume_eligible = 1,
+                    resume_attempts = runs.resume_attempts + 1
                 """,
                 (run_id, vendor, RunStatus.RUNNING.value, now),
             )
 
     async def finish_run(
-        self, run_id: str, status: RunStatus, error_message: str | None = None
+        self,
+        run_id: str,
+        status: RunStatus,
+        error_message: str | None = None,
+        *,
+        resume_eligible: bool = False,
     ) -> RunSummary:
-        await asyncio.to_thread(self._finish_run, run_id, status, error_message)
+        await asyncio.to_thread(
+            self._finish_run, run_id, status, error_message, resume_eligible
+        )
         summary = await self.get_run(run_id)
         if summary is None:
             raise RuntimeError(f"Run {run_id} was not persisted")
         return summary
 
-    def _finish_run(self, run_id: str, status: RunStatus, error_message: str | None) -> None:
+    def _finish_run(
+        self,
+        run_id: str,
+        status: RunStatus,
+        error_message: str | None,
+        resume_eligible: bool,
+    ) -> None:
         with self._connect() as connection:
             connection.execute(
                 """
                 UPDATE runs
-                SET status = ?, finished_at = ?, error_message = ?
+                SET status = ?, finished_at = ?, error_message = ?, resume_eligible = ?
                 WHERE run_id = ?
                 """,
-                (status.value, _now(), error_message, run_id),
+                (status.value, _now(), error_message, int(resume_eligible), run_id),
             )
 
     async def get_run(self, run_id: str) -> RunSummary | None:
@@ -352,7 +401,10 @@ class CheckpointStore:
             course_catalog_records=checkpoint_totals.get("course_catalog", 0),
             enrollment_records=checkpoint_totals.get("learning_history", 0),
             courses_succeeded=course_totals.get("completed", 0),
-            courses_failed=course_totals.get("failed", 0),
+            courses_failed=sum(
+                course_totals.get(status, 0)
+                for status in ("failed", "retryable_failed", "terminal_failed")
+            ),
             error_message=row["error_message"],
         )
 
@@ -405,6 +457,8 @@ class CheckpointStore:
         offset: int,
         error_message: str,
         course_id: str | None = None,
+        *,
+        retryable: bool = True,
     ) -> None:
         await asyncio.to_thread(
             self._record_failed_page,
@@ -413,6 +467,7 @@ class CheckpointStore:
             offset,
             error_message,
             course_id or "",
+            retryable,
         )
 
     def _record_failed_page(
@@ -422,22 +477,24 @@ class CheckpointStore:
         offset: int,
         error_message: str,
         course_id: str,
+        retryable: bool,
     ) -> None:
         now = _now()
+        status = "retryable_failed" if retryable else "terminal_failed"
         with self._connect() as connection:
             connection.execute(
                 """
                 INSERT INTO checkpoints(
                     run_id, vendor, data_domain, course_id, offset, status,
                     started_at, finished_at, records_count, error_message
-                ) VALUES (?, 'levelup', ?, ?, ?, 'failed', ?, ?, 0, ?)
+                ) VALUES (?, 'levelup', ?, ?, ?, ?, ?, ?, 0, ?)
                 ON CONFLICT(run_id, data_domain, course_id, offset) DO UPDATE SET
-                    status = 'failed',
+                    status = excluded.status,
                     finished_at = excluded.finished_at,
                     records_count = 0,
                     error_message = excluded.error_message
                 """,
-                (run_id, data_domain, course_id, offset, now, now, error_message),
+                (run_id, data_domain, course_id, offset, status, now, now, error_message),
             )
 
     async def next_offset(
@@ -479,12 +536,27 @@ class CheckpointStore:
             rows = connection.execute(
                 """
                 SELECT course_id FROM run_courses
-                WHERE run_id = ? AND status != 'completed'
+                WHERE run_id = ? AND status IN ('pending', 'failed', 'retryable_failed')
                 ORDER BY course_id
                 """,
                 (run_id,),
             ).fetchall()
             return [str(row["course_id"]) for row in rows]
+
+    async def has_terminal_course_failures(self, run_id: str) -> bool:
+        return await asyncio.to_thread(self._has_terminal_course_failures, run_id)
+
+    def _has_terminal_course_failures(self, run_id: str) -> bool:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT 1 FROM run_courses
+                WHERE run_id = ? AND status = 'terminal_failed'
+                LIMIT 1
+                """,
+                (run_id,),
+            ).fetchone()
+            return row is not None
 
     async def mark_course(
         self, run_id: str, course_id: str, status: str, error_message: str | None = None

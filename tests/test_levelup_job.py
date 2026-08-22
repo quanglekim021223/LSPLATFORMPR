@@ -9,6 +9,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from app.checkpoint import CheckpointStore
 from app.levelup import run_levelup_ingestion
 from app.models import RunStatus
 from tests.conftest import no_sleep, response
@@ -214,6 +215,9 @@ async def test_one_course_failure_does_not_stop_other_courses(
     assert summary.courses_succeeded == 1
     assert summary.courses_failed == 1
     assert sorted(called) == ["/courses/bad/enrollments", "/courses/good/enrollments"]
+    store = CheckpointStore(settings.checkpoint_db_path)  # type: ignore[attr-defined]
+    await store.initialize()
+    assert await store.find_resumable_run("levelup", 60) is None
 
 
 @pytest.mark.asyncio

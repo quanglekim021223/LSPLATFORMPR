@@ -14,7 +14,7 @@ import httpx
 
 from app.checkpoint import CheckpointStore
 from app.config import Settings
-from app.http_client import LevelUpClient
+from app.http_client import LevelUpClient, ResponseContractError
 from app.models import CourseResult, PageWrite, RunStatus, RunSummary
 from app.security import sanitize_text
 from app.storage import BronzeWriter, LocalBronzeWriter
@@ -42,7 +42,10 @@ class LevelUpJob:
         resumable_run_id = None
         if run_id is None:
             resumable_run_id = await self.checkpoints.find_resumable_run(
-                "levelup", self.settings.levelup_lock_ttl_seconds
+                "levelup",
+                self.settings.levelup_lock_ttl_seconds,
+                self.settings.levelup_max_resume_attempts,
+                self.settings.levelup_resume_max_age_hours,
             )
         current_run_id = run_id or resumable_run_id or str(uuid4())
         UUID(current_run_id)
@@ -66,7 +69,11 @@ class LevelUpJob:
             await self.checkpoints.start_run(current_run_id, "levelup")
             await self.client.authenticate()
             ingestion_date = (
-                datetime.now(ZoneInfo(self.settings.ingestion_timezone)).date().isoformat()
+                existing.started_at.astimezone(
+                    ZoneInfo(self.settings.ingestion_timezone)
+                ).date().isoformat()
+                if existing is not None
+                else datetime.now(ZoneInfo(self.settings.ingestion_timezone)).date().isoformat()
             )
 
             if not await self.checkpoints.is_catalog_completed(current_run_id):
@@ -77,10 +84,20 @@ class LevelUpJob:
                 current_run_id, ingestion_date, course_ids
             )
             failed = [result for result in results if not result.succeeded]
-            if failed:
-                message = f"{len(failed)} LevelUP course(s) failed; checkpoint state is resumable"
+            has_terminal_failures = await self.checkpoints.has_terminal_course_failures(
+                current_run_id
+            )
+            if failed or has_terminal_failures:
+                resume_eligible = any(result.retryable for result in failed)
+                message = (
+                    f"{len(failed)} LevelUP course(s) failed in this attempt; "
+                    f"resume_eligible={resume_eligible}"
+                )
                 return await self.checkpoints.finish_run(
-                    current_run_id, RunStatus.PARTIAL_FAILURE, message
+                    current_run_id,
+                    RunStatus.PARTIAL_FAILURE,
+                    message,
+                    resume_eligible=resume_eligible,
                 )
             return await self.checkpoints.finish_run(current_run_id, RunStatus.SUCCEEDED)
         except asyncio.CancelledError:
@@ -93,12 +110,20 @@ class LevelUpJob:
                 message,
             )
             return await self.checkpoints.finish_run(
-                current_run_id, RunStatus.FAILED, message
+                current_run_id,
+                RunStatus.FAILED,
+                message,
+                resume_eligible=True,
             )
         except Exception as exc:
             message = sanitize_text(exc, self.client.sensitive_values())
             logger.error("LevelUP ingestion failed run_id=%s error=%s", current_run_id, message)
-            return await self.checkpoints.finish_run(current_run_id, RunStatus.FAILED, message)
+            return await self.checkpoints.finish_run(
+                current_run_id,
+                RunStatus.FAILED,
+                message,
+                resume_eligible=_is_retryable_error(exc),
+            )
         finally:
             stop_heartbeat.set()
             with suppress(asyncio.CancelledError):
@@ -142,11 +167,13 @@ class LevelUpJob:
                     self.settings.levelup_courses_path, params
                 )
             except Exception as exc:
+                retryable = _is_retryable_error(exc)
                 await self.checkpoints.record_failed_page(
                     run_id,
                     "course_catalog",
                     offset,
                     sanitize_text(exc, self.client.sensitive_values()),
+                    retryable=retryable,
                 )
                 raise
             raw_courses = payload.get("courses", [])
@@ -272,6 +299,7 @@ class LevelUpJob:
             return result
         except Exception as exc:
             result.succeeded = False
+            result.retryable = _is_retryable_error(exc)
             result.error_message = sanitize_text(exc, self.client.sensitive_values())
             await self.checkpoints.record_failed_page(
                 run_id,
@@ -279,9 +307,13 @@ class LevelUpJob:
                 offset,
                 result.error_message,
                 course_id,
+                retryable=result.retryable,
             )
             await self.checkpoints.mark_course(
-                run_id, course_id, "failed", result.error_message
+                run_id,
+                course_id,
+                "retryable_failed" if result.retryable else "terminal_failed",
+                result.error_message,
             )
             logger.error(
                 "LevelUP course failed run_id=%s course_id=%s error=%s",
@@ -314,6 +346,15 @@ class LevelUpJob:
         if isinstance(total_items, int) and isinstance(returned_items, int):
             return returned_items == 0 or offset + returned_items >= total_items
         return records_returned < page_size
+
+
+def _is_retryable_error(exc: Exception) -> bool:
+    if isinstance(exc, httpx.HTTPStatusError):
+        status_code = exc.response.status_code
+        return status_code == 408 or status_code == 429 or status_code >= 500
+    if isinstance(exc, (ResponseContractError, ValueError)):
+        return False
+    return True
 
 
 async def run_levelup_ingestion(

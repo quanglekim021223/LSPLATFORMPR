@@ -113,6 +113,54 @@ async def test_running_run_without_live_lock_is_resumable(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
+async def test_resume_attempt_and_age_limits_stop_old_run_reuse(tmp_path: Path) -> None:
+    database_path = tmp_path / "state.db"
+    store = CheckpointStore(database_path)
+    await store.initialize()
+    await store.start_run("run-1", "levelup")
+    await store.finish_run("run-1", RunStatus.FAILED, resume_eligible=True)
+
+    assert await store.find_resumable_run("levelup", 60, 1, 24) == "run-1"
+
+    await store.start_run("run-1", "levelup")
+    await store.finish_run("run-1", RunStatus.FAILED, resume_eligible=True)
+    assert await store.find_resumable_run("levelup", 60, 1, 24) is None
+
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            "UPDATE runs SET resume_attempts = 0, started_at = '2000-01-01T00:00:00+00:00' "
+            "WHERE run_id = 'run-1'"
+        )
+    assert await store.find_resumable_run("levelup", 60, 1, 24) is None
+
+
+@pytest.mark.asyncio
+async def test_initialize_migrates_legacy_run_resume_columns(tmp_path: Path) -> None:
+    database_path = tmp_path / "state.db"
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE runs (
+                run_id TEXT PRIMARY KEY,
+                vendor TEXT NOT NULL,
+                status TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                finished_at TEXT,
+                error_message TEXT,
+                catalog_completed INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+
+    store = CheckpointStore(database_path)
+    await store.initialize()
+
+    with sqlite3.connect(database_path) as connection:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(runs)")}
+    assert {"resume_eligible", "resume_attempts"} <= columns
+
+
+@pytest.mark.asyncio
 async def test_initialize_migrates_legacy_lock_table(tmp_path: Path) -> None:
     database_path = tmp_path / "state.db"
     with sqlite3.connect(database_path) as connection:
@@ -177,7 +225,11 @@ async def test_purge_old_runs_keeps_live_and_latest_resumable_runs(tmp_path: Pat
         await store.start_run(run_id, "levelup")
         await store.record_completed_page(run_id, "course_catalog", 0, 1)
         await store.add_courses(run_id, ["course-1"])
-        await store.finish_run(run_id, status)
+        await store.finish_run(
+            run_id,
+            status,
+            resume_eligible=status in {RunStatus.FAILED, RunStatus.PARTIAL_FAILURE},
+        )
     await store.start_run("live-run", "levelup")
     await store.acquire_lock("levelup", "live-run")
     with sqlite3.connect(database_path) as connection:

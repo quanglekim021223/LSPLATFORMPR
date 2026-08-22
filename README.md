@@ -98,8 +98,10 @@ write semantics.
   once.
 - At most `LEVELUP_MAX_CONCURRENCY` courses run concurrently via `asyncio.Semaphore`.
 - SQLite records every completed page and course. With no explicit `run_id`, the orchestrator
-  automatically resumes the newest `failed`, `partial_failure`, or stale `running` run before it
-  creates a UUID. Scheduler executions therefore continue incomplete work automatically.
+  resumes only retryable failures (timeouts, transport errors, HTTP 408/429/5xx). Permanent HTTP
+  4xx and response-contract failures are recorded as terminal and the next schedule creates a new
+  run. Resume is capped by `LEVELUP_MAX_RESUME_ATTEMPTS` and
+  `LEVELUP_RESUME_MAX_AGE_HOURS`; resumed pages keep the run's original ingestion date.
 - A SQLite vendor lock prevents overlapping LevelUP jobs. It has a periodically refreshed
   heartbeat and `LEVELUP_LOCK_TTL_SECONDS` expiry. Lock acquisition atomically reclaims stale locks
   and marks an abandoned `running` run failed before resuming it.

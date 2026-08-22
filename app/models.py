@@ -47,6 +47,6 @@ class CourseResult:
     course_id: str
     records_count: int = 0
     succeeded: bool = True
+    retryable: bool = False
     error_message: str | None = None
-
 

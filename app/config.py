@@ -32,6 +32,8 @@ class Settings(BaseSettings):
     levelup_page_size: int = Field(default=1000, ge=1, le=1000)
     levelup_max_concurrency: int = Field(default=5, ge=1, le=100)
     levelup_lock_ttl_seconds: int = Field(default=3600, ge=30)
+    levelup_max_resume_attempts: int = Field(default=2, ge=0, le=10)
+    levelup_resume_max_age_hours: int = Field(default=24, ge=1, le=168)
 
     http_max_retries: int = Field(default=3, ge=0, le=10)
     http_connect_timeout_seconds: float = Field(default=10, gt=0)
