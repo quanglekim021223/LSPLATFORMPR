@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from app.checkpoint import CheckpointStore, JobAlreadyRunning, JobLockLost
-from app.models import PageWrite
+from app.models import PageWrite, RunStatus
 from app.storage import LocalBronzeWriter
 
 
@@ -162,3 +162,48 @@ async def test_heartbeat_renews_lock_and_detects_lost_ownership(tmp_path: Path) 
     await store.release_lock("levelup", "run-1")
     with pytest.raises(JobLockLost):
         await store.heartbeat_lock("levelup", "run-1")
+
+
+@pytest.mark.asyncio
+async def test_purge_old_runs_keeps_live_and_latest_resumable_runs(tmp_path: Path) -> None:
+    database_path = tmp_path / "state.db"
+    store = CheckpointStore(database_path)
+    await store.initialize()
+    for run_id, status in (
+        ("old-success", RunStatus.SUCCEEDED),
+        ("old-failed", RunStatus.FAILED),
+        ("latest-failed", RunStatus.PARTIAL_FAILURE),
+    ):
+        await store.start_run(run_id, "levelup")
+        await store.record_completed_page(run_id, "course_catalog", 0, 1)
+        await store.add_courses(run_id, ["course-1"])
+        await store.finish_run(run_id, status)
+    await store.start_run("live-run", "levelup")
+    await store.acquire_lock("levelup", "live-run")
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            "UPDATE runs SET started_at = '2000-01-01T00:00:00+00:00', "
+            "finished_at = '2000-01-01T01:00:00+00:00' WHERE run_id = 'old-success'"
+        )
+        connection.execute(
+            "UPDATE runs SET started_at = '2001-01-01T00:00:00+00:00', "
+            "finished_at = '2001-01-01T01:00:00+00:00' WHERE run_id = 'old-failed'"
+        )
+        connection.execute(
+            "UPDATE runs SET started_at = '2002-01-01T00:00:00+00:00', "
+            "finished_at = '2002-01-01T01:00:00+00:00' WHERE run_id = 'latest-failed'"
+        )
+
+    assert await store.purge_old_runs("levelup", retention_days=30) == 2
+    assert await store.get_run("old-success") is None
+    assert await store.get_run("old-failed") is None
+    assert await store.get_run("latest-failed") is not None
+    assert await store.get_run("live-run") is not None
+    with sqlite3.connect(database_path) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM checkpoints WHERE run_id IN ('old-success', 'old-failed')"
+        ).fetchone() == (0,)
+        assert connection.execute(
+            "SELECT COUNT(*) FROM run_courses WHERE run_id IN ('old-success', 'old-failed')"
+        ).fetchone() == (0,)
+    await store.release_lock("levelup", "live-run")

@@ -50,8 +50,4 @@ class CourseResult:
     error_message: str | None = None
 
 
-@dataclass(slots=True)
-class CatalogResult:
-    records_count: int = 0
-    course_ids: list[str] = field(default_factory=list)
 

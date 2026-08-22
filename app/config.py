@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     bronze_storage_type: str = "local"
     bronze_local_path: Path = Path("./data/bronze")
     checkpoint_db_path: Path = Path("./data/state/ingestion.db")
+    checkpoint_retention_days: int = Field(default=30, ge=1)
 
     @field_validator("ingestion_time")
     @classmethod

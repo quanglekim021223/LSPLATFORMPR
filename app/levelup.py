@@ -329,6 +329,9 @@ async def run_levelup_ingestion(
     store = checkpoint_store or CheckpointStore(settings.checkpoint_db_path)
     writer = bronze_writer or LocalBronzeWriter(settings.bronze_local_path)
     await store.initialize()
+    purged_runs = await store.purge_old_runs("levelup", settings.checkpoint_retention_days)
+    if purged_runs:
+        logger.info("Purged %d expired LevelUP checkpoint run(s)", purged_runs)
     timeout = httpx.Timeout(
         connect=settings.http_connect_timeout_seconds,
         read=settings.http_read_timeout_seconds,

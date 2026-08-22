@@ -103,6 +103,8 @@ write semantics.
 - A SQLite vendor lock prevents overlapping LevelUP jobs. It has a periodically refreshed
   heartbeat and `LEVELUP_LOCK_TTL_SECONDS` expiry. Lock acquisition atomically reclaims stale locks
   and marks an abandoned `running` run failed before resuming it.
+- At ingestion startup, terminal checkpoint runs older than `CHECKPOINT_RETENTION_DAYS` are deleted
+  with their page/course rows. Running or locked runs and the newest resumable failed run are kept.
 
 ## Information still needed from Minh/team
 

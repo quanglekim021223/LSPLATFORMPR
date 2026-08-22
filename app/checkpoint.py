@@ -211,6 +211,54 @@ class CheckpointStore:
             ).fetchone()
             return str(row["run_id"]) if row else None
 
+    async def purge_old_runs(self, vendor: str, retention_days: int) -> int:
+        return await asyncio.to_thread(self._purge_old_runs, vendor, retention_days)
+
+    def _purge_old_runs(self, vendor: str, retention_days: int) -> int:
+        cutoff = (datetime.now(UTC) - timedelta(days=retention_days)).isoformat()
+        terminal_statuses = (
+            RunStatus.SUCCEEDED.value,
+            RunStatus.PARTIAL_FAILURE.value,
+            RunStatus.FAILED.value,
+        )
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            resumable = connection.execute(
+                """
+                SELECT run_id FROM runs
+                WHERE vendor = ? AND status IN (?, ?)
+                ORDER BY started_at DESC LIMIT 1
+                """,
+                (
+                    vendor,
+                    RunStatus.FAILED.value,
+                    RunStatus.PARTIAL_FAILURE.value,
+                ),
+            ).fetchone()
+            resumable_run_id = str(resumable["run_id"]) if resumable else ""
+            rows = connection.execute(
+                """
+                SELECT run_id FROM runs
+                WHERE vendor = ?
+                  AND status IN (?, ?, ?)
+                  AND finished_at < ?
+                  AND run_id != ?
+                  AND NOT EXISTS (
+                    SELECT 1 FROM vendor_locks
+                    WHERE vendor_locks.vendor = runs.vendor
+                      AND vendor_locks.run_id = runs.run_id
+                  )
+                """,
+                (vendor, *terminal_statuses, cutoff, resumable_run_id),
+            ).fetchall()
+            run_ids = [(str(row["run_id"]),) for row in rows]
+            if not run_ids:
+                return 0
+            connection.executemany("DELETE FROM checkpoints WHERE run_id = ?", run_ids)
+            connection.executemany("DELETE FROM run_courses WHERE run_id = ?", run_ids)
+            connection.executemany("DELETE FROM runs WHERE run_id = ?", run_ids)
+            return len(run_ids)
+
     async def start_run(self, run_id: str, vendor: str) -> None:
         await asyncio.to_thread(self._start_run, run_id, vendor)
 
