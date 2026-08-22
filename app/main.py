@@ -4,13 +4,14 @@ import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI
 
-from app.checkpoint import CheckpointStore
 from app.config import Settings, get_settings
-from app.levelup import run_levelup_ingestion
-from app.models import RunSummary
-from app.scheduler import build_scheduler
+from app.config.scheduler import build_scheduler
+from app.handlers.levelup_handler import run_levelup_ingestion
+from app.repositories.checkpoint_repository import CheckpointStore
+from app.routers.health_router import build_health_router
+from app.routers.job_router import build_job_router
 from app.storage import BronzeWriter, LocalBronzeWriter
 
 logger = logging.getLogger(__name__)
@@ -63,28 +64,8 @@ def create_app(
         lifespan=lifespan,
     )
 
-    @application.get("/health")
-    async def health() -> dict[str, str]:
-        return {"status": "ok"}
-
-    @application.get("/ready")
-    async def ready() -> dict[str, str]:
-        if not await store.is_ready():
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="checkpoint store is not ready",
-            )
-        return {"status": "ready"}
-
-    @application.get("/jobs/levelup/latest", response_model=RunSummary)
-    async def latest_levelup_job() -> RunSummary:
-        summary = await store.latest_run("levelup")
-        if summary is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="No LevelUP run found",
-            )
-        return summary
+    application.include_router(build_health_router(store))
+    application.include_router(build_job_router(store))
 
     return application
 

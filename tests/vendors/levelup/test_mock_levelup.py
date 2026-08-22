@@ -5,7 +5,7 @@ from collections.abc import Callable
 import httpx
 import pytest
 
-from app.levelup import run_levelup_ingestion
+from app.handlers.levelup_handler import run_levelup_ingestion
 from app.mock_levelup import app as mock_levelup_app
 from app.models import RunStatus
 from tests.conftest import no_sleep

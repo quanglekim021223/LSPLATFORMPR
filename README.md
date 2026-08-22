@@ -20,6 +20,21 @@ FastAPI lifespan / APScheduler (05:00 Asia/Ho_Chi_Minh)
 There is no public manual-trigger endpoint. `GET /health`, `GET /ready`, and
 `GET /jobs/levelup/latest` expose operational state without credentials or raw personal data.
 
+## Code layout
+
+```text
+app/main.py                  application composition and lifespan
+app/routers/                 health, readiness, and job-status APIs
+app/handlers/                LevelUP run orchestration
+app/vendors/levelup/         authentication, catalog, and learning history
+app/helpers/                 shared HTTP retry and secret sanitization
+app/config/                  settings and APScheduler configuration
+app/repositories/            SQLite checkpoint, resume, and vendor lock
+app/storage/                 Bronze writer contract and local implementation
+app/models/                  ingestion data models
+app/mock_levelup.py          local mock ASGI entrypoint used by the demo
+```
+
 ## Local setup
 
 Python 3.11+ is required.

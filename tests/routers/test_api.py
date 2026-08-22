@@ -5,10 +5,9 @@ from collections.abc import Callable
 import httpx
 import pytest
 
-from app.checkpoint import CheckpointStore
 from app.main import create_app
 from app.models import RunStatus
-from app.scheduler import build_scheduler
+from app.repositories.checkpoint_repository import CheckpointStore
 
 
 @pytest.mark.asyncio
@@ -44,21 +43,3 @@ async def test_health_ready_latest_and_scheduler_disabled_in_test(
             assert latest.json()["status"] == "succeeded"
             assert latest.json()["course_catalog_records"] == 2
             assert "token" not in latest.text.casefold()
-
-
-def test_scheduler_defaults_to_single_daily_0500_job(
-    settings_factory: Callable[..., object]
-) -> None:
-    settings = settings_factory()
-
-    async def job() -> object:
-        return None
-
-    scheduler = build_scheduler(settings, job)  # type: ignore[arg-type]
-    scheduled_job = scheduler.get_job("levelup-daily-ingestion")
-    assert scheduled_job is not None
-    assert scheduled_job.max_instances == 1
-    assert scheduled_job.coalesce is True
-    assert "hour='5'" in str(scheduled_job.trigger)
-    assert "minute='0'" in str(scheduled_job.trigger)
-

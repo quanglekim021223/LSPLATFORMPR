@@ -6,15 +6,11 @@ import json
 import os
 import tempfile
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 from urllib.parse import quote
 
+from app.helpers.security import sanitize_mapping
 from app.models import PageWrite
-from app.security import sanitize_mapping
-
-
-class BronzeWriter(Protocol):
-    async def write_page(self, page: PageWrite) -> Path: ...
 
 
 class LocalBronzeWriter:

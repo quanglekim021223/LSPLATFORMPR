@@ -9,9 +9,9 @@ from pathlib import Path
 import httpx
 import pytest
 
-from app.checkpoint import CheckpointStore
-from app.levelup import run_levelup_ingestion
+from app.handlers.levelup_handler import run_levelup_ingestion
 from app.models import RunStatus
+from app.repositories.checkpoint_repository import CheckpointStore
 from tests.conftest import no_sleep, response
 
 

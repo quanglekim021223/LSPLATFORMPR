@@ -556,7 +556,7 @@ class CheckpointStore:
                 """,
                 (run_id,),
             ).fetchone()
-            return row is not None
+            return bool(row)
 
     async def mark_course(
         self, run_id: str, course_id: str, status: str, error_message: str | None = None

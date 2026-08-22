@@ -1,98 +1,18 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import random
 from collections.abc import Awaitable, Callable, Mapping
-from datetime import UTC, datetime
-from email.utils import parsedate_to_datetime
 from typing import Any
-from urllib.parse import urlsplit
 
 import httpx
 
 from app.config import Settings
-
-logger = logging.getLogger(__name__)
+from app.helpers.http_client import RetryingHttpClient
 
 
 class ResponseContractError(RuntimeError):
     pass
-
-
-class RetryingHttpClient:
-    def __init__(
-        self,
-        client: httpx.AsyncClient,
-        max_retries: int,
-        *,
-        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
-        jitter: Callable[[], float] = random.random,
-    ) -> None:
-        self.client = client
-        self.max_retries = max_retries
-        self.sleep = sleep
-        self.jitter = jitter
-
-    async def request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
-        endpoint = urlsplit(url).path or "/"
-        for retry_number in range(self.max_retries + 1):
-            attempt = retry_number + 1
-            try:
-                response = await self.client.request(method, url, **kwargs)
-            except (httpx.TimeoutException, httpx.NetworkError) as exc:
-                if retry_number >= self.max_retries:
-                    raise
-                wait_seconds = self._backoff_seconds(retry_number)
-                logger.warning(
-                    "Retrying request attempt=%d endpoint=%s error=%s wait_seconds=%.3f",
-                    attempt,
-                    endpoint,
-                    type(exc).__name__,
-                    wait_seconds,
-                )
-                await self.sleep(wait_seconds)
-                continue
-
-            if response.status_code == 429 or response.status_code >= 500:
-                if retry_number < self.max_retries:
-                    retry_after = self._retry_after_seconds(response.headers)
-                    wait_seconds = (
-                        retry_after
-                        if retry_after is not None
-                        else self._backoff_seconds(retry_number)
-                    )
-                    logger.warning(
-                        "Retrying request attempt=%d endpoint=%s status_code=%d "
-                        "wait_seconds=%.3f",
-                        attempt,
-                        endpoint,
-                        response.status_code,
-                        wait_seconds,
-                    )
-                    await self.sleep(wait_seconds)
-                    continue
-            return response
-        raise AssertionError("retry loop exhausted unexpectedly")
-
-    def _backoff_seconds(self, retry_number: int) -> float:
-        return min(60.0, (2.0**retry_number) + self.jitter())
-
-    @staticmethod
-    def _retry_after_seconds(headers: Mapping[str, str]) -> float | None:
-        value = headers.get("Retry-After")
-        if not value:
-            return None
-        try:
-            return max(0.0, float(value))
-        except ValueError:
-            try:
-                retry_at = parsedate_to_datetime(value)
-            except (TypeError, ValueError, OverflowError):
-                return None
-            if retry_at.tzinfo is None:
-                retry_at = retry_at.replace(tzinfo=UTC)
-            return max(0.0, (retry_at - datetime.now(UTC)).total_seconds())
 
 
 class LevelUpClient:
@@ -132,7 +52,9 @@ class LevelUpClient:
         self._token = token
         return token
 
-    async def get_json(self, path: str, params: Mapping[str, Any]) -> tuple[dict[str, Any], bytes]:
+    async def get_json(
+        self, path: str, params: Mapping[str, Any]
+    ) -> tuple[dict[str, Any], bytes]:
         if self._token is None:
             await self.authenticate()
         token_used = self._token
@@ -190,3 +112,12 @@ class LevelUpClient:
         if not isinstance(token, str) or not token.strip():
             raise ResponseContractError("Authentication response did not contain a token")
         return token.strip()
+
+
+def is_retryable_error(exc: Exception) -> bool:
+    if isinstance(exc, httpx.HTTPStatusError):
+        status_code = exc.response.status_code
+        return status_code == 408 or status_code == 429 or status_code >= 500
+    if isinstance(exc, (ResponseContractError, ValueError)):
+        return False
+    return True

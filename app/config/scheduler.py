@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from app.config import Settings
+from app.config.settings import Settings
 
 
 def build_scheduler(settings: Settings, job: Callable[[], Awaitable[object]]) -> Any:
