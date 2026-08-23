@@ -1,0 +1,198 @@
+from __future__ import annotations
+
+import asyncio
+import logging
+from collections.abc import Awaitable, Callable
+from contextlib import suppress
+from datetime import datetime
+from typing import Any
+from uuid import uuid4
+from zoneinfo import ZoneInfo
+
+import httpx
+
+from app.config import Settings
+from app.helpers.security import sanitize_text
+from app.models import RunStatus, RunSummary
+from app.repositories.checkpoint_repository import CheckpointStore
+from app.storage import BronzeWriter, LocalBronzeWriter
+from app.vendors.datacamp.archived_courses import DOMAIN as ARCHIVED_COURSES
+from app.vendors.datacamp.archived_courses import ingest_archived_courses
+from app.vendors.datacamp.client import DataCampClient
+from app.vendors.datacamp.learning_history import DOMAIN as LEARNING_HISTORY
+from app.vendors.datacamp.learning_history import ingest_learning_history
+from app.vendors.datacamp.live_courses import DOMAIN as LIVE_COURSES
+from app.vendors.datacamp.live_courses import ingest_live_courses
+
+logger = logging.getLogger(__name__)
+
+VENDOR = "datacamp"
+DOMAINS = (LIVE_COURSES, ARCHIVED_COURSES, LEARNING_HISTORY)
+LOCK_TTL_SECONDS = 3600
+
+
+class DataCampJob:
+    def __init__(
+        self,
+        settings: Settings,
+        client: DataCampClient,
+        checkpoint_store: CheckpointStore,
+        bronze_writer: BronzeWriter,
+    ) -> None:
+        self.settings = settings
+        self.client = client
+        self.checkpoints = checkpoint_store
+        self.writer = bronze_writer
+        self._heartbeat_error: Exception | None = None
+
+    async def run(
+        self,
+        *,
+        content_type: str | None = None,
+        event_type: str | None = None,
+        from_value: str | None = None,
+        to: str | None = None,
+    ) -> RunSummary:
+        current_run_id = str(uuid4())
+        owner_task = asyncio.current_task()
+        if owner_task is None:
+            raise RuntimeError("DataCamp ingestion must run inside an asyncio task")
+        await self.checkpoints.acquire_lock(VENDOR, current_run_id, LOCK_TTL_SECONDS)
+        stop_heartbeat = asyncio.Event()
+        heartbeat_task = asyncio.create_task(
+            self._heartbeat_loop(current_run_id, stop_heartbeat, owner_task)
+        )
+        try:
+            await self.checkpoints.start_run(current_run_id, VENDOR)
+            await self.checkpoints.add_domains(current_run_id, list(DOMAINS))
+            ingestion_date = datetime.now(
+                ZoneInfo(self.settings.ingestion_timezone)
+            ).date().isoformat()
+            tasks: list[Awaitable[None]] = [
+                ingest_live_courses(
+                    self.client,
+                    self.checkpoints,
+                    self.writer,
+                    current_run_id,
+                    ingestion_date,
+                ),
+                ingest_archived_courses(
+                    self.client,
+                    self.checkpoints,
+                    self.writer,
+                    current_run_id,
+                    ingestion_date,
+                ),
+                ingest_learning_history(
+                    self.settings,
+                    self.client,
+                    self.checkpoints,
+                    self.writer,
+                    current_run_id,
+                    ingestion_date,
+                    content_type=content_type,
+                    event_type=event_type,
+                    from_value=from_value,
+                    to=to,
+                ),
+            ]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            errors = [result for result in results if isinstance(result, BaseException)]
+            has_terminal_failures = await self.checkpoints.has_terminal_domain_failures(
+                current_run_id
+            )
+            if errors or has_terminal_failures:
+                status = (
+                    RunStatus.PARTIAL_FAILURE
+                    if len(errors) < len(tasks) or has_terminal_failures
+                    else RunStatus.FAILED
+                )
+                return await self.checkpoints.finish_run(
+                    current_run_id,
+                    status,
+                    f"{len(errors)} DataCamp domain(s) failed in this run",
+                )
+            return await self.checkpoints.finish_run(current_run_id, RunStatus.SUCCEEDED)
+        except asyncio.CancelledError:
+            if self._heartbeat_error is None:
+                raise
+            message = sanitize_text(self._heartbeat_error, self.client.sensitive_values())
+            logger.error(
+                "DataCamp lock heartbeat failed run_id=%s error=%s",
+                current_run_id,
+                message,
+            )
+            return await self.checkpoints.finish_run(
+                current_run_id, RunStatus.FAILED, message
+            )
+        except Exception as exc:
+            message = sanitize_text(exc, self.client.sensitive_values())
+            logger.error(
+                "DataCamp ingestion failed run_id=%s error=%s",
+                current_run_id,
+                message,
+            )
+            return await self.checkpoints.finish_run(
+                current_run_id, RunStatus.FAILED, message
+            )
+        finally:
+            stop_heartbeat.set()
+            with suppress(asyncio.CancelledError):
+                await heartbeat_task
+            await self.checkpoints.release_lock(VENDOR, current_run_id)
+
+    async def _heartbeat_loop(
+        self,
+        run_id: str,
+        stop: asyncio.Event,
+        owner_task: asyncio.Task[Any],
+    ) -> None:
+        interval = min(60.0, max(1.0, LOCK_TTL_SECONDS / 3))
+        while not stop.is_set():
+            try:
+                async with asyncio.timeout(interval):
+                    await stop.wait()
+                return
+            except TimeoutError:
+                try:
+                    await self.checkpoints.heartbeat_lock(VENDOR, run_id)
+                except Exception as exc:
+                    self._heartbeat_error = exc
+                    owner_task.cancel()
+                    return
+
+
+async def run_datacamp_ingestion(
+    settings: Settings,
+    *,
+    checkpoint_store: CheckpointStore | None = None,
+    bronze_writer: BronzeWriter | None = None,
+    transport: httpx.AsyncBaseTransport | None = None,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    content_type: str | None = None,
+    event_type: str | None = None,
+    from_value: str | None = None,
+    to: str | None = None,
+) -> RunSummary:
+    settings.validate_datacamp_runtime()
+    store = checkpoint_store or CheckpointStore(settings.checkpoint_db_path)
+    writer = bronze_writer or LocalBronzeWriter(settings.bronze_local_path)
+    await store.initialize()
+    purged_runs = await store.purge_old_runs(VENDOR, settings.checkpoint_retention_days)
+    if purged_runs:
+        logger.info("Purged %d expired DataCamp checkpoint run(s)", purged_runs)
+    timeout = httpx.Timeout(
+        connect=settings.http_connect_timeout_seconds,
+        read=settings.http_read_timeout_seconds,
+        write=settings.http_read_timeout_seconds,
+        pool=settings.http_connect_timeout_seconds,
+    )
+    async with httpx.AsyncClient(timeout=timeout, transport=transport) as http_client:
+        client = DataCampClient(settings, http_client, sleep=sleep)
+        job = DataCampJob(settings, client, store, writer)
+        return await job.run(
+            content_type=content_type,
+            event_type=event_type,
+            from_value=from_value,
+            to=to,
+        )

@@ -14,9 +14,10 @@ def test_scheduler_defaults_to_single_daily_0500_job(
         return None
 
     scheduler = build_scheduler(
-        settings, {"levelup": job, "skillup": job}  # type: ignore[arg-type]
+        settings,
+        {"levelup": job, "skillup": job, "datacamp": job},  # type: ignore[arg-type]
     )
-    for vendor in ("levelup", "skillup"):
+    for vendor in ("levelup", "skillup", "datacamp"):
         scheduled_job = scheduler.get_job(f"{vendor}-daily-ingestion")
         assert scheduled_job is not None
         assert scheduled_job.max_instances == 1

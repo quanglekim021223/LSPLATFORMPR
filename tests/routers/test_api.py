@@ -27,10 +27,12 @@ async def test_health_ready_latest_and_scheduler_disabled_in_test(
             ready = await client.get("/ready")
             missing = await client.get("/jobs/levelup/latest")
             missing_skillup = await client.get("/jobs/skillup/latest")
+            missing_datacamp = await client.get("/jobs/datacamp/latest")
             assert health.json() == {"status": "ok"}
             assert ready.json() == {"status": "ready"}
             assert missing.status_code == 404
             assert missing_skillup.status_code == 404
+            assert missing_datacamp.status_code == 404
 
             run_id = "11111111-1111-4111-8111-111111111111"
             await store.start_run(run_id, "levelup")
@@ -59,4 +61,19 @@ async def test_health_ready_latest_and_scheduler_disabled_in_test(
             assert latest_skillup.json()["vendor"] == "skillup"
             assert latest_skillup.json()["records_by_domain"] == {
                 "skill_taxonomy": 3
+            }
+
+            datacamp_run_id = "33333333-3333-4333-8333-333333333333"
+            await store.start_run(datacamp_run_id, "datacamp")
+            await store.record_completed_page(
+                datacamp_run_id, "learning_history", 1, 4
+            )
+            await store.finish_run(datacamp_run_id, RunStatus.SUCCEEDED)
+
+            latest_datacamp = await client.get("/jobs/datacamp/latest")
+            assert latest_datacamp.status_code == 200
+            assert latest_datacamp.json()["run_id"] == datacamp_run_id
+            assert latest_datacamp.json()["vendor"] == "datacamp"
+            assert latest_datacamp.json()["records_by_domain"] == {
+                "learning_history": 4
             }

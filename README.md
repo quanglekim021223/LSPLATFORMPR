@@ -1,8 +1,7 @@
 # FSA Learning Vendor Ingestion
 
 FastAPI service for scheduled ingestion of learning-vendor data into a raw Bronze layer. It
-supports LevelUP (Absorb) Course Catalog/Learning History and SkillUp (iMocha) Skill Taxonomy,
-Skill Inventory, and Assessment History.
+supports LevelUP (Absorb), SkillUp (iMocha), and DataCamp ingestion domains.
 
 ## Runtime flow
 
@@ -12,25 +11,30 @@ FastAPI lifespan / APScheduler (05:00 Asia/Ho_Chi_Minh)
 │  ├→ POST /authenticate (one in-memory token)
 │  ├→ GET /courses page-by-page
 │  └→ GET /courses/{courseId}/enrollments (bounded concurrency)
-└→ run_skillup_ingestion (three independent concurrent domains)
+├→ run_skillup_ingestion (three independent concurrent domains)
    ├→ GET /taxonomy
    ├→ GET /employees/skills-profile
    └→ GET /v3/reports
+└→ run_datacamp_ingestion (three independent concurrent domains)
+   ├→ GET /v1/catalog/live-courses once
+   ├→ GET /v1/catalog/archived-courses once
+   └→ GET /v1/events page-by-page
 → LocalBronzeWriter + SQLite run summary
 ```
 
 There is no public manual-trigger endpoint. `GET /health`, `GET /ready`, and
-`GET /jobs/levelup/latest` and `GET /jobs/skillup/latest` expose operational state without
-credentials or raw personal data.
+`GET /jobs/levelup/latest`, `GET /jobs/skillup/latest`, and `GET /jobs/datacamp/latest` expose
+operational state without credentials or raw personal data.
 
 ## Code layout
 
 ```text
 app/main.py                  application composition and lifespan
 app/routers/                 health, readiness, and job-status APIs
-app/handlers/                LevelUP and SkillUp run orchestration
+app/handlers/                LevelUP, SkillUp, and DataCamp run orchestration
 app/vendors/levelup/         LevelUP authentication, catalog, and learning history
 app/vendors/skillup/         iMocha client and three SkillUp data domains
+app/vendors/datacamp/        DataCamp client, catalogs, and event history
 app/helpers/                 shared HTTP retry and secret sanitization
 app/config/                  settings and APScheduler configuration
 app/repositories/            SQLite checkpoint history and vendor lock
@@ -39,6 +43,7 @@ app/models/                  ingestion data models
 app/mocks/app.py             single local mock hub entrypoint for every vendor
 app/mocks/levelup.py         LevelUP mock routes and data
 app/mocks/skillup.py         SkillUp mock routes and data
+app/mocks/datacamp.py        DataCamp mock routes and data
 ```
 
 ## Local setup
@@ -68,6 +73,11 @@ use separate base URLs configured by `SKILLUP_INTELLIGENCE_BASE_URL` and
 `SKILLUP_ASSESSMENT_START_DATE` through the current UTC time, so scheduled runs retrieve the full
 configured history rather than iMocha's seven-day default.
 
+DataCamp sends `Authorization: Bearer <DATACAMP_TOKEN>` and `Accept: application/json` on every
+request. Live and archived catalogs are fetched once per run because their pagination contract is
+not confirmed. Events use `DATACAMP_EVENTS_PAGE_SIZE` (maximum 1000) and continue until the current
+page reaches `meta.numberOfPages`.
+
 Run checks with:
 
 ```bash
@@ -76,7 +86,7 @@ mypy app
 pytest
 ```
 
-## Local two-vendor mock demo
+## Local multi-vendor mock demo
 
 The local `.env` points every mock vendor to a path on the same port. Start these two processes in
 separate terminals:
@@ -91,10 +101,11 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 
 For a quick scheduler test, set `INGESTION_TIME` in `.env` to a future minute in
 `Asia/Ho_Chi_Minh` before starting Terminal 2. At that minute the single scheduler registers and
-starts both `levelup-daily-ingestion` and `skillup-daily-ingestion`. Keep Terminal 2 running, then
-check `GET /jobs/levelup/latest`, `GET /jobs/skillup/latest`, and the two vendor directories under
+starts `levelup-daily-ingestion`, `skillup-daily-ingestion`, and
+`datacamp-daily-ingestion`. Keep Terminal 2 running, then check the three `/jobs/{vendor}/latest`
+endpoints and vendor directories under
 `data/bronze/`. Swagger on port `8000` is status-only. The shared mock Swagger at
-`http://127.0.0.1:9000/docs` exposes both vendors and can grow to include future vendor routers
+`http://127.0.0.1:9000/docs` exposes all mock vendors and can grow to include future vendor routers
 without adding more processes.
 
 ## Scheduler
@@ -107,9 +118,9 @@ INGESTION_TIME=05:00
 INGESTION_TIMEZONE=Asia/Ho_Chi_Minh
 ```
 
-Only vendors with a complete credential configuration are scheduled. LevelUP and SkillUp receive
-separate APScheduler jobs at the same configured time. The in-process scheduler must have exactly
-one scheduler-bearing service instance. Do not enable
+Only vendors with a complete credential configuration are scheduled. LevelUP, SkillUp, and
+DataCamp receive separate APScheduler jobs at the same configured time. The in-process scheduler
+must have exactly one scheduler-bearing service instance. Do not enable
 it independently in every Uvicorn worker or replica. For multi-worker production deployments,
 keep it disabled and let Fabric, Azure Data Factory, or another external scheduler own the single
 job invocation. `max_instances=1`, coalescing, and a five-minute misfire grace prevent overlapping
@@ -131,6 +142,13 @@ data/bronze/skillup/
 ├── skill_taxonomy/ingestion_date=YYYY-MM-DD/run_id=<uuid>/
 ├── skill_inventory/ingestion_date=YYYY-MM-DD/run_id=<uuid>/
 └── assessment_history/ingestion_date=YYYY-MM-DD/run_id=<uuid>/
+    ├── offset=000001.json
+    └── manifest.json
+
+data/bronze/datacamp/
+├── course_catalog_live/ingestion_date=YYYY-MM-DD/run_id=<uuid>/
+├── course_catalog_archived/ingestion_date=YYYY-MM-DD/run_id=<uuid>/
+└── learning_history/ingestion_date=YYYY-MM-DD/run_id=<uuid>/
     ├── offset=000001.json
     └── manifest.json
 ```
@@ -156,12 +174,15 @@ write semantics.
 - At most `LEVELUP_MAX_CONCURRENCY` courses run concurrently via `asyncio.Semaphore`.
 - SkillUp runs its three independent domains concurrently. Each domain writes and checkpoints one
   page at a time, so the full dataset is never accumulated in memory.
+- DataCamp also runs its three domains concurrently. Catalog responses are opaque raw JSON and
+  intentionally report zero parsed records until their schemas are confirmed. Events are written
+  and checkpointed one page at a time.
 - SQLite records every completed page, course, domain, and run for status reporting and audit.
   Every scheduled ingestion creates a new `run_id` and starts the vendor from the first page,
   regardless of whether the previous run succeeded or failed. Failed work is not resumed on the
   next schedule.
-- SQLite vendor locks prevent overlapping runs per vendor. LevelUP and SkillUp use different lock
-  keys, so their scheduled runs can execute independently.
+- SQLite vendor locks prevent overlapping runs per vendor. LevelUP, SkillUp, and DataCamp use
+  different lock keys, so their scheduled runs can execute independently.
 - At ingestion startup, terminal checkpoint runs older than `CHECKPOINT_RETENTION_DAYS` are deleted
   with their page/course/domain rows. Running or locked runs are kept.
 
@@ -175,12 +196,16 @@ write semantics.
    endpoint more clearly than this aggregate endpoint.
 4. Whether SkillUp response field casing is identical across tenants, especially `hasNextPage`,
    `pageNumber`, and `totalPages`.
-5. OneLake/Fabric workspace, lakehouse, directory convention, authentication method, and atomic
+5. Exact DataCamp live/archived catalog envelopes and whether either endpoint later exposes
+   pagination metadata.
+6. Whether DataCamp events are under `events` or `data`, and the exact types/edge cases for
+   `meta.numberOfPages` when the result is empty.
+7. OneLake/Fabric workspace, lakehouse, directory convention, authentication method, and atomic
    commit expectations.
-6. Production scheduler owner (single FastAPI instance vs Fabric/ADF/external orchestrator).
-7. Retention, encryption, and access-control policy for raw Learning History PII.
+8. Production scheduler owner (single FastAPI instance vs Fabric/ADF/external orchestrator).
+9. Retention, encryption, and access-control policy for raw Learning History PII.
 
-DataCamp, Coursera, LinkedIn Learning, Harvard HMM/Spark, and FAMS are intentionally not
+Coursera, LinkedIn Learning, Harvard HMM/Spark, and FAMS are intentionally not
 implemented in this phase.
 
 ### SkillUp Assessment History date range

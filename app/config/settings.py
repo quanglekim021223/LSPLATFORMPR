@@ -39,6 +39,10 @@ class Settings(BaseSettings):
     skillup_page_size: int = Field(default=100, ge=1, le=100)
     skillup_assessment_start_date: str = "2000-01-01T00:00:00Z"
 
+    datacamp_base_url: str = ""
+    datacamp_token: SecretStr = Field(default=SecretStr(""))
+    datacamp_events_page_size: int = Field(default=1000, ge=1, le=1000)
+
     http_max_retries: int = Field(default=3, ge=0, le=10)
     http_connect_timeout_seconds: float = Field(default=10, gt=0)
     http_read_timeout_seconds: float = Field(default=60, gt=0)
@@ -108,6 +112,14 @@ class Settings(BaseSettings):
         api_key = self.skillup_api_key.get_secret_value()
         return (api_key,) if api_key else ()
 
+    @property
+    def datacamp_configured(self) -> bool:
+        return bool(self.datacamp_base_url and self.datacamp_token.get_secret_value())
+
+    def datacamp_secrets(self) -> tuple[str, ...]:
+        token = self.datacamp_token.get_secret_value()
+        return (token,) if token else ()
+
     def validate_levelup_runtime(self) -> None:
         missing = []
         if not self.levelup_base_url:
@@ -131,6 +143,15 @@ class Settings(BaseSettings):
             missing.append("SKILLUP_API_KEY")
         if missing:
             raise ValueError(f"Missing SkillUp configuration: {', '.join(missing)}")
+
+    def validate_datacamp_runtime(self) -> None:
+        missing = []
+        if not self.datacamp_base_url:
+            missing.append("DATACAMP_BASE_URL")
+        if not self.datacamp_token.get_secret_value():
+            missing.append("DATACAMP_TOKEN")
+        if missing:
+            raise ValueError(f"Missing DataCamp configuration: {', '.join(missing)}")
 
 
 @lru_cache
