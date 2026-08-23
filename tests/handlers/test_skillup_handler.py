@@ -35,8 +35,12 @@ async def test_skillup_three_domains_paginate_and_preserve_raw(
         assert "SkillProfileModifiedSince" not in request.url.params
         assert "searchText" not in request.url.params
         assert "includeSections" not in request.url.params
-        assert "startDate" not in request.url.params
-        assert "endDate" not in request.url.params
+        if path == "/v3/reports":
+            assert request.url.params["startDate"] == "2000-01-01T00:00:00Z"
+            assert "endDate" in request.url.params
+        else:
+            assert "startDate" not in request.url.params
+            assert "endDate" not in request.url.params
 
         if path == "/taxonomy":
             page = int(request.url.params["PageNumber"])

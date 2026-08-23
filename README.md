@@ -64,7 +64,9 @@ supplied matrix:
 
 SkillUp uses `x-api-key: <SKILLUP_API_KEY>` for every request. Its Intelligence and Reports APIs
 use separate base URLs configured by `SKILLUP_INTELLIGENCE_BASE_URL` and
-`SKILLUP_REPORTS_BASE_URL`.
+`SKILLUP_REPORTS_BASE_URL`. Assessment History always sends a range from
+`SKILLUP_ASSESSMENT_START_DATE` through the current UTC time, so scheduled runs retrieve the full
+configured history rather than iMocha's seven-day default.
 
 Run checks with:
 
@@ -183,7 +185,8 @@ implemented in this phase.
 
 ### SkillUp Assessment History date range
 
-`startDate`, `endDate`, and `includeSections` are optional and are omitted by default. According to
-the iMocha `GET /v3/reports` contract, omitting the date range returns only the most recent seven
-days of reports. Configure an explicit range when a wider backfill is required.
+The iMocha `GET /v3/reports` contract returns only the most recent seven days when no range is
+provided. This service therefore always sends `startDate` from
+`SKILLUP_ASSESSMENT_START_DATE` (default `2000-01-01T00:00:00Z`) and sets `endDate` to the current
+UTC time. Pagination then retrieves every report in that configured range.
 # LSPLATFORMPR

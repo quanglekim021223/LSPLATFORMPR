@@ -4,7 +4,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -214,11 +214,13 @@ async def run_skillup_ingestion(
     async with httpx.AsyncClient(timeout=timeout, transport=transport) as http_client:
         client = SkillUpClient(settings, http_client, sleep=sleep)
         job = SkillUpJob(settings, client, store, writer)
+        assessment_start = start_date or settings.skillup_assessment_start_date
+        assessment_end = end_date or datetime.now(UTC).isoformat().replace("+00:00", "Z")
         return await job.run(
             taxonomy_params=taxonomy_params,
             skill_profile_modified_since=skill_profile_modified_since,
             search_text=search_text,
             include_sections=include_sections,
-            start_date=start_date,
-            end_date=end_date,
+            start_date=assessment_start,
+            end_date=assessment_end,
         )

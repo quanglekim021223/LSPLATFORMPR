@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     skillup_reports_base_url: str = "https://apiv3.imocha.io"
     skillup_api_key: SecretStr = Field(default=SecretStr(""))
     skillup_page_size: int = Field(default=100, ge=1, le=100)
+    skillup_assessment_start_date: str = "2000-01-01T00:00:00Z"
 
     http_max_retries: int = Field(default=3, ge=0, le=10)
     http_connect_timeout_seconds: float = Field(default=10, gt=0)

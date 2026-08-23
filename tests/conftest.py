@@ -28,6 +28,7 @@ def settings_factory(tmp_path: Path) -> Callable[..., Settings]:
             "skillup_reports_base_url": "https://skillup-reports.test",
             "skillup_api_key": "test-skillup-key",
             "skillup_page_size": 2,
+            "skillup_assessment_start_date": "2000-01-01T00:00:00Z",
             "http_max_retries": 0,
             "bronze_local_path": tmp_path / "bronze",
             "checkpoint_db_path": tmp_path / "state" / "ingestion.db",
