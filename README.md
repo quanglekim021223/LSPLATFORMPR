@@ -1,8 +1,8 @@
 # FSA Learning Vendor Ingestion
 
 FastAPI service for scheduled ingestion of learning-vendor data into a raw Bronze layer. It
-supports LevelUP (Absorb), SkillUp (iMocha), DataCamp, Coursera, and LinkedIn Learning ingestion
-domains.
+supports LevelUP (Absorb), SkillUp (iMocha), DataCamp, Coursera, LinkedIn Learning, Harvard HMM,
+and Harvard Spark ingestion domains.
 
 ## Runtime flow
 
@@ -17,24 +17,31 @@ FastAPI lifespan / APScheduler (05:00 Asia/Ho_Chi_Minh)
 │  ├→ GET /employees/skills-profile
 │  └→ GET /v3/reports
 ├→ run_datacamp_ingestion (three independent concurrent domains)
-   ├→ GET /v1/catalog/live-courses once
-   ├→ GET /v1/catalog/archived-courses once
-   └→ GET /v1/events page-by-page
+│  ├→ GET /v1/catalog/live-courses once
+│  ├→ GET /v1/catalog/archived-courses once
+│  └→ GET /v1/events page-by-page
 ├→ run_coursera_ingestion
-   ├→ POST configured token URL once
-   ├→ GET /{org_id}/contents → configured Course Detail path (bounded concurrency)
-   └→ GET /{org_id}/enrollmentReports in parallel with the catalog pipeline
-└→ run_linkedin_ingestion
-   ├→ POST configured OAuth token URL once
-   ├→ GET /learningAssets → same endpoint with configured URN query (bounded concurrency)
-   └→ GET /learningActivityReports in concurrent windows of at most 14 days
+│  ├→ POST configured token URL once
+│  ├→ GET /{org_id}/contents → configured Course Detail path (bounded concurrency)
+│  └→ GET /{org_id}/enrollmentReports in parallel with the catalog pipeline
+├→ run_linkedin_ingestion
+│  ├→ POST configured OAuth token URL once
+│  ├→ GET /learningAssets → same endpoint with configured URN query (bounded concurrency)
+│  └→ GET /learningActivityReports in concurrent windows of at most 14 days
+├→ run_harvard_hmm_ingestion
+│  ├→ Catalog: Basic OAuth → GET /api/catalog/{orgKey}?catalogs=HMM
+│  └→ History: SFTP backfill missing dates → poll newest HMM CSV
+└→ run_harvard_spark_ingestion
+   ├→ Catalog: Basic OAuth → GET /api/catalog/{orgKey}?catalogs=HBR_SPARK
+   └→ History: SFTP backfill missing dates → poll newest Spark CSV
 → LocalBronzeWriter + SQLite run summary
 ```
 
 There is no public manual-trigger endpoint. `GET /health`, `GET /ready`, and
-`GET /jobs/levelup/latest`, `GET /jobs/skillup/latest`, `GET /jobs/datacamp/latest`, and
-`GET /jobs/coursera/latest`, and `GET /jobs/linkedin/latest` expose operational state without
-credentials or raw personal data.
+`GET /jobs/levelup/latest`, `GET /jobs/skillup/latest`, `GET /jobs/datacamp/latest`,
+`GET /jobs/coursera/latest`, `GET /jobs/linkedin/latest`, `GET /jobs/harvard-hmm/latest`, and
+`GET /jobs/harvard-spark/latest` expose operational state without credentials or raw personal
+data.
 
 ## Code layout
 
@@ -47,6 +54,7 @@ app/vendors/skillup/         iMocha client and three SkillUp data domains
 app/vendors/datacamp/        DataCamp client, catalogs, and event history
 app/vendors/coursera/        Coursera OAuth, catalog/detail, and learning history
 app/vendors/linkedin/        LinkedIn OAuth, assets/detail, and activity history
+app/vendors/harvard/         shared Harvard Catalog API and verified-host SFTP implementation
 app/helpers/                 shared HTTP retry and secret sanitization
 app/config/                  settings and APScheduler configuration
 app/repositories/            SQLite checkpoint history and vendor lock
@@ -58,6 +66,7 @@ app/mocks/skillup.py         SkillUp mock routes and data
 app/mocks/datacamp.py        DataCamp mock routes and data
 app/mocks/coursera.py        Coursera mock routes and data
 app/mocks/linkedin.py        LinkedIn Learning mock routes and data
+app/mocks/harvard.py         Harvard HMM/Spark Catalog API and injectable SFTP mock
 ```
 
 ## Local setup
@@ -112,6 +121,32 @@ never inferred by code. See the official [Learning Assets](https://learn.microso
 and [Learning Activity Reports](https://learn.microsoft.com/en-us/linkedin/learning/reference/learning-activity-reports-reference)
 contracts.
 
+Harvard HMM and Harvard Spark share the same implementation but use separate vendor names,
+credentials, Catalog codes, locks, run summaries, and Bronze directories. Each branch obtains one
+Catalog token with HTTP Basic credentials and form scope `hbp.org.api/catalog.read`; a `401`
+refreshes the token and retries exactly once. Daily scheduling performs a full Catalog load from
+`start=0`; `startDate=YYYYMMDD` is available only to explicit callers for a future delta flow.
+
+Learning History does not use the Catalog token. It connects with `asyncssh`, and
+`HARVARD_SFTP_KNOWN_HOSTS` must point to a trusted OpenSSH known-hosts file. Unknown host keys are
+never accepted automatically. The report date is the local run date minus
+`HARVARD_REPORT_DATE_OFFSET_DAYS`. Set `HARVARD_HMM_HISTORY_START_DATE` and
+`HARVARD_SPARK_HISTORY_START_DATE` in `YYYY-MM-DD` format to enable historical backfill. The
+first run downloads each dated CSV from that start date through the report cutoff. SQLite
+permanently records each completed remote path, so later scheduled runs skip old completed files
+and normally download only the new date. A missing historical file is attempted once per run and
+retried by the next daily run; only the newest expected file is polled at the configured interval
+until the earlier of `HARVARD_SFTP_MAX_WAIT_SECONDS` or 07:00. Leaving a start date blank retains
+daily-only behavior. One SFTP session is reused for the entire backfill run. CSV bytes are written
+without parsing; the manifest contains one `files`
+entry per download with remote path/name, size, remote modified time, download time, SHA-256, run
+ID, and ingestion date.
+
+Transient SFTP connection errors (timeout, connection reset/lost, and OS network errors) reopen
+the session and retry up to `HARVARD_SFTP_MAX_RETRIES` times, default `3`, with backoff. Missing
+files continue to use the polling deadline. Authentication and SSH host-key failures are not
+retried.
+
 Run checks with:
 
 ```bash
@@ -136,8 +171,12 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 For a quick scheduler test, set `INGESTION_TIME` in `.env` to a future minute in
 `Asia/Ho_Chi_Minh` before starting Terminal 2. At that minute the single scheduler registers and
 starts `levelup-daily-ingestion`, `skillup-daily-ingestion`, `datacamp-daily-ingestion`,
-`coursera-daily-ingestion`, and `linkedin-daily-ingestion`. Keep Terminal 2 running, then check the
-five `/jobs/{vendor}/latest`
+`coursera-daily-ingestion`, and `linkedin-daily-ingestion`. Harvard Catalog routes are also exposed
+by this hub. Harvard SFTP is mocked in automated tests rather than over HTTP; leave Harvard SFTP
+credentials blank during this local HTTP-only demo so those jobs are not scheduled. With real
+verified SFTP configuration, the scheduler additionally registers `harvard_hmm-daily-ingestion`
+and `harvard_spark-daily-ingestion`. Keep Terminal 2 running, then check the relevant
+`/jobs/{vendor}/latest`
 endpoints and vendor directories under
 `data/bronze/`. Swagger on port `8000` is status-only. The shared mock Swagger at
 `http://127.0.0.1:9000/docs` exposes all mock vendors and can grow to include future vendor routers
@@ -154,7 +193,8 @@ INGESTION_TIMEZONE=Asia/Ho_Chi_Minh
 ```
 
 Only vendors with a complete credential configuration are scheduled. LevelUP, SkillUp, DataCamp,
-Coursera, and LinkedIn receive separate APScheduler jobs at the same configured time. The
+Coursera, LinkedIn, Harvard HMM, and Harvard Spark receive separate APScheduler jobs at the same
+configured time. The
 in-process scheduler must have exactly one scheduler-bearing service instance. Do not enable
 it independently in every Uvicorn worker or replica. For multi-worker production deployments,
 keep it disabled and let Fabric, Azure Data Factory, or another external scheduler own the single
@@ -198,6 +238,18 @@ data/bronze/linkedin/
 ├── course_detail/ingestion_date=YYYY-MM-DD/run_id=<uuid>/
 │   └── course_id=<asset-urn>/
 └── learning_history/ingestion_date=YYYY-MM-DD/run_id=<uuid>/
+
+data/bronze/harvard_hmm/
+├── course_catalog/ingestion_date=YYYY-MM-DD/run_id=<uuid>/
+└── learning_history/ingestion_date=YYYY-MM-DD/run_id=<uuid>/
+    ├── harvard_hmm_reporting_YYYYMMDD.csv
+    └── manifest.json
+
+data/bronze/harvard_spark/
+├── course_catalog/ingestion_date=YYYY-MM-DD/run_id=<uuid>/
+└── learning_history/ingestion_date=YYYY-MM-DD/run_id=<uuid>/
+    ├── harvard_Spark_reporting_YYYYMMDD.csv
+    └── manifest.json
 ```
 
 Each page is atomically replaced only after the response succeeds. Manifests are separate from
@@ -216,8 +268,8 @@ write semantics.
 - Timeout, connection failures, HTTP 429, and HTTP 5xx are retried up to
   `HTTP_MAX_RETRIES` times after the initial attempt.
 - `Retry-After` is honored; otherwise exponential backoff with jitter is used.
-- Other 4xx responses are not retried. For LevelUP, Coursera, and LinkedIn, a 401 refreshes the
-  shared token and repeats the request once.
+- Other 4xx responses are not retried. For LevelUP, Coursera, LinkedIn, and Harvard Catalog, a 401
+  refreshes the shared token and repeats the request once.
 - At most `LEVELUP_MAX_CONCURRENCY` courses run concurrently via `asyncio.Semaphore`.
 - SkillUp runs its three independent domains concurrently. Each domain writes and checkpoints one
   page at a time, so the full dataset is never accumulated in memory.
@@ -232,12 +284,18 @@ write semantics.
 - LinkedIn follows the same one-token and parallel pipeline pattern. Asset Details use at most
   `LINKEDIN_MAX_CONCURRENCY` requests; history pages are written immediately and use globally
   increasing Bronze offsets so pages from separate 14-day windows cannot overwrite one another.
+- Each Harvard job runs Catalog and SFTP History independently in parallel. Catalog pages are
+  written immediately and counted from `len(payload["list"])`; a non-array `list` preserves raw
+  JSON but fails that domain. History backfills all configured dates sequentially, writes each
+  exact CSV plus checksum metadata, and skips remote paths already recorded in
+  `ingested_source_files`. Missing dates do not discard files that succeeded. One failed branch
+  produces `PARTIAL_FAILURE` while preserving the successful branch.
 - SQLite records every completed page, course, domain, and run for status reporting and audit.
   Every scheduled ingestion creates a new `run_id` and starts the vendor from the first page,
   regardless of whether the previous run succeeded or failed. Failed work is not resumed on the
   next schedule.
-- SQLite vendor locks prevent overlapping runs per vendor. LevelUP, SkillUp, DataCamp, Coursera,
-  and LinkedIn use different lock keys, so their scheduled runs can execute independently.
+- SQLite vendor locks prevent overlapping runs per vendor. All vendors, including Harvard HMM and
+  Harvard Spark, use different lock keys, so their scheduled runs can execute independently.
 - At ingestion startup, terminal checkpoint runs older than `CHECKPOINT_RETENTION_DAYS` are deleted
   with their page/course/domain rows. Running or locked runs are kept.
 
@@ -260,8 +318,14 @@ write semantics.
 9. Retention, encryption, and access-control policy for raw Learning History PII.
 10. Production Coursera base URL and exact Course Detail path template from the administrator.
 11. Exact production `LINKEDIN_ASSET_DETAIL_QUERY_TEMPLATE` supplied by the LinkedIn administrator.
+12. Harvard HMM/Spark Catalog response confirmation for `count` and `list`, including empty-page
+    behavior and whether `count` is total across all pages.
+13. Trusted Harvard SFTP host-key entry, production credentials, remote timestamps/timezone, and
+    confirmation of the exact filename capitalization and delivery cutoff.
+14. The earliest historical report date for HMM and Spark, and whether Harvard publishes a file
+    for every calendar day or omits weekends/holidays.
 
-Harvard HMM/Spark and FAMS are intentionally not implemented in this phase.
+FAMS is intentionally not implemented in this phase.
 
 ### SkillUp Assessment History date range
 

@@ -30,6 +30,8 @@ async def test_health_ready_latest_and_scheduler_disabled_in_test(
             missing_datacamp = await client.get("/jobs/datacamp/latest")
             missing_coursera = await client.get("/jobs/coursera/latest")
             missing_linkedin = await client.get("/jobs/linkedin/latest")
+            missing_hmm = await client.get("/jobs/harvard-hmm/latest")
+            missing_spark = await client.get("/jobs/harvard-spark/latest")
             assert health.json() == {"status": "ok"}
             assert ready.json() == {"status": "ready"}
             assert missing.status_code == 404
@@ -37,6 +39,8 @@ async def test_health_ready_latest_and_scheduler_disabled_in_test(
             assert missing_datacamp.status_code == 404
             assert missing_coursera.status_code == 404
             assert missing_linkedin.status_code == 404
+            assert missing_hmm.status_code == 404
+            assert missing_spark.status_code == 404
 
             run_id = "11111111-1111-4111-8111-111111111111"
             await store.start_run(run_id, "levelup")
@@ -111,3 +115,21 @@ async def test_health_ready_latest_and_scheduler_disabled_in_test(
             assert latest_linkedin.json()["records_by_domain"] == {
                 "learning_history": 6
             }
+
+            hmm_run_id = "66666666-6666-4666-8666-666666666666"
+            await store.start_run(hmm_run_id, "harvard_hmm")
+            await store.record_completed_page(hmm_run_id, "course_catalog", 0, 2)
+            await store.finish_run(hmm_run_id, RunStatus.SUCCEEDED)
+            latest_hmm = await client.get("/jobs/harvard-hmm/latest")
+            assert latest_hmm.status_code == 200
+            assert latest_hmm.json()["vendor"] == "harvard_hmm"
+
+            spark_run_id = "77777777-7777-4777-8777-777777777777"
+            await store.start_run(spark_run_id, "harvard_spark")
+            await store.record_completed_page(
+                spark_run_id, "learning_history", 1, 0
+            )
+            await store.finish_run(spark_run_id, RunStatus.SUCCEEDED)
+            latest_spark = await client.get("/jobs/harvard-spark/latest")
+            assert latest_spark.status_code == 200
+            assert latest_spark.json()["vendor"] == "harvard_spark"

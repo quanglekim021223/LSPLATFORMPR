@@ -10,7 +10,7 @@ from typing import Any
 from urllib.parse import quote
 
 from app.helpers.security import sanitize_mapping
-from app.models import PageWrite
+from app.models import BinaryFileWrite, PageWrite
 
 
 class LocalBronzeWriter:
@@ -21,6 +21,9 @@ class LocalBronzeWriter:
 
     async def write_page(self, page: PageWrite) -> Path:
         return await asyncio.to_thread(self._write_page, page)
+
+    async def write_file(self, file: BinaryFileWrite) -> Path:
+        return await asyncio.to_thread(self._write_file, file)
 
     def _write_page(self, page: PageWrite) -> Path:
         if not page.raw_payload:
@@ -72,6 +75,57 @@ class LocalBronzeWriter:
             int(item.get("records_count", 0)) for item in pages.values()
         )
         manifest["updated_at"] = page.fetched_at.isoformat()
+        self._atomic_write(
+            manifest_path,
+            json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8"),
+        )
+        return output_path
+
+    def _write_file(self, file: BinaryFileWrite) -> Path:
+        if not file.raw_payload:
+            raise ValueError("Refusing to write an empty raw payload")
+        if Path(file.file_name).name != file.file_name:
+            raise ValueError("Binary Bronze file_name must not contain a path")
+        if file.file_size != len(file.raw_payload):
+            raise ValueError("Binary Bronze file size does not match payload")
+
+        directory = (
+            self.root
+            / file.vendor
+            / file.data_domain
+            / f"ingestion_date={file.ingestion_date}"
+            / f"run_id={quote(file.run_id, safe='-_')}"
+        )
+        directory.mkdir(parents=True, exist_ok=True)
+        output_path = directory / file.file_name
+        self._atomic_write(output_path, file.raw_payload)
+        manifest_path = directory / "manifest.json"
+        manifest = self._load_manifest(manifest_path)
+        manifest.update(
+            {
+                "vendor": file.vendor,
+                "data_domain": file.data_domain,
+                "ingestion_date": file.ingestion_date,
+                "run_id": file.run_id,
+            }
+        )
+        entry = {
+            "file": file.file_name,
+            "remote_filename": file.file_name,
+            "remote_path": file.remote_path,
+            "file_size": file.file_size,
+            "remote_modified_time": file.remote_modified_time.isoformat(),
+            "downloaded_at": file.downloaded_at.isoformat(),
+            "sha256": hashlib.sha256(file.raw_payload).hexdigest(),
+        }
+        files = {
+            str(item["remote_path"]): item
+            for item in manifest.get("files", [])
+            if isinstance(item, dict) and "remote_path" in item
+        }
+        files[file.remote_path] = entry
+        manifest["files"] = [files[path] for path in sorted(files)]
+        manifest.update(entry)
         self._atomic_write(
             manifest_path,
             json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8"),

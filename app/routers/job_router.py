@@ -59,4 +59,24 @@ def build_job_router(checkpoints: CheckpointStore) -> APIRouter:
             )
         return summary
 
+    @router.get("/jobs/harvard-hmm/latest", response_model=RunSummary)
+    async def latest_harvard_hmm_job() -> RunSummary:
+        summary = await checkpoints.latest_run("harvard_hmm")
+        if summary is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No Harvard HMM run found",
+            )
+        return summary
+
+    @router.get("/jobs/harvard-spark/latest", response_model=RunSummary)
+    async def latest_harvard_spark_job() -> RunSummary:
+        summary = await checkpoints.latest_run("harvard_spark")
+        if summary is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No Harvard Spark run found",
+            )
+        return summary
+
     return router

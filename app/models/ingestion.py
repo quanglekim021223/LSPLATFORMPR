@@ -43,6 +43,20 @@ class PageWrite:
     course_id: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class BinaryFileWrite:
+    vendor: str
+    data_domain: str
+    ingestion_date: str
+    run_id: str
+    raw_payload: bytes
+    file_name: str
+    remote_path: str
+    file_size: int
+    remote_modified_time: datetime
+    downloaded_at: datetime
+
+
 @dataclass(slots=True)
 class CourseResult:
     course_id: str

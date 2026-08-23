@@ -76,6 +76,14 @@ class CheckpointStore:
                     acquired_at TEXT NOT NULL,
                     heartbeat_at TEXT
                 );
+                CREATE TABLE IF NOT EXISTS ingested_source_files (
+                    vendor TEXT NOT NULL,
+                    data_domain TEXT NOT NULL,
+                    source_key TEXT NOT NULL,
+                    run_id TEXT NOT NULL,
+                    completed_at TEXT NOT NULL,
+                    PRIMARY KEY (vendor, data_domain, source_key)
+                );
                 CREATE INDEX IF NOT EXISTS idx_runs_vendor_started
                     ON runs(vendor, started_at DESC);
                 """
@@ -358,6 +366,63 @@ class CheckpointStore:
                     error_message = NULL
                 """,
                 (run_id, run_id, data_domain, course_id, offset, now, now, records_count),
+            )
+
+    async def source_file_completed(
+        self, vendor: str, data_domain: str, source_key: str
+    ) -> bool:
+        return await asyncio.to_thread(
+            self._source_file_completed, vendor, data_domain, source_key
+        )
+
+    def _source_file_completed(
+        self, vendor: str, data_domain: str, source_key: str
+    ) -> bool:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT 1 FROM ingested_source_files
+                WHERE vendor = ? AND data_domain = ? AND source_key = ?
+                """,
+                (vendor, data_domain, source_key),
+            ).fetchone()
+            if row is None:
+                return False
+            return True
+
+    async def record_completed_source_file(
+        self,
+        vendor: str,
+        data_domain: str,
+        source_key: str,
+        run_id: str,
+    ) -> None:
+        await asyncio.to_thread(
+            self._record_completed_source_file,
+            vendor,
+            data_domain,
+            source_key,
+            run_id,
+        )
+
+    def _record_completed_source_file(
+        self,
+        vendor: str,
+        data_domain: str,
+        source_key: str,
+        run_id: str,
+    ) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO ingested_source_files(
+                    vendor, data_domain, source_key, run_id, completed_at
+                ) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(vendor, data_domain, source_key) DO UPDATE SET
+                    run_id = excluded.run_id,
+                    completed_at = excluded.completed_at
+                """,
+                (vendor, data_domain, source_key, run_id, _now()),
             )
 
     async def record_failed_page(

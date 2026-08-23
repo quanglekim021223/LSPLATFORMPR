@@ -21,9 +21,19 @@ def test_scheduler_defaults_to_single_daily_0500_job(
             "datacamp": job,
             "coursera": job,
             "linkedin": job,
+            "harvard_hmm": job,
+            "harvard_spark": job,
         },  # type: ignore[arg-type]
     )
-    for vendor in ("levelup", "skillup", "datacamp", "coursera", "linkedin"):
+    for vendor in (
+        "levelup",
+        "skillup",
+        "datacamp",
+        "coursera",
+        "linkedin",
+        "harvard_hmm",
+        "harvard_spark",
+    ):
         scheduled_job = scheduler.get_job(f"{vendor}-daily-ingestion")
         assert scheduled_job is not None
         assert scheduled_job.max_instances == 1

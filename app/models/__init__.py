@@ -1,3 +1,9 @@
-from app.models.ingestion import CourseResult, PageWrite, RunStatus, RunSummary
+from app.models.ingestion import (
+    BinaryFileWrite,
+    CourseResult,
+    PageWrite,
+    RunStatus,
+    RunSummary,
+)
 
-__all__ = ["CourseResult", "PageWrite", "RunStatus", "RunSummary"]
+__all__ = ["BinaryFileWrite", "CourseResult", "PageWrite", "RunStatus", "RunSummary"]

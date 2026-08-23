@@ -63,6 +63,27 @@ class Settings(BaseSettings):
     linkedin_asset_detail_query_template: str = ""
     linkedin_lock_ttl_seconds: int = Field(default=3600, ge=30)
 
+    harvard_catalog_base_url: str = "https://catalog-api.myhbp.org/v1"
+    harvard_page_size: int = Field(default=1000, ge=1, le=1000)
+    harvard_hmm_client_id: SecretStr = Field(default=SecretStr(""))
+    harvard_hmm_client_secret: SecretStr = Field(default=SecretStr(""))
+    harvard_hmm_org_key: str = ""
+    harvard_hmm_history_start_date: str = ""
+    harvard_spark_client_id: SecretStr = Field(default=SecretStr(""))
+    harvard_spark_client_secret: SecretStr = Field(default=SecretStr(""))
+    harvard_spark_org_key: str = ""
+    harvard_spark_history_start_date: str = ""
+    harvard_sftp_host: str = "transfer.hbsp.harvard.edu"
+    harvard_sftp_port: int = Field(default=22, ge=1, le=65535)
+    harvard_sftp_username: SecretStr = Field(default=SecretStr(""))
+    harvard_sftp_password: SecretStr = Field(default=SecretStr(""))
+    harvard_sftp_remote_dir: str = "/fpt_sparkprod_feed"
+    harvard_sftp_known_hosts: Path | None = None
+    harvard_report_date_offset_days: int = Field(default=1, ge=0)
+    harvard_sftp_poll_interval_seconds: int = Field(default=300, ge=1)
+    harvard_sftp_max_wait_seconds: int = Field(default=7200, ge=0)
+    harvard_sftp_max_retries: int = Field(default=3, ge=0, le=10)
+
     http_max_retries: int = Field(default=3, ge=0, le=10)
     http_connect_timeout_seconds: float = Field(default=10, gt=0)
     http_read_timeout_seconds: float = Field(default=60, gt=0)
@@ -168,6 +189,36 @@ class Settings(BaseSettings):
             if secret
         )
 
+    @property
+    def harvard_hmm_configured(self) -> bool:
+        return not self._missing_harvard_configuration("hmm")
+
+    @property
+    def harvard_spark_configured(self) -> bool:
+        return not self._missing_harvard_configuration("spark")
+
+    def harvard_secrets(self, vendor: str) -> tuple[str, ...]:
+        client_id = (
+            self.harvard_hmm_client_id
+            if vendor == "harvard_hmm"
+            else self.harvard_spark_client_id
+        )
+        client_secret = (
+            self.harvard_hmm_client_secret
+            if vendor == "harvard_hmm"
+            else self.harvard_spark_client_secret
+        )
+        return tuple(
+            secret
+            for secret in (
+                client_id.get_secret_value(),
+                client_secret.get_secret_value(),
+                self.harvard_sftp_username.get_secret_value(),
+                self.harvard_sftp_password.get_secret_value(),
+            )
+            if secret
+        )
+
     def validate_levelup_runtime(self) -> None:
         missing = []
         if not self.levelup_base_url:
@@ -234,6 +285,71 @@ class Settings(BaseSettings):
             "LINKEDIN_ASSET_DETAIL_QUERY_TEMPLATE": (
                 self.linkedin_asset_detail_query_template
             ),
+        }
+        return [name for name, value in values.items() if not value]
+
+    def validate_harvard_runtime(self, vendor: str) -> None:
+        short_name = "hmm" if vendor == "harvard_hmm" else "spark"
+        missing = self._missing_harvard_configuration(short_name)
+        if missing:
+            display_name = "Harvard HMM" if short_name == "hmm" else "Harvard Spark"
+            raise ValueError(
+                f"Missing {display_name} configuration: {', '.join(missing)}"
+            )
+
+    def validate_harvard_catalog_runtime(self, vendor: str) -> None:
+        short_name = "hmm" if vendor == "harvard_hmm" else "spark"
+        missing = self._missing_harvard_catalog_configuration(short_name)
+        if missing:
+            display_name = "Harvard HMM" if short_name == "hmm" else "Harvard Spark"
+            raise ValueError(
+                f"Missing {display_name} Catalog configuration: {', '.join(missing)}"
+            )
+
+    def validate_harvard_sftp_runtime(self) -> None:
+        missing = self._missing_harvard_sftp_configuration()
+        if missing:
+            raise ValueError(
+                f"Missing Harvard SFTP configuration: {', '.join(missing)}"
+            )
+
+    def _missing_harvard_configuration(self, vendor: str) -> list[str]:
+        return self._missing_harvard_catalog_configuration(
+            vendor
+        ) + self._missing_harvard_sftp_configuration()
+
+    def _missing_harvard_catalog_configuration(self, vendor: str) -> list[str]:
+        prefix = "HARVARD_HMM" if vendor == "hmm" else "HARVARD_SPARK"
+        client_id = (
+            self.harvard_hmm_client_id
+            if vendor == "hmm"
+            else self.harvard_spark_client_id
+        )
+        client_secret = (
+            self.harvard_hmm_client_secret
+            if vendor == "hmm"
+            else self.harvard_spark_client_secret
+        )
+        org_key = (
+            self.harvard_hmm_org_key
+            if vendor == "hmm"
+            else self.harvard_spark_org_key
+        )
+        values: dict[str, object] = {
+            "HARVARD_CATALOG_BASE_URL": self.harvard_catalog_base_url,
+            f"{prefix}_CLIENT_ID": client_id.get_secret_value(),
+            f"{prefix}_CLIENT_SECRET": client_secret.get_secret_value(),
+            f"{prefix}_ORG_KEY": org_key,
+        }
+        return [name for name, value in values.items() if not value]
+
+    def _missing_harvard_sftp_configuration(self) -> list[str]:
+        values: dict[str, object] = {
+            "HARVARD_SFTP_HOST": self.harvard_sftp_host,
+            "HARVARD_SFTP_USERNAME": self.harvard_sftp_username.get_secret_value(),
+            "HARVARD_SFTP_PASSWORD": self.harvard_sftp_password.get_secret_value(),
+            "HARVARD_SFTP_REMOTE_DIR": self.harvard_sftp_remote_dir,
+            "HARVARD_SFTP_KNOWN_HOSTS": self.harvard_sftp_known_hosts,
         }
         return [name for name, value in values.items() if not value]
 

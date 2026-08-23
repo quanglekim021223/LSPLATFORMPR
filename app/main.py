@@ -10,6 +10,8 @@ from app.config import Settings, get_settings
 from app.config.scheduler import ScheduledJob, build_scheduler
 from app.handlers.coursera_handler import run_coursera_ingestion
 from app.handlers.datacamp_handler import run_datacamp_ingestion
+from app.handlers.harvard_hmm_handler import run_harvard_hmm_ingestion
+from app.handlers.harvard_spark_handler import run_harvard_spark_ingestion
 from app.handlers.levelup_handler import run_levelup_ingestion
 from app.handlers.linkedin_handler import run_linkedin_ingestion
 from app.handlers.skillup_handler import run_skillup_ingestion
@@ -87,6 +89,26 @@ def create_app(
                     )
 
                 jobs["linkedin"] = scheduled_linkedin_ingestion
+
+            if config.harvard_hmm_configured:
+                async def scheduled_harvard_hmm_ingestion() -> object:
+                    return await run_harvard_hmm_ingestion(
+                        config,
+                        checkpoint_store=store,
+                        bronze_writer=writer,
+                    )
+
+                jobs["harvard_hmm"] = scheduled_harvard_hmm_ingestion
+
+            if config.harvard_spark_configured:
+                async def scheduled_harvard_spark_ingestion() -> object:
+                    return await run_harvard_spark_ingestion(
+                        config,
+                        checkpoint_store=store,
+                        bronze_writer=writer,
+                    )
+
+                jobs["harvard_spark"] = scheduled_harvard_spark_ingestion
 
             if not jobs:
                 raise ValueError("Scheduler enabled but no vendor is fully configured")
