@@ -19,4 +19,14 @@ def build_job_router(checkpoints: CheckpointStore) -> APIRouter:
             )
         return summary
 
+    @router.get("/jobs/skillup/latest", response_model=RunSummary)
+    async def latest_skillup_job() -> RunSummary:
+        summary = await checkpoints.latest_run("skillup")
+        if summary is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No SkillUp run found",
+            )
+        return summary
+
     return router

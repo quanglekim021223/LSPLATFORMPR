@@ -6,7 +6,7 @@ import httpx
 import pytest
 
 from app.handlers.levelup_handler import run_levelup_ingestion
-from app.mock_levelup import app as mock_levelup_app
+from app.mocks.app import app as mock_vendor_hub
 from app.models import RunStatus
 from tests.conftest import no_sleep
 
@@ -16,7 +16,7 @@ async def test_mock_server_runs_full_ingestion_pipeline(
     settings_factory: Callable[..., object],
 ) -> None:
     settings = settings_factory(
-        levelup_base_url="http://mock-levelup",
+        levelup_base_url="http://mock-vendor-hub/levelup",
         levelup_username="mock-user",
         levelup_password="mock-password",
         levelup_api_key="mock-private-key",
@@ -24,7 +24,7 @@ async def test_mock_server_runs_full_ingestion_pipeline(
 
     summary = await run_levelup_ingestion(
         settings,  # type: ignore[arg-type]
-        transport=httpx.ASGITransport(app=mock_levelup_app),
+        transport=httpx.ASGITransport(app=mock_vendor_hub),
         sleep=no_sleep,
     )
 

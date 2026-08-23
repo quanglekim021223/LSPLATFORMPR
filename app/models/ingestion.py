@@ -5,7 +5,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class RunStatus(StrEnum):
@@ -25,6 +25,7 @@ class RunSummary(BaseModel):
     enrollment_records: int = 0
     courses_succeeded: int = 0
     courses_failed: int = 0
+    records_by_domain: dict[str, int] = Field(default_factory=dict)
     error_message: str | None = None
 
 
@@ -49,4 +50,3 @@ class CourseResult:
     succeeded: bool = True
     retryable: bool = False
     error_message: str | None = None
-

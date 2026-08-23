@@ -1,38 +1,44 @@
 # FSA Learning Vendor Ingestion
 
-FastAPI service for scheduled ingestion of learning-vendor data into a raw Bronze layer. The
-first delivery implements only LevelUP (Absorb): one token per run, paged Course Catalog,
-client-side LinkedIn Learning exclusion, then paged Learning History for the collected course
-IDs.
+FastAPI service for scheduled ingestion of learning-vendor data into a raw Bronze layer. It
+supports LevelUP (Absorb) Course Catalog/Learning History and SkillUp (iMocha) Skill Taxonomy,
+Skill Inventory, and Assessment History.
 
 ## Runtime flow
 
 ```text
 FastAPI lifespan / APScheduler (05:00 Asia/Ho_Chi_Minh)
-→ run_levelup_ingestion
-→ POST /authenticate (one in-memory token)
-→ GET /courses page-by-page
-→ LocalBronzeWriter + SQLite checkpoint
-→ GET /courses/{courseId}/enrollments (bounded concurrency)
+├→ run_levelup_ingestion
+│  ├→ POST /authenticate (one in-memory token)
+│  ├→ GET /courses page-by-page
+│  └→ GET /courses/{courseId}/enrollments (bounded concurrency)
+└→ run_skillup_ingestion (three independent concurrent domains)
+   ├→ GET /taxonomy
+   ├→ GET /employees/skills-profile
+   └→ GET /v3/reports
 → LocalBronzeWriter + SQLite run summary
 ```
 
 There is no public manual-trigger endpoint. `GET /health`, `GET /ready`, and
-`GET /jobs/levelup/latest` expose operational state without credentials or raw personal data.
+`GET /jobs/levelup/latest` and `GET /jobs/skillup/latest` expose operational state without
+credentials or raw personal data.
 
 ## Code layout
 
 ```text
 app/main.py                  application composition and lifespan
 app/routers/                 health, readiness, and job-status APIs
-app/handlers/                LevelUP run orchestration
-app/vendors/levelup/         authentication, catalog, and learning history
+app/handlers/                LevelUP and SkillUp run orchestration
+app/vendors/levelup/         LevelUP authentication, catalog, and learning history
+app/vendors/skillup/         iMocha client and three SkillUp data domains
 app/helpers/                 shared HTTP retry and secret sanitization
 app/config/                  settings and APScheduler configuration
-app/repositories/            SQLite checkpoint, resume, and vendor lock
+app/repositories/            SQLite checkpoint history and vendor lock
 app/storage/                 Bronze writer contract and local implementation
 app/models/                  ingestion data models
-app/mock_levelup.py          local mock ASGI entrypoint used by the demo
+app/mocks/app.py             single local mock hub entrypoint for every vendor
+app/mocks/levelup.py         LevelUP mock routes and data
+app/mocks/skillup.py         SkillUp mock routes and data
 ```
 
 ## Local setup
@@ -47,14 +53,18 @@ cp .env.example .env
 uvicorn app.main:app --reload
 ```
 
-Fill the LevelUP values in `.env`; never commit that file. The authentication contract follows
-the supplied matrix:
+Fill the vendor values in `.env`; never commit that file. LevelUP authentication follows the
+supplied matrix:
 
 - `POST /authenticate`
 - JSON fields `username`, `password`, and `privateKey`
 - headers `X-API-Key` and `x-api-version: 2`
 - a plain-string token response (JSON `token` / `access_token` envelopes are also accepted)
 - subsequent `Authorization` header contains the token exactly as returned by Absorb
+
+SkillUp uses `x-api-key: <SKILLUP_API_KEY>` for every request. Its Intelligence and Reports APIs
+use separate base URLs configured by `SKILLUP_INTELLIGENCE_BASE_URL` and
+`SKILLUP_REPORTS_BASE_URL`.
 
 Run checks with:
 
@@ -64,9 +74,30 @@ mypy app
 pytest
 ```
 
+## Local two-vendor mock demo
+
+The local `.env` points every mock vendor to a path on the same port. Start these two processes in
+separate terminals:
+
+```bash
+# Terminal 1: shared upstream mock hub
+uvicorn app.mocks.app:app --host 127.0.0.1 --port 9000
+
+# Terminal 2: ingestion service and scheduler
+uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+For a quick scheduler test, set `INGESTION_TIME` in `.env` to a future minute in
+`Asia/Ho_Chi_Minh` before starting Terminal 2. At that minute the single scheduler registers and
+starts both `levelup-daily-ingestion` and `skillup-daily-ingestion`. Keep Terminal 2 running, then
+check `GET /jobs/levelup/latest`, `GET /jobs/skillup/latest`, and the two vendor directories under
+`data/bronze/`. Swagger on port `8000` is status-only. The shared mock Swagger at
+`http://127.0.0.1:9000/docs` exposes both vendors and can grow to include future vendor routers
+without adding more processes.
+
 ## Scheduler
 
-The scheduler is disabled by default. To enable the daily 05:00 job locally:
+The scheduler is disabled by default. To enable the daily 05:00 jobs locally:
 
 ```text
 SCHEDULER_ENABLED=true
@@ -74,7 +105,9 @@ INGESTION_TIME=05:00
 INGESTION_TIMEZONE=Asia/Ho_Chi_Minh
 ```
 
-The in-process scheduler must have exactly one scheduler-bearing service instance. Do not enable
+Only vendors with a complete credential configuration are scheduled. LevelUP and SkillUp receive
+separate APScheduler jobs at the same configured time. The in-process scheduler must have exactly
+one scheduler-bearing service instance. Do not enable
 it independently in every Uvicorn worker or replica. For multi-worker production deployments,
 keep it disabled and let Fabric, Azure Data Factory, or another external scheduler own the single
 job invocation. `max_instances=1`, coalescing, and a five-minute misfire grace prevent overlapping
@@ -91,6 +124,13 @@ data/bronze/levelup/
     └── course_id=<course-id>/
         ├── offset=000000.json
         └── manifest.json
+
+data/bronze/skillup/
+├── skill_taxonomy/ingestion_date=YYYY-MM-DD/run_id=<uuid>/
+├── skill_inventory/ingestion_date=YYYY-MM-DD/run_id=<uuid>/
+└── assessment_history/ingestion_date=YYYY-MM-DD/run_id=<uuid>/
+    ├── offset=000001.json
+    └── manifest.json
 ```
 
 Each page is atomically replaced only after the response succeeds. Manifests are separate from
@@ -104,35 +144,46 @@ not OneLake. `BronzeWriter` is the boundary for a future `OneLakeBronzeWriter` o
 provides the actual OneLake authentication, workspace/lakehouse identifiers, path contract, and
 write semantics.
 
-## Retry, concurrency, and resume
+## Retry, concurrency, and checkpoints
 
 - Timeout, connection failures, HTTP 429, and HTTP 5xx are retried up to
   `HTTP_MAX_RETRIES` times after the initial attempt.
 - `Retry-After` is honored; otherwise exponential backoff with jitter is used.
-- Other 4xx responses are not retried. A 401 refreshes the shared token and repeats the request
-  once.
+- Other 4xx responses are not retried. For LevelUP, a 401 refreshes the shared token and repeats
+  the request once.
 - At most `LEVELUP_MAX_CONCURRENCY` courses run concurrently via `asyncio.Semaphore`.
-- SQLite records every completed page and course. With no explicit `run_id`, the orchestrator
-  resumes only retryable failures (timeouts, transport errors, HTTP 408/429/5xx). Permanent HTTP
-  4xx and response-contract failures are recorded as terminal and the next schedule creates a new
-  run. Resume is capped by `LEVELUP_MAX_RESUME_ATTEMPTS` and
-  `LEVELUP_RESUME_MAX_AGE_HOURS`; resumed pages keep the run's original ingestion date.
-- A SQLite vendor lock prevents overlapping LevelUP jobs. It has a periodically refreshed
-  heartbeat and `LEVELUP_LOCK_TTL_SECONDS` expiry. Lock acquisition atomically reclaims stale locks
-  and marks an abandoned `running` run failed before resuming it.
+- SkillUp runs its three independent domains concurrently. Each domain writes and checkpoints one
+  page at a time, so the full dataset is never accumulated in memory.
+- SQLite records every completed page, course, domain, and run for status reporting and audit.
+  Every scheduled ingestion creates a new `run_id` and starts the vendor from the first page,
+  regardless of whether the previous run succeeded or failed. Failed work is not resumed on the
+  next schedule.
+- SQLite vendor locks prevent overlapping runs per vendor. LevelUP and SkillUp use different lock
+  keys, so their scheduled runs can execute independently.
 - At ingestion startup, terminal checkpoint runs older than `CHECKPOINT_RETENTION_DAYS` are deleted
-  with their page/course rows. Running or locked runs and the newest resumable failed run are kept.
+  with their page/course/domain rows. Running or locked runs are kept.
 
 ## Information still needed from Minh/team
 
 1. Production LevelUP tenant/base URL and confirmation that `Authorization` must contain the raw
    token rather than `Bearer <token>`.
 2. Whether the authentication response is always a plain string in every environment.
-3. OneLake/Fabric workspace, lakehouse, directory convention, authentication method, and atomic
+3. Exact production response envelope and pagination metadata for SkillUp
+   `/employees/skills-profile`; the public documentation currently exposes the per-employee
+   endpoint more clearly than this aggregate endpoint.
+4. Whether SkillUp response field casing is identical across tenants, especially `hasNextPage`,
+   `pageNumber`, and `totalPages`.
+5. OneLake/Fabric workspace, lakehouse, directory convention, authentication method, and atomic
    commit expectations.
-4. Production scheduler owner (single FastAPI instance vs Fabric/ADF/external orchestrator).
-5. Retention, encryption, and access-control policy for raw Learning History PII.
+6. Production scheduler owner (single FastAPI instance vs Fabric/ADF/external orchestrator).
+7. Retention, encryption, and access-control policy for raw Learning History PII.
 
-SkillUp, DataCamp, Coursera, LinkedIn Learning, Harvard HMM/Spark, and FAMS are intentionally not
+DataCamp, Coursera, LinkedIn Learning, Harvard HMM/Spark, and FAMS are intentionally not
 implemented in this phase.
+
+### SkillUp Assessment History date range
+
+`startDate`, `endDate`, and `includeSections` are optional and are omitted by default. According to
+the iMocha `GET /v3/reports` contract, omitting the date range returns only the most recent seven
+days of reports. Configure an explicit range when a wider backfill is required.
 # LSPLATFORMPR

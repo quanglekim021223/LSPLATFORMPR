@@ -32,8 +32,11 @@ class Settings(BaseSettings):
     levelup_page_size: int = Field(default=1000, ge=1, le=1000)
     levelup_max_concurrency: int = Field(default=5, ge=1, le=100)
     levelup_lock_ttl_seconds: int = Field(default=3600, ge=30)
-    levelup_max_resume_attempts: int = Field(default=2, ge=0, le=10)
-    levelup_resume_max_age_hours: int = Field(default=24, ge=1, le=168)
+
+    skillup_intelligence_base_url: str = "https://api.skillsintelligence.imocha.io"
+    skillup_reports_base_url: str = "https://apiv3.imocha.io"
+    skillup_api_key: SecretStr = Field(default=SecretStr(""))
+    skillup_page_size: int = Field(default=100, ge=1, le=100)
 
     http_max_retries: int = Field(default=3, ge=0, le=10)
     http_connect_timeout_seconds: float = Field(default=10, gt=0)
@@ -83,6 +86,27 @@ class Settings(BaseSettings):
             if secret
         )
 
+    @property
+    def levelup_configured(self) -> bool:
+        return bool(
+            self.levelup_base_url
+            and self.levelup_username.get_secret_value()
+            and self.levelup_password.get_secret_value()
+            and self.levelup_api_key.get_secret_value()
+        )
+
+    @property
+    def skillup_configured(self) -> bool:
+        return bool(
+            self.skillup_intelligence_base_url
+            and self.skillup_reports_base_url
+            and self.skillup_api_key.get_secret_value()
+        )
+
+    def skillup_secrets(self) -> tuple[str, ...]:
+        api_key = self.skillup_api_key.get_secret_value()
+        return (api_key,) if api_key else ()
+
     def validate_levelup_runtime(self) -> None:
         missing = []
         if not self.levelup_base_url:
@@ -95,6 +119,17 @@ class Settings(BaseSettings):
             missing.append("LEVELUP_API_KEY")
         if missing:
             raise ValueError(f"Missing LevelUP configuration: {', '.join(missing)}")
+
+    def validate_skillup_runtime(self) -> None:
+        missing = []
+        if not self.skillup_intelligence_base_url:
+            missing.append("SKILLUP_INTELLIGENCE_BASE_URL")
+        if not self.skillup_reports_base_url:
+            missing.append("SKILLUP_REPORTS_BASE_URL")
+        if not self.skillup_api_key.get_secret_value():
+            missing.append("SKILLUP_API_KEY")
+        if missing:
+            raise ValueError(f"Missing SkillUp configuration: {', '.join(missing)}")
 
 
 @lru_cache

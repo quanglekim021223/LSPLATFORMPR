@@ -11,7 +11,6 @@ import pytest
 
 from app.handlers.levelup_handler import run_levelup_ingestion
 from app.models import RunStatus
-from app.repositories.checkpoint_repository import CheckpointStore
 from tests.conftest import no_sleep, response
 
 
@@ -215,9 +214,6 @@ async def test_one_course_failure_does_not_stop_other_courses(
     assert summary.courses_succeeded == 1
     assert summary.courses_failed == 1
     assert sorted(called) == ["/courses/bad/enrollments", "/courses/good/enrollments"]
-    store = CheckpointStore(settings.checkpoint_db_path)  # type: ignore[attr-defined]
-    await store.initialize()
-    assert await store.find_resumable_run("levelup", 60) is None
 
 
 @pytest.mark.asyncio
@@ -241,11 +237,10 @@ async def test_request_failure_does_not_create_raw_page(
 
 
 @pytest.mark.asyncio
-async def test_resume_uses_checkpoint_without_refetching_catalog(
+async def test_next_ingestion_starts_new_run_after_failure(
     settings_factory: Callable[..., object]
 ) -> None:
     settings = settings_factory()
-    run_id = "11111111-1111-4111-8111-111111111111"
     first_calls: Counter[str] = Counter()
 
     def first_handler(request: httpx.Request) -> httpx.Response:
@@ -273,7 +268,6 @@ async def test_resume_uses_checkpoint_without_refetching_catalog(
 
     first = await run_levelup_ingestion(
         settings,  # type: ignore[arg-type]
-        run_id=run_id,
         transport=httpx.MockTransport(first_handler),
         sleep=no_sleep,
     )
@@ -281,15 +275,19 @@ async def test_resume_uses_checkpoint_without_refetching_catalog(
     assert first.enrollment_records == 2
 
     second_calls: Counter[str] = Counter()
-    resumed_offsets: list[int] = []
+    second_offsets: list[int] = []
 
     def second_handler(request: httpx.Request) -> httpx.Response:
         second_calls[request.url.path] += 1
         if request.url.path == "/authenticate":
             return response(request, 200, "token-2")
         if request.url.path == "/courses":
-            raise AssertionError("catalog must not be fetched during resume")
-        resumed_offsets.append(int(request.url.params["_offset"]))
+            return response(
+                request,
+                200,
+                {"totalItems": 1, "returnedItems": 1, "courses": [{"id": "c1"}]},
+            )
+        second_offsets.append(int(request.url.params["_offset"]))
         return response(
             request,
             200,
@@ -306,10 +304,10 @@ async def test_resume_uses_checkpoint_without_refetching_catalog(
         sleep=no_sleep,
     )
     assert second.status == RunStatus.SUCCEEDED
-    assert second.run_id == run_id
+    assert second.run_id != first.run_id
     assert second.course_catalog_records == 1
     assert second.enrollment_records == 4
     assert second.courses_succeeded == 1
     assert second.courses_failed == 0
-    assert resumed_offsets == [2]
-    assert second_calls["/courses"] == 0
+    assert second_offsets == [0, 2]
+    assert second_calls["/courses"] == 1

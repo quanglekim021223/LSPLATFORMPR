@@ -7,8 +7,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.config import Settings, get_settings
-from app.config.scheduler import build_scheduler
+from app.config.scheduler import ScheduledJob, build_scheduler
 from app.handlers.levelup_handler import run_levelup_ingestion
+from app.handlers.skillup_handler import run_skillup_ingestion
 from app.repositories.checkpoint_repository import CheckpointStore
 from app.routers.health_router import build_health_router
 from app.routers.job_router import build_job_router
@@ -32,19 +33,35 @@ def create_app(
         await store.initialize()
         scheduler = None
         if config.scheduler_may_run:
-            config.validate_levelup_runtime()
+            jobs: dict[str, ScheduledJob] = {}
 
-            async def scheduled_ingestion() -> object:
-                return await run_levelup_ingestion(
-                    config,
-                    checkpoint_store=store,
-                    bronze_writer=writer,
-                )
+            if config.levelup_configured:
+                async def scheduled_levelup_ingestion() -> object:
+                    return await run_levelup_ingestion(
+                        config,
+                        checkpoint_store=store,
+                        bronze_writer=writer,
+                    )
 
-            scheduler = build_scheduler(config, scheduled_ingestion)
+                jobs["levelup"] = scheduled_levelup_ingestion
+
+            if config.skillup_configured:
+                async def scheduled_skillup_ingestion() -> object:
+                    return await run_skillup_ingestion(
+                        config,
+                        checkpoint_store=store,
+                        bronze_writer=writer,
+                    )
+
+                jobs["skillup"] = scheduled_skillup_ingestion
+
+            if not jobs:
+                raise ValueError("Scheduler enabled but no vendor is fully configured")
+            scheduler = build_scheduler(config, jobs)
             scheduler.start()
             logger.info(
-                "LevelUP scheduler started schedule=%s timezone=%s",
+                "Vendor scheduler started vendors=%s schedule=%s timezone=%s",
+                ",".join(jobs),
                 config.ingestion_time,
                 config.ingestion_timezone,
             )

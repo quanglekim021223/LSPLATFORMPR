@@ -26,9 +26,11 @@ async def test_health_ready_latest_and_scheduler_disabled_in_test(
             health = await client.get("/health")
             ready = await client.get("/ready")
             missing = await client.get("/jobs/levelup/latest")
+            missing_skillup = await client.get("/jobs/skillup/latest")
             assert health.json() == {"status": "ok"}
             assert ready.json() == {"status": "ready"}
             assert missing.status_code == 404
+            assert missing_skillup.status_code == 404
 
             run_id = "11111111-1111-4111-8111-111111111111"
             await store.start_run(run_id, "levelup")
@@ -43,3 +45,18 @@ async def test_health_ready_latest_and_scheduler_disabled_in_test(
             assert latest.json()["status"] == "succeeded"
             assert latest.json()["course_catalog_records"] == 2
             assert "token" not in latest.text.casefold()
+
+            skillup_run_id = "22222222-2222-4222-8222-222222222222"
+            await store.start_run(skillup_run_id, "skillup")
+            await store.record_completed_page(
+                skillup_run_id, "skill_taxonomy", 1, 3
+            )
+            await store.finish_run(skillup_run_id, RunStatus.SUCCEEDED)
+
+            latest_skillup = await client.get("/jobs/skillup/latest")
+            assert latest_skillup.status_code == 200
+            assert latest_skillup.json()["run_id"] == skillup_run_id
+            assert latest_skillup.json()["vendor"] == "skillup"
+            assert latest_skillup.json()["records_by_domain"] == {
+                "skill_taxonomy": 3
+            }

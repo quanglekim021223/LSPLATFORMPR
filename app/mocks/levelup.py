@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import FastAPI, Header, HTTPException, Query, status
+from fastapi import APIRouter, Header, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
-app = FastAPI(title="Mock LevelUP API")
+router = APIRouter(tags=["LevelUP"])
 
 _API_KEY = "mock-private-key"
 _TOKEN = "mock-token"
@@ -52,7 +52,7 @@ def _validate_token(
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid mock token")
 
 
-@app.post("/authenticate")
+@router.post("/authenticate")
 async def authenticate(
     credentials: AuthenticationRequest,
     api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,
@@ -68,7 +68,7 @@ async def authenticate(
     return _TOKEN
 
 
-@app.get("/courses")
+@router.get("/courses")
 async def courses(
     limit: Annotated[int, Query(alias="_limit", ge=1)] = 1000,
     offset: Annotated[int, Query(alias="_offset", ge=0)] = 0,
@@ -85,7 +85,7 @@ async def courses(
     }
 
 
-@app.get("/courses/{course_id}/enrollments")
+@router.get("/courses/{course_id}/enrollments")
 async def enrollments(
     course_id: str,
     limit: Annotated[int, Query(alias="_limit", ge=1)] = 1000,

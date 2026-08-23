@@ -13,10 +13,13 @@ def test_scheduler_defaults_to_single_daily_0500_job(
     async def job() -> object:
         return None
 
-    scheduler = build_scheduler(settings, job)  # type: ignore[arg-type]
-    scheduled_job = scheduler.get_job("levelup-daily-ingestion")
-    assert scheduled_job is not None
-    assert scheduled_job.max_instances == 1
-    assert scheduled_job.coalesce is True
-    assert "hour='5'" in str(scheduled_job.trigger)
-    assert "minute='0'" in str(scheduled_job.trigger)
+    scheduler = build_scheduler(
+        settings, {"levelup": job, "skillup": job}  # type: ignore[arg-type]
+    )
+    for vendor in ("levelup", "skillup"):
+        scheduled_job = scheduler.get_job(f"{vendor}-daily-ingestion")
+        assert scheduled_job is not None
+        assert scheduled_job.max_instances == 1
+        assert scheduled_job.coalesce is True
+        assert "hour='5'" in str(scheduled_job.trigger)
+        assert "minute='0'" in str(scheduled_job.trigger)

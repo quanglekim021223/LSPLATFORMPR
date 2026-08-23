@@ -41,9 +41,7 @@ class CheckpointStore:
                     started_at TEXT NOT NULL,
                     finished_at TEXT,
                     error_message TEXT,
-                    catalog_completed INTEGER NOT NULL DEFAULT 0,
-                    resume_eligible INTEGER NOT NULL DEFAULT 1,
-                    resume_attempts INTEGER NOT NULL DEFAULT 0
+                    catalog_completed INTEGER NOT NULL DEFAULT 0
                 );
                 CREATE TABLE IF NOT EXISTS checkpoints (
                     run_id TEXT NOT NULL,
@@ -65,6 +63,13 @@ class CheckpointStore:
                     error_message TEXT,
                     PRIMARY KEY (run_id, course_id)
                 );
+                CREATE TABLE IF NOT EXISTS run_domains (
+                    run_id TEXT NOT NULL,
+                    data_domain TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    error_message TEXT,
+                    PRIMARY KEY (run_id, data_domain)
+                );
                 CREATE TABLE IF NOT EXISTS vendor_locks (
                     vendor TEXT PRIMARY KEY,
                     run_id TEXT NOT NULL,
@@ -81,18 +86,6 @@ class CheckpointStore:
             }
             if "heartbeat_at" not in lock_columns:
                 connection.execute("ALTER TABLE vendor_locks ADD COLUMN heartbeat_at TEXT")
-            run_columns = {
-                str(row["name"])
-                for row in connection.execute("PRAGMA table_info(runs)")
-            }
-            if "resume_eligible" not in run_columns:
-                connection.execute(
-                    "ALTER TABLE runs ADD COLUMN resume_eligible INTEGER NOT NULL DEFAULT 1"
-                )
-            if "resume_attempts" not in run_columns:
-                connection.execute(
-                    "ALTER TABLE runs ADD COLUMN resume_attempts INTEGER NOT NULL DEFAULT 0"
-                )
             connection.execute(
                 """
                 UPDATE vendor_locks SET heartbeat_at = acquired_at
@@ -140,7 +133,7 @@ class CheckpointStore:
                 connection.execute(
                     """
                     UPDATE runs
-                    SET status = ?, finished_at = ?, error_message = ?, resume_eligible = 1
+                    SET status = ?, finished_at = ?, error_message = ?
                     WHERE run_id = ? AND status = ?
                     """,
                     (
@@ -184,67 +177,6 @@ class CheckpointStore:
                 "DELETE FROM vendor_locks WHERE vendor = ? AND run_id = ?", (vendor, run_id)
             )
 
-    async def find_resumable_run(
-        self,
-        vendor: str,
-        lock_ttl_seconds: int,
-        max_resume_attempts: int = 2,
-        resume_max_age_hours: int = 24,
-    ) -> str | None:
-        return await asyncio.to_thread(
-            self._find_resumable_run,
-            vendor,
-            lock_ttl_seconds,
-            max_resume_attempts,
-            resume_max_age_hours,
-        )
-
-    def _find_resumable_run(
-        self,
-        vendor: str,
-        lock_ttl_seconds: int,
-        max_resume_attempts: int,
-        resume_max_age_hours: int,
-    ) -> str | None:
-        stale_before = (datetime.now(UTC) - timedelta(seconds=lock_ttl_seconds)).isoformat()
-        resume_after = (datetime.now(UTC) - timedelta(hours=resume_max_age_hours)).isoformat()
-        with self._connect() as connection:
-            row = connection.execute(
-                """
-                SELECT runs.run_id
-                FROM runs
-                LEFT JOIN vendor_locks
-                  ON vendor_locks.vendor = runs.vendor
-                 AND vendor_locks.run_id = runs.run_id
-                WHERE runs.vendor = ?
-                  AND runs.resume_eligible = 1
-                  AND runs.resume_attempts < ?
-                  AND runs.started_at >= ?
-                  AND (
-                    runs.status IN (?, ?)
-                    OR (
-                      runs.status = ?
-                      AND (
-                        vendor_locks.run_id IS NULL
-                        OR COALESCE(vendor_locks.heartbeat_at, vendor_locks.acquired_at) < ?
-                      )
-                    )
-                  )
-                ORDER BY runs.started_at DESC
-                LIMIT 1
-                """,
-                (
-                    vendor,
-                    max_resume_attempts,
-                    resume_after,
-                    RunStatus.FAILED.value,
-                    RunStatus.PARTIAL_FAILURE.value,
-                    RunStatus.RUNNING.value,
-                    stale_before,
-                ),
-            ).fetchone()
-            return str(row["run_id"]) if row else None
-
     async def purge_old_runs(self, vendor: str, retention_days: int) -> int:
         return await asyncio.to_thread(self._purge_old_runs, vendor, retention_days)
 
@@ -257,39 +189,26 @@ class CheckpointStore:
         )
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            resumable = connection.execute(
-                """
-                SELECT run_id FROM runs
-                WHERE vendor = ? AND status IN (?, ?) AND resume_eligible = 1
-                ORDER BY started_at DESC LIMIT 1
-                """,
-                (
-                    vendor,
-                    RunStatus.FAILED.value,
-                    RunStatus.PARTIAL_FAILURE.value,
-                ),
-            ).fetchone()
-            resumable_run_id = str(resumable["run_id"]) if resumable else ""
             rows = connection.execute(
                 """
                 SELECT run_id FROM runs
                 WHERE vendor = ?
                   AND status IN (?, ?, ?)
                   AND finished_at < ?
-                  AND run_id != ?
                   AND NOT EXISTS (
                     SELECT 1 FROM vendor_locks
                     WHERE vendor_locks.vendor = runs.vendor
                       AND vendor_locks.run_id = runs.run_id
                   )
                 """,
-                (vendor, *terminal_statuses, cutoff, resumable_run_id),
+                (vendor, *terminal_statuses, cutoff),
             ).fetchall()
             run_ids = [(str(row["run_id"]),) for row in rows]
             if not run_ids:
                 return 0
             connection.executemany("DELETE FROM checkpoints WHERE run_id = ?", run_ids)
             connection.executemany("DELETE FROM run_courses WHERE run_id = ?", run_ids)
+            connection.executemany("DELETE FROM run_domains WHERE run_id = ?", run_ids)
             connection.executemany("DELETE FROM runs WHERE run_id = ?", run_ids)
             return len(run_ids)
 
@@ -303,12 +222,6 @@ class CheckpointStore:
                 """
                 INSERT INTO runs(run_id, vendor, status, started_at)
                 VALUES (?, ?, ?, ?)
-                ON CONFLICT(run_id) DO UPDATE SET
-                    status = excluded.status,
-                    finished_at = NULL,
-                    error_message = NULL,
-                    resume_eligible = 1,
-                    resume_attempts = runs.resume_attempts + 1
                 """,
                 (run_id, vendor, RunStatus.RUNNING.value, now),
             )
@@ -318,12 +231,8 @@ class CheckpointStore:
         run_id: str,
         status: RunStatus,
         error_message: str | None = None,
-        *,
-        resume_eligible: bool = False,
     ) -> RunSummary:
-        await asyncio.to_thread(
-            self._finish_run, run_id, status, error_message, resume_eligible
-        )
+        await asyncio.to_thread(self._finish_run, run_id, status, error_message)
         summary = await self.get_run(run_id)
         if summary is None:
             raise RuntimeError(f"Run {run_id} was not persisted")
@@ -334,16 +243,15 @@ class CheckpointStore:
         run_id: str,
         status: RunStatus,
         error_message: str | None,
-        resume_eligible: bool,
     ) -> None:
         with self._connect() as connection:
             connection.execute(
                 """
                 UPDATE runs
-                SET status = ?, finished_at = ?, error_message = ?, resume_eligible = ?
+                SET status = ?, finished_at = ?, error_message = ?
                 WHERE run_id = ?
                 """,
-                (status.value, _now(), error_message, int(resume_eligible), run_id),
+                (status.value, _now(), error_message, run_id),
             )
 
     async def get_run(self, run_id: str) -> RunSummary | None:
@@ -405,6 +313,7 @@ class CheckpointStore:
                 course_totals.get(status, 0)
                 for status in ("failed", "retryable_failed", "terminal_failed")
             ),
+            records_by_domain=checkpoint_totals,
             error_message=row["error_message"],
         )
 
@@ -440,14 +349,15 @@ class CheckpointStore:
                 INSERT INTO checkpoints(
                     run_id, vendor, data_domain, course_id, offset, status,
                     started_at, finished_at, records_count
-                ) VALUES (?, 'levelup', ?, ?, ?, 'completed', ?, ?, ?)
+                ) VALUES (?, (SELECT vendor FROM runs WHERE run_id = ?),
+                          ?, ?, ?, 'completed', ?, ?, ?)
                 ON CONFLICT(run_id, data_domain, course_id, offset) DO UPDATE SET
                     status = 'completed',
                     finished_at = excluded.finished_at,
                     records_count = excluded.records_count,
                     error_message = NULL
                 """,
-                (run_id, data_domain, course_id, offset, now, now, records_count),
+                (run_id, run_id, data_domain, course_id, offset, now, now, records_count),
             )
 
     async def record_failed_page(
@@ -487,14 +397,25 @@ class CheckpointStore:
                 INSERT INTO checkpoints(
                     run_id, vendor, data_domain, course_id, offset, status,
                     started_at, finished_at, records_count, error_message
-                ) VALUES (?, 'levelup', ?, ?, ?, ?, ?, ?, 0, ?)
+                ) VALUES (?, (SELECT vendor FROM runs WHERE run_id = ?),
+                          ?, ?, ?, ?, ?, ?, 0, ?)
                 ON CONFLICT(run_id, data_domain, course_id, offset) DO UPDATE SET
                     status = excluded.status,
                     finished_at = excluded.finished_at,
                     records_count = 0,
                     error_message = excluded.error_message
                 """,
-                (run_id, data_domain, course_id, offset, status, now, now, error_message),
+                (
+                    run_id,
+                    run_id,
+                    data_domain,
+                    course_id,
+                    offset,
+                    status,
+                    now,
+                    now,
+                    error_message,
+                ),
             )
 
     async def next_offset(
@@ -516,6 +437,92 @@ class CheckpointStore:
                 (run_id, data_domain, course_id),
             ).fetchone()
             return 0 if row["max_offset"] is None else int(row["max_offset"]) + page_size
+
+    async def next_page_number(self, run_id: str, data_domain: str) -> int:
+        return await asyncio.to_thread(self._next_page_number, run_id, data_domain)
+
+    def _next_page_number(self, run_id: str, data_domain: str) -> int:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT MAX(offset) AS max_page FROM checkpoints
+                WHERE run_id = ? AND data_domain = ? AND course_id = ''
+                  AND status = 'completed'
+                """,
+                (run_id, data_domain),
+            ).fetchone()
+            return 1 if row["max_page"] is None else int(row["max_page"]) + 1
+
+    async def add_domains(self, run_id: str, data_domains: list[str]) -> None:
+        if data_domains:
+            await asyncio.to_thread(self._add_domains, run_id, data_domains)
+
+    def _add_domains(self, run_id: str, data_domains: list[str]) -> None:
+        with self._connect() as connection:
+            connection.executemany(
+                "INSERT OR IGNORE INTO run_domains(run_id, data_domain) VALUES (?, ?)",
+                ((run_id, data_domain) for data_domain in data_domains),
+            )
+
+    async def domains_to_process(self, run_id: str) -> list[str]:
+        return await asyncio.to_thread(self._domains_to_process, run_id)
+
+    def _domains_to_process(self, run_id: str) -> list[str]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT data_domain FROM run_domains
+                WHERE run_id = ? AND status IN ('pending', 'failed', 'retryable_failed')
+                ORDER BY data_domain
+                """,
+                (run_id,),
+            ).fetchall()
+            return [str(row["data_domain"]) for row in rows]
+
+    async def mark_domain(
+        self,
+        run_id: str,
+        data_domain: str,
+        status: str,
+        error_message: str | None = None,
+    ) -> None:
+        await asyncio.to_thread(
+            self._mark_domain, run_id, data_domain, status, error_message
+        )
+
+    def _mark_domain(
+        self,
+        run_id: str,
+        data_domain: str,
+        status: str,
+        error_message: str | None,
+    ) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO run_domains(run_id, data_domain, status, error_message)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(run_id, data_domain) DO UPDATE SET
+                    status = excluded.status,
+                    error_message = excluded.error_message
+                """,
+                (run_id, data_domain, status, error_message),
+            )
+
+    async def has_terminal_domain_failures(self, run_id: str) -> bool:
+        return await asyncio.to_thread(self._has_terminal_domain_failures, run_id)
+
+    def _has_terminal_domain_failures(self, run_id: str) -> bool:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT 1 FROM run_domains
+                WHERE run_id = ? AND status = 'terminal_failed'
+                LIMIT 1
+                """,
+                (run_id,),
+            ).fetchone()
+            return bool(row)
 
     async def add_courses(self, run_id: str, course_ids: list[str]) -> None:
         if course_ids:
