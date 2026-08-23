@@ -53,6 +53,16 @@ class Settings(BaseSettings):
     coursera_max_concurrency: int = Field(default=5, ge=1, le=5)
     coursera_lock_ttl_seconds: int = Field(default=3600, ge=30)
 
+    linkedin_token_url: str = ""
+    linkedin_base_url: str = ""
+    linkedin_client_id: SecretStr = Field(default=SecretStr(""))
+    linkedin_client_secret: SecretStr = Field(default=SecretStr(""))
+    linkedin_page_size: int = Field(default=100, ge=1, le=100)
+    linkedin_history_start_time: str = ""
+    linkedin_max_concurrency: int = Field(default=5, ge=1, le=5)
+    linkedin_asset_detail_query_template: str = ""
+    linkedin_lock_ttl_seconds: int = Field(default=3600, ge=30)
+
     http_max_retries: int = Field(default=3, ge=0, le=10)
     http_connect_timeout_seconds: float = Field(default=10, gt=0)
     http_read_timeout_seconds: float = Field(default=60, gt=0)
@@ -144,6 +154,20 @@ class Settings(BaseSettings):
             if secret
         )
 
+    @property
+    def linkedin_configured(self) -> bool:
+        return not self._missing_linkedin_configuration()
+
+    def linkedin_secrets(self) -> tuple[str, ...]:
+        return tuple(
+            secret
+            for secret in (
+                self.linkedin_client_id.get_secret_value(),
+                self.linkedin_client_secret.get_secret_value(),
+            )
+            if secret
+        )
+
     def validate_levelup_runtime(self) -> None:
         missing = []
         if not self.levelup_base_url:
@@ -191,6 +215,24 @@ class Settings(BaseSettings):
             "COURSERA_ORG_ID": self.coursera_org_id,
             "COURSERA_CONTENT_DETAIL_PATH_TEMPLATE": (
                 self.coursera_content_detail_path_template
+            ),
+        }
+        return [name for name, value in values.items() if not value]
+
+    def validate_linkedin_runtime(self) -> None:
+        missing = self._missing_linkedin_configuration()
+        if missing:
+            raise ValueError(f"Missing LinkedIn configuration: {', '.join(missing)}")
+
+    def _missing_linkedin_configuration(self) -> list[str]:
+        values = {
+            "LINKEDIN_TOKEN_URL": self.linkedin_token_url,
+            "LINKEDIN_BASE_URL": self.linkedin_base_url,
+            "LINKEDIN_CLIENT_ID": self.linkedin_client_id.get_secret_value(),
+            "LINKEDIN_CLIENT_SECRET": self.linkedin_client_secret.get_secret_value(),
+            "LINKEDIN_HISTORY_START_TIME": self.linkedin_history_start_time,
+            "LINKEDIN_ASSET_DETAIL_QUERY_TEMPLATE": (
+                self.linkedin_asset_detail_query_template
             ),
         }
         return [name for name, value in values.items() if not value]

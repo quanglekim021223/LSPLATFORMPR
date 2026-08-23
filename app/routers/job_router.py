@@ -49,4 +49,14 @@ def build_job_router(checkpoints: CheckpointStore) -> APIRouter:
             )
         return summary
 
+    @router.get("/jobs/linkedin/latest", response_model=RunSummary)
+    async def latest_linkedin_job() -> RunSummary:
+        summary = await checkpoints.latest_run("linkedin")
+        if summary is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No LinkedIn run found",
+            )
+        return summary
+
     return router

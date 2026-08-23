@@ -42,6 +42,16 @@ def settings_factory(tmp_path: Path) -> Callable[..., Settings]:
             ),
             "coursera_page_size": 2,
             "coursera_max_concurrency": 2,
+            "linkedin_token_url": "https://linkedin.test/oauth/v2/accessToken",
+            "linkedin_base_url": "https://linkedin.test/v2",
+            "linkedin_client_id": "test-linkedin-client",
+            "linkedin_client_secret": "test-linkedin-secret",
+            "linkedin_page_size": 2,
+            "linkedin_history_start_time": "2026-08-01T00:00:00Z",
+            "linkedin_max_concurrency": 2,
+            "linkedin_asset_detail_query_template": (
+                "q=criteria&assetFilteringCriteria.urn={urn}"
+            ),
             "http_max_retries": 0,
             "bronze_local_path": tmp_path / "bronze",
             "checkpoint_db_path": tmp_path / "state" / "ingestion.db",

@@ -11,6 +11,7 @@ from app.config.scheduler import ScheduledJob, build_scheduler
 from app.handlers.coursera_handler import run_coursera_ingestion
 from app.handlers.datacamp_handler import run_datacamp_ingestion
 from app.handlers.levelup_handler import run_levelup_ingestion
+from app.handlers.linkedin_handler import run_linkedin_ingestion
 from app.handlers.skillup_handler import run_skillup_ingestion
 from app.repositories.checkpoint_repository import CheckpointStore
 from app.routers.health_router import build_health_router
@@ -76,6 +77,16 @@ def create_app(
                     )
 
                 jobs["coursera"] = scheduled_coursera_ingestion
+
+            if config.linkedin_configured:
+                async def scheduled_linkedin_ingestion() -> object:
+                    return await run_linkedin_ingestion(
+                        config,
+                        checkpoint_store=store,
+                        bronze_writer=writer,
+                    )
+
+                jobs["linkedin"] = scheduled_linkedin_ingestion
 
             if not jobs:
                 raise ValueError("Scheduler enabled but no vendor is fully configured")

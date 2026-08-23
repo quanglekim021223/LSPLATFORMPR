@@ -29,12 +29,14 @@ async def test_health_ready_latest_and_scheduler_disabled_in_test(
             missing_skillup = await client.get("/jobs/skillup/latest")
             missing_datacamp = await client.get("/jobs/datacamp/latest")
             missing_coursera = await client.get("/jobs/coursera/latest")
+            missing_linkedin = await client.get("/jobs/linkedin/latest")
             assert health.json() == {"status": "ok"}
             assert ready.json() == {"status": "ready"}
             assert missing.status_code == 404
             assert missing_skillup.status_code == 404
             assert missing_datacamp.status_code == 404
             assert missing_coursera.status_code == 404
+            assert missing_linkedin.status_code == 404
 
             run_id = "11111111-1111-4111-8111-111111111111"
             await store.start_run(run_id, "levelup")
@@ -93,4 +95,19 @@ async def test_health_ready_latest_and_scheduler_disabled_in_test(
             assert latest_coursera.json()["vendor"] == "coursera"
             assert latest_coursera.json()["records_by_domain"] == {
                 "course_catalog": 5
+            }
+
+            linkedin_run_id = "55555555-5555-4555-8555-555555555555"
+            await store.start_run(linkedin_run_id, "linkedin")
+            await store.record_completed_page(
+                linkedin_run_id, "learning_history", 1, 6
+            )
+            await store.finish_run(linkedin_run_id, RunStatus.SUCCEEDED)
+
+            latest_linkedin = await client.get("/jobs/linkedin/latest")
+            assert latest_linkedin.status_code == 200
+            assert latest_linkedin.json()["run_id"] == linkedin_run_id
+            assert latest_linkedin.json()["vendor"] == "linkedin"
+            assert latest_linkedin.json()["records_by_domain"] == {
+                "learning_history": 6
             }
