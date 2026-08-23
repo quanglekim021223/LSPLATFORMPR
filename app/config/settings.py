@@ -43,6 +43,16 @@ class Settings(BaseSettings):
     datacamp_token: SecretStr = Field(default=SecretStr(""))
     datacamp_events_page_size: int = Field(default=1000, ge=1, le=1000)
 
+    coursera_token_url: str = ""
+    coursera_base_url: str = ""
+    coursera_username: SecretStr = Field(default=SecretStr(""))
+    coursera_password: SecretStr = Field(default=SecretStr(""))
+    coursera_org_id: str = ""
+    coursera_content_detail_path_template: str = ""
+    coursera_page_size: int = Field(default=100, ge=1, le=1000)
+    coursera_max_concurrency: int = Field(default=5, ge=1, le=5)
+    coursera_lock_ttl_seconds: int = Field(default=3600, ge=30)
+
     http_max_retries: int = Field(default=3, ge=0, le=10)
     http_connect_timeout_seconds: float = Field(default=10, gt=0)
     http_read_timeout_seconds: float = Field(default=60, gt=0)
@@ -120,6 +130,20 @@ class Settings(BaseSettings):
         token = self.datacamp_token.get_secret_value()
         return (token,) if token else ()
 
+    @property
+    def coursera_configured(self) -> bool:
+        return not self._missing_coursera_configuration()
+
+    def coursera_secrets(self) -> tuple[str, ...]:
+        return tuple(
+            secret
+            for secret in (
+                self.coursera_username.get_secret_value(),
+                self.coursera_password.get_secret_value(),
+            )
+            if secret
+        )
+
     def validate_levelup_runtime(self) -> None:
         missing = []
         if not self.levelup_base_url:
@@ -152,6 +176,24 @@ class Settings(BaseSettings):
             missing.append("DATACAMP_TOKEN")
         if missing:
             raise ValueError(f"Missing DataCamp configuration: {', '.join(missing)}")
+
+    def validate_coursera_runtime(self) -> None:
+        missing = self._missing_coursera_configuration()
+        if missing:
+            raise ValueError(f"Missing Coursera configuration: {', '.join(missing)}")
+
+    def _missing_coursera_configuration(self) -> list[str]:
+        values = {
+            "COURSERA_TOKEN_URL": self.coursera_token_url,
+            "COURSERA_BASE_URL": self.coursera_base_url,
+            "COURSERA_USERNAME": self.coursera_username.get_secret_value(),
+            "COURSERA_PASSWORD": self.coursera_password.get_secret_value(),
+            "COURSERA_ORG_ID": self.coursera_org_id,
+            "COURSERA_CONTENT_DETAIL_PATH_TEMPLATE": (
+                self.coursera_content_detail_path_template
+            ),
+        }
+        return [name for name, value in values.items() if not value]
 
 
 @lru_cache

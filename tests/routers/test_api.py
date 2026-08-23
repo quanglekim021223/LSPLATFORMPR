@@ -28,11 +28,13 @@ async def test_health_ready_latest_and_scheduler_disabled_in_test(
             missing = await client.get("/jobs/levelup/latest")
             missing_skillup = await client.get("/jobs/skillup/latest")
             missing_datacamp = await client.get("/jobs/datacamp/latest")
+            missing_coursera = await client.get("/jobs/coursera/latest")
             assert health.json() == {"status": "ok"}
             assert ready.json() == {"status": "ready"}
             assert missing.status_code == 404
             assert missing_skillup.status_code == 404
             assert missing_datacamp.status_code == 404
+            assert missing_coursera.status_code == 404
 
             run_id = "11111111-1111-4111-8111-111111111111"
             await store.start_run(run_id, "levelup")
@@ -76,4 +78,19 @@ async def test_health_ready_latest_and_scheduler_disabled_in_test(
             assert latest_datacamp.json()["vendor"] == "datacamp"
             assert latest_datacamp.json()["records_by_domain"] == {
                 "learning_history": 4
+            }
+
+            coursera_run_id = "44444444-4444-4444-8444-444444444444"
+            await store.start_run(coursera_run_id, "coursera")
+            await store.record_completed_page(
+                coursera_run_id, "course_catalog", 0, 5
+            )
+            await store.finish_run(coursera_run_id, RunStatus.SUCCEEDED)
+
+            latest_coursera = await client.get("/jobs/coursera/latest")
+            assert latest_coursera.status_code == 200
+            assert latest_coursera.json()["run_id"] == coursera_run_id
+            assert latest_coursera.json()["vendor"] == "coursera"
+            assert latest_coursera.json()["records_by_domain"] == {
+                "course_catalog": 5
             }

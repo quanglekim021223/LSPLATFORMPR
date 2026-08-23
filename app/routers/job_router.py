@@ -39,4 +39,14 @@ def build_job_router(checkpoints: CheckpointStore) -> APIRouter:
             )
         return summary
 
+    @router.get("/jobs/coursera/latest", response_model=RunSummary)
+    async def latest_coursera_job() -> RunSummary:
+        summary = await checkpoints.latest_run("coursera")
+        if summary is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No Coursera run found",
+            )
+        return summary
+
     return router

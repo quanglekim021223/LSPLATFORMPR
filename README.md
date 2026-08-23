@@ -1,7 +1,7 @@
 # FSA Learning Vendor Ingestion
 
 FastAPI service for scheduled ingestion of learning-vendor data into a raw Bronze layer. It
-supports LevelUP (Absorb), SkillUp (iMocha), and DataCamp ingestion domains.
+supports LevelUP (Absorb), SkillUp (iMocha), DataCamp, and Coursera ingestion domains.
 
 ## Runtime flow
 
@@ -12,29 +12,34 @@ FastAPI lifespan / APScheduler (05:00 Asia/Ho_Chi_Minh)
 │  ├→ GET /courses page-by-page
 │  └→ GET /courses/{courseId}/enrollments (bounded concurrency)
 ├→ run_skillup_ingestion (three independent concurrent domains)
-   ├→ GET /taxonomy
-   ├→ GET /employees/skills-profile
-   └→ GET /v3/reports
-└→ run_datacamp_ingestion (three independent concurrent domains)
+│  ├→ GET /taxonomy
+│  ├→ GET /employees/skills-profile
+│  └→ GET /v3/reports
+├→ run_datacamp_ingestion (three independent concurrent domains)
    ├→ GET /v1/catalog/live-courses once
    ├→ GET /v1/catalog/archived-courses once
    └→ GET /v1/events page-by-page
+└→ run_coursera_ingestion
+   ├→ POST configured token URL once
+   ├→ GET /{org_id}/contents → configured Course Detail path (bounded concurrency)
+   └→ GET /{org_id}/enrollmentReports in parallel with the catalog pipeline
 → LocalBronzeWriter + SQLite run summary
 ```
 
 There is no public manual-trigger endpoint. `GET /health`, `GET /ready`, and
-`GET /jobs/levelup/latest`, `GET /jobs/skillup/latest`, and `GET /jobs/datacamp/latest` expose
-operational state without credentials or raw personal data.
+`GET /jobs/levelup/latest`, `GET /jobs/skillup/latest`, `GET /jobs/datacamp/latest`, and
+`GET /jobs/coursera/latest` expose operational state without credentials or raw personal data.
 
 ## Code layout
 
 ```text
 app/main.py                  application composition and lifespan
 app/routers/                 health, readiness, and job-status APIs
-app/handlers/                LevelUP, SkillUp, and DataCamp run orchestration
+app/handlers/                per-vendor run orchestration
 app/vendors/levelup/         LevelUP authentication, catalog, and learning history
 app/vendors/skillup/         iMocha client and three SkillUp data domains
 app/vendors/datacamp/        DataCamp client, catalogs, and event history
+app/vendors/coursera/        Coursera OAuth, catalog/detail, and learning history
 app/helpers/                 shared HTTP retry and secret sanitization
 app/config/                  settings and APScheduler configuration
 app/repositories/            SQLite checkpoint history and vendor lock
@@ -44,6 +49,7 @@ app/mocks/app.py             single local mock hub entrypoint for every vendor
 app/mocks/levelup.py         LevelUP mock routes and data
 app/mocks/skillup.py         SkillUp mock routes and data
 app/mocks/datacamp.py        DataCamp mock routes and data
+app/mocks/coursera.py        Coursera mock routes and data
 ```
 
 ## Local setup
@@ -78,6 +84,14 @@ request. Live and archived catalogs are fetched once per run because their pagin
 not confirmed. Events use `DATACAMP_EVENTS_PAGE_SIZE` (maximum 1000) and continue until the current
 page reaches `meta.numberOfPages`.
 
+Coursera exchanges HTTP Basic credentials for one run-scoped access token at
+`COURSERA_TOKEN_URL`, then sends `Authorization: Bearer <token>`. A `401` refreshes the token and
+retries that request exactly once. Course List and Learning History use `start`/`limit` and
+`paging.next`. Course Detail has no URL embedded in code: an administrator must supply
+`COURSERA_CONTENT_DETAIL_PATH_TEMPLATE`, using only `{org_id}` and `{content_id}` placeholders.
+For the local mock this is `/{org_id}/contents/{content_id}/detail`; production must use the exact
+path from the organization's Coursera contract/Postman configuration.
+
 Run checks with:
 
 ```bash
@@ -101,8 +115,8 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 
 For a quick scheduler test, set `INGESTION_TIME` in `.env` to a future minute in
 `Asia/Ho_Chi_Minh` before starting Terminal 2. At that minute the single scheduler registers and
-starts `levelup-daily-ingestion`, `skillup-daily-ingestion`, and
-`datacamp-daily-ingestion`. Keep Terminal 2 running, then check the three `/jobs/{vendor}/latest`
+starts `levelup-daily-ingestion`, `skillup-daily-ingestion`, `datacamp-daily-ingestion`, and
+`coursera-daily-ingestion`. Keep Terminal 2 running, then check the four `/jobs/{vendor}/latest`
 endpoints and vendor directories under
 `data/bronze/`. Swagger on port `8000` is status-only. The shared mock Swagger at
 `http://127.0.0.1:9000/docs` exposes all mock vendors and can grow to include future vendor routers
@@ -118,8 +132,8 @@ INGESTION_TIME=05:00
 INGESTION_TIMEZONE=Asia/Ho_Chi_Minh
 ```
 
-Only vendors with a complete credential configuration are scheduled. LevelUP, SkillUp, and
-DataCamp receive separate APScheduler jobs at the same configured time. The in-process scheduler
+Only vendors with a complete credential configuration are scheduled. LevelUP, SkillUp, DataCamp,
+and Coursera receive separate APScheduler jobs at the same configured time. The in-process scheduler
 must have exactly one scheduler-bearing service instance. Do not enable
 it independently in every Uvicorn worker or replica. For multi-worker production deployments,
 keep it disabled and let Fabric, Azure Data Factory, or another external scheduler own the single
@@ -151,6 +165,12 @@ data/bronze/datacamp/
 └── learning_history/ingestion_date=YYYY-MM-DD/run_id=<uuid>/
     ├── offset=000001.json
     └── manifest.json
+
+data/bronze/coursera/
+├── course_catalog/ingestion_date=YYYY-MM-DD/run_id=<uuid>/
+├── course_detail/ingestion_date=YYYY-MM-DD/run_id=<uuid>/
+│   └── course_id=<content-id>/
+└── learning_history/ingestion_date=YYYY-MM-DD/run_id=<uuid>/
 ```
 
 Each page is atomically replaced only after the response succeeds. Manifests are separate from
@@ -169,8 +189,8 @@ write semantics.
 - Timeout, connection failures, HTTP 429, and HTTP 5xx are retried up to
   `HTTP_MAX_RETRIES` times after the initial attempt.
 - `Retry-After` is honored; otherwise exponential backoff with jitter is used.
-- Other 4xx responses are not retried. For LevelUP, a 401 refreshes the shared token and repeats
-  the request once.
+- Other 4xx responses are not retried. For LevelUP and Coursera, a 401 refreshes the shared token
+  and repeats the request once.
 - At most `LEVELUP_MAX_CONCURRENCY` courses run concurrently via `asyncio.Semaphore`.
 - SkillUp runs its three independent domains concurrently. Each domain writes and checkpoints one
   page at a time, so the full dataset is never accumulated in memory.
@@ -178,12 +198,16 @@ write semantics.
   length of the response `data` list while Bronze retains the original response bytes. If `data`
   is not a list, ingestion logs a warning and reports zero records without discarding the raw
   response. Events are written and checkpointed one page at a time.
+- Coursera authenticates once per run, then runs its catalog pipeline and Learning History in
+  parallel. Course Details run with at most `COURSERA_MAX_CONCURRENCY` requests. Every list,
+  detail, and history response is stored raw; `records_count` is the length of `elements`, or zero
+  with a warning when `elements` is not a list.
 - SQLite records every completed page, course, domain, and run for status reporting and audit.
   Every scheduled ingestion creates a new `run_id` and starts the vendor from the first page,
   regardless of whether the previous run succeeded or failed. Failed work is not resumed on the
   next schedule.
-- SQLite vendor locks prevent overlapping runs per vendor. LevelUP, SkillUp, and DataCamp use
-  different lock keys, so their scheduled runs can execute independently.
+- SQLite vendor locks prevent overlapping runs per vendor. LevelUP, SkillUp, DataCamp, and
+  Coursera use different lock keys, so their scheduled runs can execute independently.
 - At ingestion startup, terminal checkpoint runs older than `CHECKPOINT_RETENTION_DAYS` are deleted
   with their page/course/domain rows. Running or locked runs are kept.
 
@@ -204,8 +228,9 @@ write semantics.
    commit expectations.
 8. Production scheduler owner (single FastAPI instance vs Fabric/ADF/external orchestrator).
 9. Retention, encryption, and access-control policy for raw Learning History PII.
+10. Production Coursera base URL and exact Course Detail path template from the administrator.
 
-Coursera, LinkedIn Learning, Harvard HMM/Spark, and FAMS are intentionally not
+LinkedIn Learning, Harvard HMM/Spark, and FAMS are intentionally not
 implemented in this phase.
 
 ### SkillUp Assessment History date range
