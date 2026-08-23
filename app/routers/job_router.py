@@ -79,4 +79,14 @@ def build_job_router(checkpoints: CheckpointStore) -> APIRouter:
             )
         return summary
 
+    @router.get("/jobs/fams/latest", response_model=RunSummary)
+    async def latest_fams_job() -> RunSummary:
+        summary = await checkpoints.latest_run("fams")
+        if summary is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No FAMS run found",
+            )
+        return summary
+
     return router

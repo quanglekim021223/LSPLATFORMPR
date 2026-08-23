@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 from zoneinfo import ZoneInfo
 
 from pydantic import Field, SecretStr, field_validator
@@ -83,6 +85,15 @@ class Settings(BaseSettings):
     harvard_sftp_poll_interval_seconds: int = Field(default=300, ge=1)
     harvard_sftp_max_wait_seconds: int = Field(default=7200, ge=0)
     harvard_sftp_max_retries: int = Field(default=3, ge=0, le=10)
+
+    fams_base_url: str = "https://fams.fa.edu.vn"
+    fams_api_key: SecretStr = Field(default=SecretStr(""))
+    fams_load_mode: Literal["full", "filtered"] = "full"
+    fams_status: str = ""
+    fams_site: str = ""
+    fams_actual_start_date_from: str = ""
+    fams_actual_start_date_to: str = ""
+    fams_lock_ttl_seconds: int = Field(default=3600, ge=30)
 
     http_max_retries: int = Field(default=3, ge=0, le=10)
     http_connect_timeout_seconds: float = Field(default=10, gt=0)
@@ -219,6 +230,14 @@ class Settings(BaseSettings):
             if secret
         )
 
+    @property
+    def fams_configured(self) -> bool:
+        return bool(self.fams_base_url and self.fams_api_key.get_secret_value())
+
+    def fams_secrets(self) -> tuple[str, ...]:
+        api_key = self.fams_api_key.get_secret_value()
+        return (api_key,) if api_key else ()
+
     def validate_levelup_runtime(self) -> None:
         missing = []
         if not self.levelup_base_url:
@@ -311,6 +330,77 @@ class Settings(BaseSettings):
         if missing:
             raise ValueError(
                 f"Missing Harvard SFTP configuration: {', '.join(missing)}"
+            )
+
+    def validate_fams_runtime(self) -> None:
+        missing = []
+        if not self.fams_base_url:
+            missing.append("FAMS_BASE_URL")
+        if not self.fams_api_key.get_secret_value():
+            missing.append("FAMS_API_KEY")
+        if missing:
+            raise ValueError(f"Missing FAMS configuration: {', '.join(missing)}")
+
+        if self.fams_load_mode == "full":
+            return
+
+        filters = (
+            self.fams_status,
+            self.fams_site,
+            self.fams_actual_start_date_from,
+            self.fams_actual_start_date_to,
+        )
+        if not any(value.strip() for value in filters):
+            raise ValueError(
+                "FAMS_LOAD_MODE=filtered requires at least one non-empty filter"
+            )
+
+        if self.fams_status:
+            allowed_statuses = {
+                "PLANNING",
+                "ASSIGNED",
+                "REVIEWING",
+                "CANCELLED",
+                "DECLINED",
+                "INPROGRESS",
+                "TRAINING_COMPLETED",
+                "PENDING_CLOSE",
+                "CLOSED",
+            }
+            statuses = [value.strip() for value in self.fams_status.split(",")]
+            invalid_statuses = [
+                value for value in statuses if not value or value not in allowed_statuses
+            ]
+            if invalid_statuses:
+                raise ValueError(
+                    "FAMS_STATUS contains invalid or empty comma-separated values"
+                )
+
+        if self.fams_site:
+            sites = [value.strip() for value in self.fams_site.split(",")]
+            if any(not value for value in sites):
+                raise ValueError(
+                    "FAMS_SITE contains an empty comma-separated value"
+                )
+
+        for name, value in (
+            ("FAMS_ACTUAL_START_DATE_FROM", self.fams_actual_start_date_from),
+            ("FAMS_ACTUAL_START_DATE_TO", self.fams_actual_start_date_to),
+        ):
+            if value:
+                try:
+                    datetime.strptime(value, "%Y%m%d")
+                except ValueError as exc:
+                    raise ValueError(f"{name} must use YYYYMMDD") from exc
+
+        if (
+            self.fams_actual_start_date_from
+            and self.fams_actual_start_date_to
+            and self.fams_actual_start_date_from > self.fams_actual_start_date_to
+        ):
+            raise ValueError(
+                "FAMS_ACTUAL_START_DATE_FROM must not be after "
+                "FAMS_ACTUAL_START_DATE_TO"
             )
 
     def _missing_harvard_configuration(self, vendor: str) -> list[str]:

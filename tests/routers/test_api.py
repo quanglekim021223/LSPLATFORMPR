@@ -32,6 +32,7 @@ async def test_health_ready_latest_and_scheduler_disabled_in_test(
             missing_linkedin = await client.get("/jobs/linkedin/latest")
             missing_hmm = await client.get("/jobs/harvard-hmm/latest")
             missing_spark = await client.get("/jobs/harvard-spark/latest")
+            missing_fams = await client.get("/jobs/fams/latest")
             assert health.json() == {"status": "ok"}
             assert ready.json() == {"status": "ready"}
             assert missing.status_code == 404
@@ -41,6 +42,7 @@ async def test_health_ready_latest_and_scheduler_disabled_in_test(
             assert missing_linkedin.status_code == 404
             assert missing_hmm.status_code == 404
             assert missing_spark.status_code == 404
+            assert missing_fams.status_code == 404
 
             run_id = "11111111-1111-4111-8111-111111111111"
             await store.start_run(run_id, "levelup")
@@ -133,3 +135,19 @@ async def test_health_ready_latest_and_scheduler_disabled_in_test(
             latest_spark = await client.get("/jobs/harvard-spark/latest")
             assert latest_spark.status_code == 200
             assert latest_spark.json()["vendor"] == "harvard_spark"
+
+            fams_run_id = "88888888-8888-4888-8888-888888888888"
+            await store.start_run(fams_run_id, "fams")
+            await store.record_completed_page(
+                fams_run_id,
+                "training_data",
+                1,
+                7,
+            )
+            await store.finish_run(fams_run_id, RunStatus.SUCCEEDED)
+            latest_fams = await client.get("/jobs/fams/latest")
+            assert latest_fams.status_code == 200
+            assert latest_fams.json()["vendor"] == "fams"
+            assert latest_fams.json()["records_by_domain"] == {
+                "training_data": 7
+            }

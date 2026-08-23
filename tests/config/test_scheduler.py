@@ -23,6 +23,7 @@ def test_scheduler_defaults_to_single_daily_0500_job(
             "linkedin": job,
             "harvard_hmm": job,
             "harvard_spark": job,
+            "fams": job,
         },  # type: ignore[arg-type]
     )
     for vendor in (
@@ -33,6 +34,7 @@ def test_scheduler_defaults_to_single_daily_0500_job(
         "linkedin",
         "harvard_hmm",
         "harvard_spark",
+        "fams",
     ):
         scheduled_job = scheduler.get_job(f"{vendor}-daily-ingestion")
         assert scheduled_job is not None

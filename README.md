@@ -2,7 +2,7 @@
 
 FastAPI service for scheduled ingestion of learning-vendor data into a raw Bronze layer. It
 supports LevelUP (Absorb), SkillUp (iMocha), DataCamp, Coursera, LinkedIn Learning, Harvard HMM,
-and Harvard Spark ingestion domains.
+Harvard Spark, and FAMS ingestion domains.
 
 ## Runtime flow
 
@@ -31,17 +31,19 @@ FastAPI lifespan / APScheduler (05:00 Asia/Ho_Chi_Minh)
 ├→ run_harvard_hmm_ingestion
 │  ├→ Catalog: Basic OAuth → GET /api/catalog/{orgKey}?catalogs=HMM
 │  └→ History: SFTP backfill missing dates → poll newest HMM CSV
-└→ run_harvard_spark_ingestion
-   ├→ Catalog: Basic OAuth → GET /api/catalog/{orgKey}?catalogs=HBR_SPARK
-   └→ History: SFTP backfill missing dates → poll newest Spark CSV
+├→ run_harvard_spark_ingestion
+│  ├→ Catalog: Basic OAuth → GET /api/catalog/{orgKey}?catalogs=HBR_SPARK
+│  └→ History: SFTP backfill missing dates → poll newest Spark CSV
+└→ run_fams_ingestion
+   └→ GET /api/fsa-reports/training-data once (full or configured filtered mode)
 → LocalBronzeWriter + SQLite run summary
 ```
 
 There is no public manual-trigger endpoint. `GET /health`, `GET /ready`, and
 `GET /jobs/levelup/latest`, `GET /jobs/skillup/latest`, `GET /jobs/datacamp/latest`,
 `GET /jobs/coursera/latest`, `GET /jobs/linkedin/latest`, `GET /jobs/harvard-hmm/latest`, and
-`GET /jobs/harvard-spark/latest` expose operational state without credentials or raw personal
-data.
+`GET /jobs/harvard-spark/latest`, and `GET /jobs/fams/latest` expose operational state without
+credentials or raw personal data.
 
 ## Code layout
 
@@ -55,6 +57,7 @@ app/vendors/datacamp/        DataCamp client, catalogs, and event history
 app/vendors/coursera/        Coursera OAuth, catalog/detail, and learning history
 app/vendors/linkedin/        LinkedIn OAuth, assets/detail, and activity history
 app/vendors/harvard/         shared Harvard Catalog API and verified-host SFTP implementation
+app/vendors/fams/            FAMS API-key client and single training_data domain
 app/helpers/                 shared HTTP retry and secret sanitization
 app/config/                  settings and APScheduler configuration
 app/repositories/            SQLite checkpoint history and vendor lock
@@ -67,6 +70,7 @@ app/mocks/datacamp.py        DataCamp mock routes and data
 app/mocks/coursera.py        Coursera mock routes and data
 app/mocks/linkedin.py        LinkedIn Learning mock routes and data
 app/mocks/harvard.py         Harvard HMM/Spark Catalog API and injectable SFTP mock
+app/mocks/fams.py            FAMS full/filtered training-data mock route
 ```
 
 ## Local setup
@@ -147,6 +151,18 @@ the session and retry up to `HARVARD_SFTP_MAX_RETRIES` times, default `3`, with 
 files continue to use the polling deadline. Authentication and SSH host-key failures are not
 retried.
 
+FAMS calls one internal endpoint with `Fsa-Report-Api-Key: <FAMS_API_KEY>` and stores the complete
+response as one raw `training_data` page. `FAMS_LOAD_MODE=full` sends no query parameters.
+Full mode ignores filter values completely, including their validation. `FAMS_LOAD_MODE=filtered`
+sends only non-empty `FAMS_STATUS`, `FAMS_SITE`,
+`FAMS_ACTUAL_START_DATE_FROM`, and `FAMS_ACTUAL_START_DATE_TO` values. Dates use `YYYYMMDD`.
+Filtered mode requires at least one of these four values; otherwise the job fails before making an
+HTTP request so it cannot accidentally become a full pull. Status values must match the documented
+FAMS enum, while site values remain free-form comma-separated strings.
+There is deliberately no `both` mode, OAuth flow, or separate raw file for `classList` and
+`studentList`. A run succeeds only when `success=true`, `data` is an object, and both lists are
+arrays. The record count is the combined size of those two lists.
+
 Run checks with:
 
 ```bash
@@ -171,8 +187,10 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 For a quick scheduler test, set `INGESTION_TIME` in `.env` to a future minute in
 `Asia/Ho_Chi_Minh` before starting Terminal 2. At that minute the single scheduler registers and
 starts `levelup-daily-ingestion`, `skillup-daily-ingestion`, `datacamp-daily-ingestion`,
-`coursera-daily-ingestion`, and `linkedin-daily-ingestion`. Harvard Catalog routes are also exposed
-by this hub. Harvard SFTP is mocked in automated tests rather than over HTTP; leave Harvard SFTP
+`coursera-daily-ingestion`, `linkedin-daily-ingestion`, and `fams-daily-ingestion` when their mock
+credentials are configured. Harvard Catalog routes are also exposed
+by this hub, and FAMS is available under `/fams`. Harvard SFTP is mocked in automated tests rather
+than over HTTP; leave Harvard SFTP
 credentials blank during this local HTTP-only demo so those jobs are not scheduled. With real
 verified SFTP configuration, the scheduler additionally registers `harvard_hmm-daily-ingestion`
 and `harvard_spark-daily-ingestion`. Keep Terminal 2 running, then check the relevant
@@ -193,8 +211,8 @@ INGESTION_TIMEZONE=Asia/Ho_Chi_Minh
 ```
 
 Only vendors with a complete credential configuration are scheduled. LevelUP, SkillUp, DataCamp,
-Coursera, LinkedIn, Harvard HMM, and Harvard Spark receive separate APScheduler jobs at the same
-configured time. The
+Coursera, LinkedIn, Harvard HMM, Harvard Spark, and FAMS receive separate APScheduler jobs at the
+same configured time. The
 in-process scheduler must have exactly one scheduler-bearing service instance. Do not enable
 it independently in every Uvicorn worker or replica. For multi-worker production deployments,
 keep it disabled and let Fabric, Azure Data Factory, or another external scheduler own the single
@@ -250,6 +268,11 @@ data/bronze/harvard_spark/
 └── learning_history/ingestion_date=YYYY-MM-DD/run_id=<uuid>/
     ├── harvard_Spark_reporting_YYYYMMDD.csv
     └── manifest.json
+
+data/bronze/fams/
+└── training_data/ingestion_date=YYYY-MM-DD/run_id=<uuid>/
+    ├── offset=000001.json
+    └── manifest.json
 ```
 
 Each page is atomically replaced only after the response succeeds. Manifests are separate from
@@ -290,6 +313,10 @@ write semantics.
   exact CSV plus checksum metadata, and skips remote paths already recorded in
   `ingested_source_files`. Missing dates do not discard files that succeeded. One failed branch
   produces `PARTIAL_FAILURE` while preserving the successful branch.
+- FAMS makes one request per run and writes the exact response bytes once. It logs only separate
+  class/student counts and stores their sum in the run summary. Contract-invalid JSON responses
+  are still retained in Bronze but the domain and run are marked failed. API-key and permission
+  failures (`401`/`403`) are not retried; timeout, connection, `429`, and `5xx` failures are.
 - SQLite records every completed page, course, domain, and run for status reporting and audit.
   Every scheduled ingestion creates a new `run_id` and starts the vendor from the first page,
   regardless of whether the previous run succeeded or failed. Failed work is not resumed on the
@@ -324,8 +351,8 @@ write semantics.
     confirmation of the exact filename capitalization and delivery cutoff.
 14. The earliest historical report date for HMM and Spark, and whether Harvard publishes a file
     for every calendar day or omits weekends/holidays.
-
-FAMS is intentionally not implemented in this phase.
+15. Production FAMS base URL/API key, IP allowlist, and confirmation that the response field names
+    and date-filter semantics match the supplied `fsa-reports-training-data.md` contract.
 
 ### SkillUp Assessment History date range
 
