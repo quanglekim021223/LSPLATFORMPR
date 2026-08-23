@@ -19,7 +19,7 @@ async def test_three_domains_event_pagination_and_raw_bronze(
     settings = settings_factory()
     calls: Counter[str] = Counter()
     pages: list[int] = []
-    live_raw = b'{\n  "opaqueCatalog": [{"unchanged": true}]\n}\n'
+    live_raw = b'{\n  "data": [{"unchanged": true}, {"id": 2}]\n}\n'
 
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -36,7 +36,7 @@ async def test_three_domains_event_pagination_and_raw_bronze(
             )
         if path == "/v1/catalog/archived-courses":
             assert not request.url.params
-            return response(request, 200, ["schema", "not", "assumed"])
+            return response(request, 200, {"data": [{"id": "archived-1"}]})
         if path == "/v1/events":
             assert "contentType" not in request.url.params
             assert "eventType" not in request.url.params
@@ -61,8 +61,8 @@ async def test_three_domains_event_pagination_and_raw_bronze(
     assert summary.status == RunStatus.SUCCEEDED
     assert summary.vendor == "datacamp"
     assert summary.records_by_domain == {
-        "course_catalog_archived": 0,
-        "course_catalog_live": 0,
+        "course_catalog_archived": 1,
+        "course_catalog_live": 2,
         "learning_history": 3,
     }
     assert calls == {
@@ -77,8 +77,9 @@ async def test_three_domains_event_pagination_and_raw_bronze(
         if "course_catalog_live" in str(path)
     )
     assert live_page.read_bytes() == live_raw
-    assert json.loads(live_page.read_text())["opaqueCatalog"] == [
-        {"unchanged": True}
+    assert json.loads(live_page.read_text())["data"] == [
+        {"unchanged": True},
+        {"id": 2},
     ]
 
 
@@ -119,6 +120,44 @@ async def test_domain_failure_is_isolated(
         "/v1/catalog/archived-courses": 1,
         "/v1/events": 1,
     }
+
+
+@pytest.mark.asyncio
+async def test_catalog_non_list_data_warns_but_preserves_raw(
+    settings_factory: Callable[..., object], caplog: pytest.LogCaptureFixture
+) -> None:
+    settings = settings_factory()
+    invalid_raw = b'{\n  "data": {"course": "still raw"}\n}\n'
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/catalog/live-courses":
+            return httpx.Response(
+                200,
+                content=invalid_raw,
+                headers={"Content-Type": "application/json"},
+                request=request,
+            )
+        if request.url.path == "/v1/catalog/archived-courses":
+            return response(request, 200, {"data": []})
+        return response(
+            request, 200, {"events": [], "meta": {"numberOfPages": 1}}
+        )
+
+    summary = await run_datacamp_ingestion(
+        settings,  # type: ignore[arg-type]
+        transport=httpx.MockTransport(handler),
+        sleep=no_sleep,
+    )
+
+    assert summary.status == RunStatus.SUCCEEDED
+    assert summary.records_by_domain["course_catalog_live"] == 0
+    assert "live catalog response field 'data' is not a list" in caplog.text
+    live_page = next(
+        path
+        for path in settings.bronze_local_path.rglob("offset=000001.json")  # type: ignore[attr-defined]
+        if "course_catalog_live" in str(path)
+    )
+    assert live_page.read_bytes() == invalid_raw
 
 
 @pytest.mark.asyncio

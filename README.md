@@ -174,9 +174,10 @@ write semantics.
 - At most `LEVELUP_MAX_CONCURRENCY` courses run concurrently via `asyncio.Semaphore`.
 - SkillUp runs its three independent domains concurrently. Each domain writes and checkpoints one
   page at a time, so the full dataset is never accumulated in memory.
-- DataCamp also runs its three domains concurrently. Catalog responses are opaque raw JSON and
-  intentionally report zero parsed records until their schemas are confirmed. Events are written
-  and checkpointed one page at a time.
+- DataCamp also runs its three domains concurrently. Live and archived catalog counts use the
+  length of the response `data` list while Bronze retains the original response bytes. If `data`
+  is not a list, ingestion logs a warning and reports zero records without discarding the raw
+  response. Events are written and checkpointed one page at a time.
 - SQLite records every completed page, course, domain, and run for status reporting and audit.
   Every scheduled ingestion creates a new `run_id` and starts the vendor from the first page,
   regardless of whether the previous run succeeded or failed. Failed work is not resumed on the
@@ -196,8 +197,7 @@ write semantics.
    endpoint more clearly than this aggregate endpoint.
 4. Whether SkillUp response field casing is identical across tenants, especially `hasNextPage`,
    `pageNumber`, and `totalPages`.
-5. Exact DataCamp live/archived catalog envelopes and whether either endpoint later exposes
-   pagination metadata.
+5. Whether either DataCamp catalog endpoint later exposes pagination metadata.
 6. Whether DataCamp events are under `events` or `data`, and the exact types/edge cases for
    `meta.numberOfPages` when the result is empty.
 7. OneLake/Fabric workspace, lakehouse, directory convention, authentication method, and atomic

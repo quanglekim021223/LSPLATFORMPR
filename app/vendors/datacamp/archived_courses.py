@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
+from typing import Any
 
 from app.helpers.security import sanitize_text
 from app.models import PageWrite
@@ -9,6 +11,15 @@ from app.storage import BronzeWriter
 from app.vendors.datacamp.client import DataCampClient, is_retryable_error
 
 DOMAIN = "course_catalog_archived"
+logger = logging.getLogger(__name__)
+
+
+def _records_count(payload: Any) -> int:
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if isinstance(data, list):
+        return len(data)
+    logger.warning("DataCamp archived catalog response field 'data' is not a list")
+    return 0
 
 
 async def ingest_archived_courses(
@@ -19,7 +30,8 @@ async def ingest_archived_courses(
     ingestion_date: str,
 ) -> None:
     try:
-        _, raw_payload = await client.get_json("/v1/catalog/archived-courses")
+        payload, raw_payload = await client.get_json("/v1/catalog/archived-courses")
+        records_count = _records_count(payload)
         await writer.write_page(
             PageWrite(
                 vendor="datacamp",
@@ -28,12 +40,12 @@ async def ingest_archived_courses(
                 run_id=run_id,
                 offset=1,
                 raw_payload=raw_payload,
-                records_count=0,
+                records_count=records_count,
                 request_parameters={},
                 fetched_at=datetime.now(UTC),
             )
         )
-        await checkpoints.record_completed_page(run_id, DOMAIN, 1, 0)
+        await checkpoints.record_completed_page(run_id, DOMAIN, 1, records_count)
         await checkpoints.mark_domain(run_id, DOMAIN, "completed")
     except Exception as exc:
         message = sanitize_text(exc, client.sensitive_values())

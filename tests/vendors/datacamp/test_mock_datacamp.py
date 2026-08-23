@@ -29,7 +29,7 @@ async def test_mock_server_runs_full_datacamp_pipeline(
 
     assert summary.status == RunStatus.SUCCEEDED
     assert summary.records_by_domain == {
-        "course_catalog_archived": 0,
-        "course_catalog_live": 0,
+        "course_catalog_archived": 1,
+        "course_catalog_live": 2,
         "learning_history": 3,
     }

@@ -9,13 +9,13 @@ router = APIRouter(tags=["DataCamp"])
 
 _TOKEN = "mock-datacamp-token"
 _LIVE_COURSES = {
-    "courses": [
+    "data": [
         {"id": "dc-python", "title": "Introduction to Python"},
         {"id": "dc-sql", "title": "Introduction to SQL"},
     ]
 }
 _ARCHIVED_COURSES = {
-    "courses": [{"id": "dc-legacy-r", "title": "Legacy R"}]
+    "data": [{"id": "dc-legacy-r", "title": "Legacy R"}]
 }
 _EVENTS = [
     {"id": "event-01", "type": "course_completed"},
