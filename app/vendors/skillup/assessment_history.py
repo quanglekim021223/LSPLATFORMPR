@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from typing import Any
 
@@ -9,8 +10,10 @@ from app.models import PageWrite
 from app.repositories.checkpoint_repository import CheckpointStore
 from app.storage import BronzeWriter
 from app.vendors.skillup.client import SkillUpClient, is_retryable_error
+from app.vendors.skillup.models import extra_field_paths, validate_assessment_history
 
 DOMAIN = "assessment_history"
+logger = logging.getLogger(__name__)
 
 
 async def ingest_assessment_history(
@@ -41,14 +44,16 @@ async def ingest_assessment_history(
             payload, raw_payload = await client.get_json(
                 settings.skillup_reports_base_url, "/v3/reports", params
             )
-            reports = payload.get("reports")
-            if not isinstance(reports, list):
-                raise ValueError(
-                    "SkillUp assessment response must contain a reports list"
-                )
-            has_next_page = _has_next_page(
-                payload, page_number, len(reports), settings.skillup_page_size
+            contract = validate_assessment_history(
+                payload, require_sections=include_sections is True
             )
+            records_count = len(contract.reports)
+            extras = extra_field_paths(contract)
+            if extras:
+                logger.warning(
+                    "SkillUp Assessment History contains new contract fields fields=%s",
+                    ",".join(extras),
+                )
             await writer.write_page(
                 PageWrite(
                     vendor="skillup",
@@ -57,13 +62,13 @@ async def ingest_assessment_history(
                     run_id=run_id,
                     offset=page_number,
                     raw_payload=raw_payload,
-                    records_count=len(reports),
+                    records_count=records_count,
                     request_parameters=params,
                     fetched_at=datetime.now(UTC),
                 )
             )
             await checkpoints.record_completed_page(
-                run_id, DOMAIN, page_number, len(reports)
+                run_id, DOMAIN, page_number, records_count
             )
         except Exception as exc:
             message = sanitize_text(exc, client.sensitive_values())
@@ -78,23 +83,7 @@ async def ingest_assessment_history(
                 message,
             )
             raise
-        if not has_next_page:
+        if not contract.has_next_page:
             break
         page_number += 1
     await checkpoints.mark_domain(run_id, DOMAIN, "completed")
-
-
-def _has_next_page(
-    payload: dict[str, Any], page_number: int, records_count: int, page_size: int
-) -> bool:
-    has_next_page = payload.get("hasNextPage")
-    total_pages = payload.get("totalPages")
-    if has_next_page is False:
-        return False
-    if isinstance(total_pages, int) and page_number >= total_pages:
-        return False
-    if has_next_page is True:
-        return True
-    if isinstance(total_pages, int):
-        return page_number < total_pages
-    return records_count >= page_size

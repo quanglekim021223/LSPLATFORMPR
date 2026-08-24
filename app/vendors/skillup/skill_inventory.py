@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from typing import Any
 
@@ -9,8 +10,10 @@ from app.models import PageWrite
 from app.repositories.checkpoint_repository import CheckpointStore
 from app.storage import BronzeWriter
 from app.vendors.skillup.client import SkillUpClient, is_retryable_error
+from app.vendors.skillup.models import extra_field_paths, validate_skill_inventory
 
 DOMAIN = "skill_inventory"
+logger = logging.getLogger(__name__)
 
 
 async def ingest_skill_inventory(
@@ -40,10 +43,14 @@ async def ingest_skill_inventory(
                 "/employees/skills-profile",
                 params,
             )
-            records = _extract_records(payload)
-            has_next_page = _has_next_page(
-                payload, page_number, len(records), settings.skillup_page_size
-            )
+            contract = validate_skill_inventory(payload)
+            records_count = len(contract.items)
+            extras = extra_field_paths(contract)
+            if extras:
+                logger.warning(
+                    "SkillUp Skill Inventory contains new contract fields fields=%s",
+                    ",".join(extras),
+                )
             await writer.write_page(
                 PageWrite(
                     vendor="skillup",
@@ -52,13 +59,13 @@ async def ingest_skill_inventory(
                     run_id=run_id,
                     offset=page_number,
                     raw_payload=raw_payload,
-                    records_count=len(records),
+                    records_count=records_count,
                     request_parameters=params,
                     fetched_at=datetime.now(UTC),
                 )
             )
             await checkpoints.record_completed_page(
-                run_id, DOMAIN, page_number, len(records)
+                run_id, DOMAIN, page_number, records_count
             )
         except Exception as exc:
             message = sanitize_text(exc, client.sensitive_values())
@@ -73,40 +80,7 @@ async def ingest_skill_inventory(
                 message,
             )
             raise
-        if not has_next_page:
+        if not contract.has_next_page:
             break
         page_number += 1
     await checkpoints.mark_domain(run_id, DOMAIN, "completed")
-
-
-def _extract_records(payload: dict[str, Any]) -> list[Any]:
-    for key in ("items", "employees", "skillProfiles", "profiles", "data"):
-        value = payload.get(key)
-        if isinstance(value, list):
-            return value
-        if isinstance(value, dict):
-            nested_items = value.get("items")
-            if isinstance(nested_items, list):
-                return nested_items
-    raise ValueError(
-        "SkillUp inventory response must contain a supported records list"
-    )
-
-
-def _has_next_page(
-    payload: dict[str, Any], page_number: int, records_count: int, page_size: int
-) -> bool:
-    metadata = payload
-    for key in ("pagination", "metadata", "meta"):
-        value = payload.get(key)
-        if isinstance(value, dict):
-            metadata = value
-            break
-    has_next_page = metadata.get("hasNextPage")
-    if isinstance(has_next_page, bool):
-        return has_next_page
-    response_page = metadata.get("pageNumber", page_number)
-    total_pages = metadata.get("totalPages")
-    if isinstance(response_page, int) and isinstance(total_pages, int):
-        return response_page < total_pages
-    return records_count >= page_size

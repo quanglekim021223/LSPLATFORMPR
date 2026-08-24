@@ -110,6 +110,11 @@ use separate base URLs configured by `SKILLUP_INTELLIGENCE_BASE_URL` and
 `SKILLUP_REPORTS_BASE_URL`. Assessment History always sends a range from
 `SKILLUP_ASSESSMENT_START_DATE` through the current UTC time, so scheduled runs retrieve the full
 configured history rather than iMocha's seven-day default.
+Skill Taxonomy, Skill Inventory, and Assessment History responses are validated against their
+vendor-specific Pydantic contracts before Bronze writes and completed checkpoints. Required field
+removal, incompatible types, invalid timestamps, or inconsistent pagination metadata fail only the
+affected domain and do not enter Bronze. Valid responses retain their exact original bytes;
+additive fields are retained and logged by field path without logging employee or report values.
 
 DataCamp sends `Authorization: Bearer <DATACAMP_TOKEN>` and `Accept: application/json` on every
 request. Live and archived catalogs are fetched once per run because their pagination contract is
@@ -343,11 +348,10 @@ write semantics.
 1. Production LevelUP tenant/base URL and confirmation that `Authorization` must contain the raw
    token rather than `Bearer <token>`.
 2. Whether the authentication response is always a plain string in every environment.
-3. Exact production response envelope and pagination metadata for SkillUp
-   `/employees/skills-profile`; the public documentation currently exposes the per-employee
-   endpoint more clearly than this aggregate endpoint.
-4. Whether SkillUp response field casing is identical across tenants, especially `hasNextPage`,
-   `pageNumber`, and `totalPages`.
+3. Non-null production samples for SkillUp fields currently observed only as `null` or empty lists,
+   including taxonomy rubrics/tags, nullable validation scores, AI ratings, and `skillPriorirty`.
+4. Whether SkillUp Assessment `sections` is omitted when `includeSections` is absent/false, and
+   which report fields become null for incomplete assessments.
 5. Whether either DataCamp catalog endpoint later exposes pagination metadata.
 6. Whether DataCamp events are under `events` or `data`, and the exact types/edge cases for
    `meta.numberOfPages` when the result is empty.

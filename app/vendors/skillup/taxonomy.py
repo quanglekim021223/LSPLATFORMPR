@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
@@ -10,8 +11,10 @@ from app.models import PageWrite
 from app.repositories.checkpoint_repository import CheckpointStore
 from app.storage import BronzeWriter
 from app.vendors.skillup.client import SkillUpClient, is_retryable_error
+from app.vendors.skillup.models import extra_field_paths, validate_skill_taxonomy
 
 DOMAIN = "skill_taxonomy"
+logger = logging.getLogger(__name__)
 
 
 async def ingest_skill_taxonomy(
@@ -33,13 +36,13 @@ async def ingest_skill_taxonomy(
             payload, raw_payload = await client.get_json(
                 settings.skillup_intelligence_base_url, "/taxonomy", params
             )
-            items = payload.get("items")
-            has_next_page = payload.get("hasNextPage")
-            if not isinstance(items, list):
-                raise ValueError("SkillUp taxonomy response must contain an items list")
-            if not isinstance(has_next_page, bool):
-                raise ValueError(
-                    "SkillUp taxonomy response must contain boolean hasNextPage"
+            contract = validate_skill_taxonomy(payload)
+            records_count = len(contract.items)
+            extras = extra_field_paths(contract)
+            if extras:
+                logger.warning(
+                    "SkillUp Skill Taxonomy contains new contract fields fields=%s",
+                    ",".join(extras),
                 )
             await writer.write_page(
                 PageWrite(
@@ -49,13 +52,13 @@ async def ingest_skill_taxonomy(
                     run_id=run_id,
                     offset=page_number,
                     raw_payload=raw_payload,
-                    records_count=len(items),
+                    records_count=records_count,
                     request_parameters=params,
                     fetched_at=datetime.now(UTC),
                 )
             )
             await checkpoints.record_completed_page(
-                run_id, DOMAIN, page_number, len(items)
+                run_id, DOMAIN, page_number, records_count
             )
         except Exception as exc:
             message = sanitize_text(exc, client.sensitive_values())
@@ -70,7 +73,7 @@ async def ingest_skill_taxonomy(
                 message,
             )
             raise
-        if not has_next_page:
+        if not contract.has_next_page:
             break
         page_number += 1
     await checkpoints.mark_domain(run_id, DOMAIN, "completed")

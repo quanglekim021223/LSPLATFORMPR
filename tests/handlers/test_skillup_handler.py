@@ -8,8 +8,37 @@ import httpx
 import pytest
 
 from app.handlers.skillup_handler import run_skillup_ingestion
+from app.mocks.skillup import assessment_report, skill_profile, taxonomy_item
 from app.models import RunStatus
 from tests.conftest import no_sleep, response
+
+
+def page_payload(
+    key: str,
+    records: list[dict[str, object]],
+    *,
+    page_number: int = 1,
+    total_pages: int = 1,
+    total_count: int | None = None,
+) -> dict[str, object]:
+    return {
+        key: records,
+        "pageNumber": page_number,
+        "totalPages": total_pages,
+        "totalCount": len(records) if total_count is None else total_count,
+        "hasPreviousPage": page_number > 1,
+        "hasNextPage": page_number < total_pages,
+    }
+
+
+def valid_response(path: str) -> dict[str, object]:
+    if path == "/taxonomy":
+        return page_payload("items", [taxonomy_item()])
+    if path == "/employees/skills-profile":
+        return page_payload("items", [skill_profile()])
+    if path == "/v3/reports":
+        return page_payload("reports", [assessment_report()])
+    raise AssertionError(path)
 
 
 @pytest.mark.asyncio
@@ -23,10 +52,13 @@ async def test_skillup_three_domains_paginate_and_preserve_raw(
         "/employees/skills-profile": [],
         "/v3/reports": [],
     }
-    taxonomy_raw = (
-        b'{\n  "items": [{"id": 1}, {"id": 2}], '
-        b'"pageNumber": 1, "hasNextPage": true\n}\n'
+    first_taxonomy_page = page_payload(
+        "items",
+        [taxonomy_item(0), taxonomy_item(1)],
+        total_pages=2,
+        total_count=3,
     )
+    taxonomy_raw = json.dumps(first_taxonomy_page, indent=2).encode() + b"\n"
 
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -55,35 +87,53 @@ async def test_skillup_three_domains_paginate_and_preserve_raw(
             return response(
                 request,
                 200,
-                {"items": [{"id": 3}], "pageNumber": 2, "hasNextPage": False},
+                page_payload(
+                    "items",
+                    [taxonomy_item(2)],
+                    page_number=2,
+                    total_pages=2,
+                    total_count=3,
+                ),
             )
 
         if path == "/employees/skills-profile":
             page = int(request.url.params["pageNumber"])
             pages[path].append(page)
-            items = [{"employeeId": 1}, {"employeeId": 2}] if page == 1 else [{"employeeId": 3}]
+            items = (
+                [skill_profile(0), skill_profile(1)]
+                if page == 1
+                else [skill_profile(2)]
+            )
             return response(
                 request,
                 200,
-                {
-                    "items": items,
-                    "metadata": {"pageNumber": page, "totalPages": 2},
-                },
+                page_payload(
+                    "items",
+                    items,
+                    page_number=page,
+                    total_pages=2,
+                    total_count=3,
+                ),
             )
 
         if path == "/v3/reports":
             page = int(request.url.params["PageNo"])
             pages[path].append(page)
-            reports = [{"id": 1}, {"id": 2}] if page == 1 else [{"id": 3}]
+            reports = (
+                [assessment_report(0), assessment_report(1)]
+                if page == 1
+                else [assessment_report(2)]
+            )
             return response(
                 request,
                 200,
-                {
-                    "reports": reports,
-                    "pageNumber": page,
-                    "totalPages": 2,
-                    "hasNextPage": page < 2,
-                },
+                page_payload(
+                    "reports",
+                    reports,
+                    page_number=page,
+                    total_pages=2,
+                    total_count=3,
+                ),
             )
         raise AssertionError(request.url)
 
@@ -116,7 +166,10 @@ async def test_skillup_three_domains_paginate_and_preserve_raw(
         if "skill_taxonomy" in str(path)
     )
     assert taxonomy_page.read_bytes() == taxonomy_raw
-    assert json.loads(taxonomy_page.read_text())["items"] == [{"id": 1}, {"id": 2}]
+    assert json.loads(taxonomy_page.read_text())["items"] == [
+        taxonomy_item(0),
+        taxonomy_item(1),
+    ]
 
 
 @pytest.mark.asyncio
@@ -132,17 +185,9 @@ async def test_skillup_domain_failure_does_not_stop_other_domains(
         if path == "/taxonomy":
             return response(request, 500, {"error": "taxonomy unavailable"})
         if path == "/employees/skills-profile":
-            return response(
-                request,
-                200,
-                {"items": [{"employeeId": 1}], "hasNextPage": False},
-            )
+            return response(request, 200, valid_response(path))
         if path == "/v3/reports":
-            return response(
-                request,
-                200,
-                {"reports": [{"id": 1}], "hasNextPage": False, "totalPages": 1},
-            )
+            return response(request, 200, valid_response(path))
         raise AssertionError(request.url)
 
     summary = await run_skillup_ingestion(
@@ -191,15 +236,11 @@ async def test_skillup_optional_parameters_are_sent_only_when_provided(
     def handler(request: httpx.Request) -> httpx.Response:
         seen[request.url.path] = dict(request.url.params)
         if request.url.path == "/taxonomy":
-            return response(request, 200, {"items": [], "hasNextPage": False})
+            return response(request, 200, page_payload("items", []))
         if request.url.path == "/employees/skills-profile":
-            return response(request, 200, {"items": [], "hasNextPage": False})
+            return response(request, 200, page_payload("items", []))
         if request.url.path == "/v3/reports":
-            return response(
-                request,
-                200,
-                {"reports": [], "hasNextPage": False, "totalPages": 1},
-            )
+            return response(request, 200, page_payload("reports", []))
         raise AssertionError(request.url)
 
     summary = await run_skillup_ingestion(
@@ -223,3 +264,49 @@ async def test_skillup_optional_parameters_are_sent_only_when_provided(
     assert seen["/v3/reports"]["includeSections"] == "true"
     assert seen["/v3/reports"]["startDate"] == "2026-08-01T00:00:00Z"
     assert seen["/v3/reports"]["endDate"] == "2026-08-22T00:00:00Z"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("invalid_path", "invalid_domain"),
+    [
+        ("/taxonomy", "skill_taxonomy"),
+        ("/employees/skills-profile", "skill_inventory"),
+        ("/v3/reports", "assessment_history"),
+    ],
+)
+async def test_contract_invalid_response_does_not_enter_bronze(
+    settings_factory: Callable[..., object],
+    invalid_path: str,
+    invalid_domain: str,
+) -> None:
+    settings = settings_factory()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = valid_response(request.url.path)
+        if request.url.path == invalid_path:
+            records_key = "reports" if invalid_path == "/v3/reports" else "items"
+            records = payload[records_key]
+            assert isinstance(records, list)
+            record = records[0]
+            assert isinstance(record, dict)
+            required_field = {
+                "/taxonomy": "displayName",
+                "/employees/skills-profile": "externalEmployeeId",
+                "/v3/reports": "candidateFullName",
+            }[invalid_path]
+            del record[required_field]
+        return response(request, 200, payload)
+
+    summary = await run_skillup_ingestion(
+        settings,  # type: ignore[arg-type]
+        transport=httpx.MockTransport(handler),
+        sleep=no_sleep,
+    )
+
+    assert summary.status == RunStatus.PARTIAL_FAILURE
+    assert not list(
+        settings.bronze_local_path.glob(  # type: ignore[attr-defined]
+            f"skillup/{invalid_domain}/**/offset=*.json"
+        )
+    )
