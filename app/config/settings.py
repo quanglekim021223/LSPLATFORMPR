@@ -9,6 +9,18 @@ from zoneinfo import ZoneInfo
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+FAMS_ALLOWED_STATUSES = {
+    "PLANNING",
+    "ASSIGNED",
+    "REVIEWING",
+    "CANCELLED",
+    "DECLINED",
+    "INPROGRESS",
+    "TRAINING_COMPLETED",
+    "PENDING_CLOSE",
+    "CLOSED",
+}
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -334,17 +346,21 @@ class Settings(BaseSettings):
             )
 
     def validate_fams_runtime(self) -> None:
-        missing = []
-        if not self.fams_base_url:
-            missing.append("FAMS_BASE_URL")
-        if not self.fams_api_key.get_secret_value():
-            missing.append("FAMS_API_KEY")
+        missing = self._missing_fams_configuration()
         if missing:
             raise ValueError(f"Missing FAMS configuration: {', '.join(missing)}")
 
-        if self.fams_load_mode == "full":
-            return
+        if self.fams_load_mode == "filtered":
+            self._validate_fams_filters()
 
+    def _missing_fams_configuration(self) -> list[str]:
+        values = {
+            "FAMS_BASE_URL": self.fams_base_url,
+            "FAMS_API_KEY": self.fams_api_key.get_secret_value(),
+        }
+        return [name for name, value in values.items() if not value]
+
+    def _validate_fams_filters(self) -> None:
         filters = (
             self.fams_status,
             self.fams_site,
@@ -355,35 +371,27 @@ class Settings(BaseSettings):
             raise ValueError(
                 "FAMS_LOAD_MODE=filtered requires at least one non-empty filter"
             )
+        self._validate_fams_status()
+        self._validate_fams_site()
+        self._validate_fams_dates()
 
-        if self.fams_status:
-            allowed_statuses = {
-                "PLANNING",
-                "ASSIGNED",
-                "REVIEWING",
-                "CANCELLED",
-                "DECLINED",
-                "INPROGRESS",
-                "TRAINING_COMPLETED",
-                "PENDING_CLOSE",
-                "CLOSED",
-            }
-            statuses = [value.strip() for value in self.fams_status.split(",")]
-            invalid_statuses = [
-                value for value in statuses if not value or value not in allowed_statuses
-            ]
-            if invalid_statuses:
-                raise ValueError(
-                    "FAMS_STATUS contains invalid or empty comma-separated values"
-                )
+    def _validate_fams_status(self) -> None:
+        if not self.fams_status:
+            return
+        statuses = [value.strip() for value in self.fams_status.split(",")]
+        if any(not value or value not in FAMS_ALLOWED_STATUSES for value in statuses):
+            raise ValueError(
+                "FAMS_STATUS contains invalid or empty comma-separated values"
+            )
 
-        if self.fams_site:
-            sites = [value.strip() for value in self.fams_site.split(",")]
-            if any(not value for value in sites):
-                raise ValueError(
-                    "FAMS_SITE contains an empty comma-separated value"
-                )
+    def _validate_fams_site(self) -> None:
+        if not self.fams_site:
+            return
+        sites = [value.strip() for value in self.fams_site.split(",")]
+        if any(not value for value in sites):
+            raise ValueError("FAMS_SITE contains an empty comma-separated value")
 
+    def _validate_fams_dates(self) -> None:
         for name, value in (
             ("FAMS_ACTUAL_START_DATE_FROM", self.fams_actual_start_date_from),
             ("FAMS_ACTUAL_START_DATE_TO", self.fams_actual_start_date_to),

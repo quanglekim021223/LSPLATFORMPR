@@ -93,19 +93,23 @@ class LevelUpJob:
                 )
             return await self.checkpoints.finish_run(current_run_id, RunStatus.SUCCEEDED)
         except asyncio.CancelledError:
-            if self._heartbeat_error is None:
-                raise
-            message = sanitize_text(self._heartbeat_error, self.client.sensitive_values())
-            logger.error(
-                "LevelUP lock heartbeat failed run_id=%s error=%s",
-                current_run_id,
-                message,
-            )
-            return await self.checkpoints.finish_run(
-                current_run_id,
-                RunStatus.FAILED,
-                message,
-            )
+            if self._heartbeat_error is not None:
+                message = sanitize_text(
+                    self._heartbeat_error, self.client.sensitive_values()
+                )
+                logger.error(
+                    "LevelUP lock heartbeat failed run_id=%s error=%s",
+                    current_run_id,
+                    message,
+                )
+                await asyncio.shield(
+                    self.checkpoints.finish_run(
+                        current_run_id,
+                        RunStatus.FAILED,
+                        message,
+                    )
+                )
+            raise
         except Exception as exc:
             message = sanitize_text(exc, self.client.sensitive_values())
             logger.error(
