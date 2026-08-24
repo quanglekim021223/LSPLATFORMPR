@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -22,6 +22,49 @@ from app.routers.job_router import build_job_router
 from app.storage import BronzeWriter, LocalBronzeWriter
 
 logger = logging.getLogger(__name__)
+IngestionRunner = Callable[..., Awaitable[object]]
+
+
+def _scheduled_jobs(
+    config: Settings,
+    store: CheckpointStore,
+    writer: BronzeWriter,
+) -> dict[str, ScheduledJob]:
+    runners: tuple[tuple[str, bool, IngestionRunner], ...] = (
+        ("levelup", config.levelup_configured, run_levelup_ingestion),
+        ("skillup", config.skillup_configured, run_skillup_ingestion),
+        ("datacamp", config.datacamp_configured, run_datacamp_ingestion),
+        ("coursera", config.coursera_configured, run_coursera_ingestion),
+        ("linkedin", config.linkedin_configured, run_linkedin_ingestion),
+        ("harvard_hmm", config.harvard_hmm_configured, run_harvard_hmm_ingestion),
+        (
+            "harvard_spark",
+            config.harvard_spark_configured,
+            run_harvard_spark_ingestion,
+        ),
+        ("fams", config.fams_configured, run_fams_ingestion),
+    )
+    return {
+        vendor: _bind_scheduled_job(runner, config, store, writer)
+        for vendor, configured, runner in runners
+        if configured
+    }
+
+
+def _bind_scheduled_job(
+    runner: IngestionRunner,
+    config: Settings,
+    store: CheckpointStore,
+    writer: BronzeWriter,
+) -> ScheduledJob:
+    async def scheduled_ingestion() -> object:
+        return await runner(
+            config,
+            checkpoint_store=store,
+            bronze_writer=writer,
+        )
+
+    return scheduled_ingestion
 
 
 def create_app(
@@ -39,88 +82,7 @@ def create_app(
         await store.initialize()
         scheduler = None
         if config.scheduler_may_run:
-            jobs: dict[str, ScheduledJob] = {}
-
-            if config.levelup_configured:
-                async def scheduled_levelup_ingestion() -> object:
-                    return await run_levelup_ingestion(
-                        config,
-                        checkpoint_store=store,
-                        bronze_writer=writer,
-                    )
-
-                jobs["levelup"] = scheduled_levelup_ingestion
-
-            if config.skillup_configured:
-                async def scheduled_skillup_ingestion() -> object:
-                    return await run_skillup_ingestion(
-                        config,
-                        checkpoint_store=store,
-                        bronze_writer=writer,
-                    )
-
-                jobs["skillup"] = scheduled_skillup_ingestion
-
-            if config.datacamp_configured:
-                async def scheduled_datacamp_ingestion() -> object:
-                    return await run_datacamp_ingestion(
-                        config,
-                        checkpoint_store=store,
-                        bronze_writer=writer,
-                    )
-
-                jobs["datacamp"] = scheduled_datacamp_ingestion
-
-            if config.coursera_configured:
-                async def scheduled_coursera_ingestion() -> object:
-                    return await run_coursera_ingestion(
-                        config,
-                        checkpoint_store=store,
-                        bronze_writer=writer,
-                    )
-
-                jobs["coursera"] = scheduled_coursera_ingestion
-
-            if config.linkedin_configured:
-                async def scheduled_linkedin_ingestion() -> object:
-                    return await run_linkedin_ingestion(
-                        config,
-                        checkpoint_store=store,
-                        bronze_writer=writer,
-                    )
-
-                jobs["linkedin"] = scheduled_linkedin_ingestion
-
-            if config.harvard_hmm_configured:
-                async def scheduled_harvard_hmm_ingestion() -> object:
-                    return await run_harvard_hmm_ingestion(
-                        config,
-                        checkpoint_store=store,
-                        bronze_writer=writer,
-                    )
-
-                jobs["harvard_hmm"] = scheduled_harvard_hmm_ingestion
-
-            if config.harvard_spark_configured:
-                async def scheduled_harvard_spark_ingestion() -> object:
-                    return await run_harvard_spark_ingestion(
-                        config,
-                        checkpoint_store=store,
-                        bronze_writer=writer,
-                    )
-
-                jobs["harvard_spark"] = scheduled_harvard_spark_ingestion
-
-            if config.fams_configured:
-                async def scheduled_fams_ingestion() -> object:
-                    return await run_fams_ingestion(
-                        config,
-                        checkpoint_store=store,
-                        bronze_writer=writer,
-                    )
-
-                jobs["fams"] = scheduled_fams_ingestion
-
+            jobs = _scheduled_jobs(config, store, writer)
             if not jobs:
                 raise ValueError("Scheduler enabled but no vendor is fully configured")
             scheduler = build_scheduler(config, jobs)
