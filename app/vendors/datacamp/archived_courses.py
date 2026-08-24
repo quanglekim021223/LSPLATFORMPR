@@ -2,24 +2,16 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
-from typing import Any
 
 from app.helpers.security import sanitize_text
 from app.models import PageWrite
 from app.repositories.checkpoint_repository import CheckpointStore
 from app.storage import BronzeWriter
 from app.vendors.datacamp.client import DataCampClient, is_retryable_error
+from app.vendors.datacamp.models import extra_field_paths, validate_archived_catalog
 
 DOMAIN = "course_catalog_archived"
 logger = logging.getLogger(__name__)
-
-
-def _records_count(payload: Any) -> int:
-    data = payload.get("data") if isinstance(payload, dict) else None
-    if isinstance(data, list):
-        return len(data)
-    logger.warning("DataCamp archived catalog response field 'data' is not a list")
-    return 0
 
 
 async def ingest_archived_courses(
@@ -31,7 +23,14 @@ async def ingest_archived_courses(
 ) -> None:
     try:
         payload, raw_payload = await client.get_json("/v1/catalog/archived-courses")
-        records_count = _records_count(payload)
+        contract = validate_archived_catalog(payload)
+        records_count = len(contract.data)
+        extras = extra_field_paths(contract)
+        if extras:
+            logger.warning(
+                "DataCamp Archived Course Catalog contains new contract fields fields=%s",
+                ",".join(extras),
+            )
         await writer.write_page(
             PageWrite(
                 vendor="datacamp",

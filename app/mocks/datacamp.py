@@ -8,20 +8,82 @@ from fastapi import APIRouter, Header, HTTPException, Query, status
 router = APIRouter(tags=["DataCamp"])
 
 _TOKEN = "mock-datacamp-token"
+
+
+def course_payload(
+    course_id: str,
+    title: str,
+    *,
+    live: bool,
+    technology: str | None = "Python",
+) -> dict[str, Any]:
+    slug = course_id.removeprefix("course-")
+    return {
+        "id": course_id,
+        "title": title,
+        "description": f"Description for {title}",
+        "url": f"https://example.test/courses/{slug}/continue",
+        "imageUrl": {
+            "jpg": "https://example.test/images/course.jpg",
+            "png": "https://example.test/images/course.png",
+            "svg": "https://example.test/images/course.svg",
+        },
+        "technology": technology,
+        "instructors": [{"fullName": "DataCamp Instructor"}] if live else [],
+        "timeNeededInHours": 1,
+        "topic": (
+            {"name": "Programming", "description": None} if live else None
+        ),
+        "updatedAt": "2026-08-20T18:00:19.100Z",
+        "live": live,
+        "chapters": (
+            [
+                {
+                    "id": f"course-chapter-{slug}",
+                    "description": "Chapter description",
+                    "title": "Chapter title",
+                    "url": f"https://example.test/courses/{slug}/chapter",
+                }
+            ]
+            if live
+            else []
+        ),
+        "infoUrl": f"https://example.test/learn/{slug}",
+        "publicInfoUrl": f"https://example.test/public/{slug}",
+        "includedInLicenses": [],
+    }
+
+
+def event_payload(index: int) -> dict[str, Any]:
+    return {
+        "eventType": "completion" if index % 2 == 0 else "started",
+        "contentId": f"course-{29000 + index}",
+        "timestamp": f"2026-08-21T09:4{index}:00.000Z",
+        "parentContentId": None,
+        "user": {
+            "email": f"learner-{index}@example.test",
+            "nameid": f"LEARNER-{index}@EXAMPLE.TEST",
+            "lmsUsername": None,
+        },
+        "assessmentScore": None,
+        "knowledgeLevel": None,
+    }
+
+
 _LIVE_COURSES = {
     "data": [
-        {"id": "dc-python", "title": "Introduction to Python"},
-        {"id": "dc-sql", "title": "Introduction to SQL"},
+        course_payload("course-54859", "Introduction to Python", live=True),
+        course_payload("course-52942", "Introduction to SQL", live=True),
     ]
 }
 _ARCHIVED_COURSES = {
-    "data": [{"id": "dc-legacy-r", "title": "Legacy R"}]
+    "data": [
+        course_payload(
+            "course-1032", "Redacted DataCamp Course", live=False, technology=None
+        )
+    ]
 }
-_EVENTS = [
-    {"id": "event-01", "type": "course_completed"},
-    {"id": "event-02", "type": "chapter_completed"},
-    {"id": "event-03", "type": "course_completed"},
-]
+_EVENTS = [event_payload(1), event_payload(2), event_payload(3)]
 
 
 def _validate_headers(authorization: str | None, accept: str | None) -> None:
@@ -63,9 +125,10 @@ async def events(
     start = (page - 1) * page_size
     records = _EVENTS[start : start + page_size]
     return {
-        "events": records,
+        "data": records,
         "meta": {
             "page": page,
+            "pageSize": page_size,
             "numberOfPages": ceil(len(_EVENTS) / page_size),
         },
     }

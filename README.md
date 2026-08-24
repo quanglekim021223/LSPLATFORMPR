@@ -118,8 +118,13 @@ additive fields are retained and logged by field path without logging employee o
 
 DataCamp sends `Authorization: Bearer <DATACAMP_TOKEN>` and `Accept: application/json` on every
 request. Live and archived catalogs are fetched once per run because their pagination contract is
-not confirmed. Events use `DATACAMP_EVENTS_PAGE_SIZE` (maximum 1000) and continue until the current
-page reaches `meta.numberOfPages`.
+not present in the supplied response envelope. Events use `DATACAMP_EVENTS_PAGE_SIZE` (maximum
+1000) and continue until the current page reaches `meta.numberOfPages`.
+Both catalogs and Learning History Events are validated against DataCamp-specific Pydantic
+contracts before Bronze writes. Live catalog rows must have `live=true`, archived rows must have
+`live=false`, and Events must use the exact `data` plus `meta` envelope with matching page metadata.
+Contract-invalid responses fail only their domain and do not enter Bronze. Valid responses keep
+their original bytes, while additive fields produce path-only schema-drift warnings.
 
 Coursera exchanges HTTP Basic credentials for one run-scoped access token at
 `COURSERA_TOKEN_URL`, then sends `Authorization: Bearer <token>`. A `401` refreshes the token and
@@ -314,9 +319,8 @@ write semantics.
 - SkillUp runs its three independent domains concurrently. Each domain writes and checkpoints one
   page at a time, so the full dataset is never accumulated in memory.
 - DataCamp also runs its three domains concurrently. Live and archived catalog counts use the
-  length of the response `data` list while Bronze retains the original response bytes. If `data`
-  is not a list, ingestion logs a warning and reports zero records without discarding the raw
-  response. Events are written and checkpointed one page at a time.
+  length of the contract-valid response `data` list. Events require the documented `data` and
+  `meta` objects and are validated, written, and checkpointed one page at a time.
 - Coursera authenticates once per run, then runs its catalog pipeline and Learning History in
   parallel. Course Details run with at most `COURSERA_MAX_CONCURRENCY` requests. Every list,
   detail, and history response is stored raw; `records_count` is the length of `elements`, or zero
@@ -352,9 +356,9 @@ write semantics.
    including taxonomy rubrics/tags, nullable validation scores, AI ratings, and `skillPriorirty`.
 4. Whether SkillUp Assessment `sections` is omitted when `includeSections` is absent/false, and
    which report fields become null for incomplete assessments.
-5. Whether either DataCamp catalog endpoint later exposes pagination metadata.
-6. Whether DataCamp events are under `events` or `data`, and the exact types/edge cases for
-   `meta.numberOfPages` when the result is empty.
+5. The non-empty item shape of DataCamp `includedInLicenses`.
+6. The non-null types of DataCamp Events `assessmentScore` and `knowledgeLevel`, plus empty-result
+   behavior for `meta.numberOfPages`.
 7. OneLake/Fabric workspace, lakehouse, directory convention, authentication method, and atomic
    commit expectations.
 8. Production scheduler owner (single FastAPI instance vs Fabric/ADF/external orchestrator).

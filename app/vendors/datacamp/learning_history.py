@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from typing import Any
 
@@ -9,8 +10,10 @@ from app.models import PageWrite
 from app.repositories.checkpoint_repository import CheckpointStore
 from app.storage import BronzeWriter
 from app.vendors.datacamp.client import DataCampClient, is_retryable_error
+from app.vendors.datacamp.models import extra_field_paths, validate_events
 
 DOMAIN = "learning_history"
+logger = logging.getLogger(__name__)
 
 
 async def ingest_learning_history(
@@ -42,21 +45,18 @@ async def ingest_learning_history(
             params["to"] = to
         try:
             payload, raw_payload = await client.get_json("/v1/events", params)
-            if not isinstance(payload, dict):
-                raise ValueError("DataCamp events response must be a JSON object")
-            meta = payload.get("meta")
-            if not isinstance(meta, dict):
-                raise ValueError("DataCamp events response must contain a meta object")
-            number_of_pages = meta.get("numberOfPages")
-            if (
-                isinstance(number_of_pages, bool)
-                or not isinstance(number_of_pages, int)
-                or number_of_pages < 0
-            ):
-                raise ValueError(
-                    "DataCamp events meta.numberOfPages must be a non-negative integer"
+            contract = validate_events(
+                payload,
+                expected_page=page,
+                expected_page_size=settings.datacamp_events_page_size,
+            )
+            records_count = len(contract.data)
+            extras = extra_field_paths(contract)
+            if extras:
+                logger.warning(
+                    "DataCamp Learning History contains new contract fields fields=%s",
+                    ",".join(extras),
                 )
-            records_count = _records_count(payload)
             await writer.write_page(
                 PageWrite(
                     vendor="datacamp",
@@ -86,15 +86,7 @@ async def ingest_learning_history(
                 message,
             )
             raise
-        if page >= number_of_pages:
+        if page >= contract.meta.number_of_pages:
             break
         page += 1
     await checkpoints.mark_domain(run_id, DOMAIN, "completed")
-
-
-def _records_count(payload: dict[str, Any]) -> int:
-    for key in ("events", "data"):
-        records = payload.get(key)
-        if isinstance(records, list):
-            return len(records)
-    return 0
