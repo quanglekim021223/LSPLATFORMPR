@@ -11,6 +11,7 @@ from app.models import PageWrite
 from app.repositories.checkpoint_repository import CheckpointStore
 from app.storage import BronzeWriter
 from app.vendors.linkedin.client import LinkedInClient, is_retryable_error
+from app.vendors.linkedin.models import extra_field_paths, validate_activity_reports
 from app.vendors.linkedin.pagination import next_start
 
 DOMAIN = "learning_history"
@@ -52,7 +53,20 @@ async def ingest_learning_history(
                 payload, raw_payload = await client.get_json(
                     "/learningActivityReports", params
                 )
-                elements = _elements(payload)
+                contract = validate_activity_reports(
+                    payload,
+                    expected_start=start,
+                    expected_count=settings.linkedin_page_size,
+                )
+                elements = contract.elements
+                extras = extra_field_paths(contract)
+                if extras:
+                    logger.warning(
+                        "LinkedIn response contains new contract fields "
+                        "domain=%s fields=%s",
+                        DOMAIN,
+                        ",".join(extras),
+                    )
                 await writer.write_page(
                     PageWrite(
                         vendor="linkedin",
@@ -107,14 +121,3 @@ def parse_history_start(value: str) -> datetime:
     if parsed.tzinfo is None:
         raise ValueError("LINKEDIN_HISTORY_START_TIME must include a timezone")
     return parsed.astimezone(UTC)
-
-
-def _elements(payload: dict[str, Any]) -> list[Any]:
-    elements = payload.get("elements")
-    if isinstance(elements, list):
-        return elements
-    logger.warning(
-        "LinkedIn response elements is not a list domain=%s; records_count=0",
-        DOMAIN,
-    )
-    return []

@@ -7,6 +7,7 @@ from urllib.parse import parse_qs
 import httpx
 import pytest
 
+from app.mocks.linkedin import token_payload
 from app.vendors.linkedin.client import LinkedInClient
 from tests.conftest import no_sleep, response
 
@@ -24,7 +25,7 @@ async def test_authentication_contract_and_secrets_not_logged(
             "client_id": ["test-linkedin-client"],
             "client_secret": ["test-linkedin-secret"],
         }
-        return response(request, 200, {"access_token": "run-token"})
+        return response(request, 200, token_payload("run-token"))
 
     caplog.set_level(logging.DEBUG)
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
@@ -46,7 +47,9 @@ async def test_401_refreshes_token_and_retries_exactly_once(
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/oauth/v2/accessToken":
             calls["auth"] += 1
-            return response(request, 200, {"access_token": f"token-{calls['auth']}"})
+            return response(
+                request, 200, token_payload(f"token-{calls['auth']}")
+            )
         calls["get"] += 1
         expected = "token-1" if calls["get"] == 1 else "token-2"
         assert request.headers["Authorization"] == f"Bearer {expected}"
@@ -75,7 +78,9 @@ async def test_second_401_is_not_retried(
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/oauth/v2/accessToken":
             calls["auth"] += 1
-            return response(request, 200, {"access_token": f"token-{calls['auth']}"})
+            return response(
+                request, 200, token_payload(f"token-{calls['auth']}")
+            )
         calls["get"] += 1
         return response(request, 401, {})
 
@@ -99,7 +104,7 @@ async def test_authentication_reuses_http_retry(
         calls += 1
         if calls == 1:
             return response(request, 500, {"error": "temporary"})
-        return response(request, 200, {"access_token": "token"})
+        return response(request, 200, token_payload("token"))
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
         client = LinkedInClient(settings, http_client, sleep=no_sleep)  # type: ignore[arg-type]

@@ -151,7 +151,11 @@ milliseconds), splits through the current UTC time into windows no longer than 1
 must provide the exact query string containing one `{urn}` placeholder. The production filter is
 never inferred by code. See the official [Learning Assets](https://learn.microsoft.com/en-us/linkedin/learning/integrations/criteria-api)
 and [Learning Activity Reports](https://learn.microsoft.com/en-us/linkedin/learning/reference/learning-activity-reports-reference)
-contracts.
+contracts. Token, Learning Assets, Asset Detail, and Learning Activity Reports are validated
+against LinkedIn-specific Pydantic contracts before Bronze is written. Contract-invalid responses
+fail the affected domain and are not stored in Bronze. Valid response bytes remain unchanged;
+additive fields are retained and logged by field path only. Asset Detail must contain exactly one
+element whose `urn` matches the requested URN.
 
 Harvard HMM and Harvard Spark share the same implementation but use separate vendor names,
 credentials, Catalog codes, locks, run summaries, and Bronze directories. Each branch obtains one

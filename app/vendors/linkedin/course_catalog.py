@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import UTC, datetime
-from typing import Any
 
 from app.config import Settings
 from app.helpers.security import sanitize_text
@@ -11,6 +10,13 @@ from app.models import CourseResult, PageWrite
 from app.repositories.checkpoint_repository import CheckpointStore
 from app.storage import BronzeWriter
 from app.vendors.linkedin.client import LinkedInClient, is_retryable_error
+from app.vendors.linkedin.models import (
+    LinkedInContractModel,
+    LinkedInLearningAsset,
+    extra_field_paths,
+    validate_learning_asset_detail,
+    validate_learning_assets,
+)
 from app.vendors.linkedin.pagination import next_start
 
 CATALOG_DOMAIN = "course_catalog"
@@ -59,7 +65,13 @@ async def ingest_course_catalog(
         }
         try:
             payload, raw_payload = await client.get_json("/learningAssets", params)
-            elements = _elements(payload, CATALOG_DOMAIN)
+            contract = validate_learning_assets(
+                payload,
+                expected_start=start,
+                expected_count=settings.linkedin_page_size,
+            )
+            elements = contract.elements
+            _warn_extra_fields(contract, CATALOG_DOMAIN)
             await writer.write_page(
                 PageWrite(
                     vendor="linkedin",
@@ -149,7 +161,9 @@ async def ingest_asset_detail(
     try:
         params = client.asset_detail_params(urn)
         payload, raw_payload = await client.get_json("/learningAssets", params)
-        elements = _elements(payload, DETAIL_DOMAIN)
+        contract = validate_learning_asset_detail(payload, expected_urn=urn)
+        elements = contract.elements
+        _warn_extra_fields(contract, DETAIL_DOMAIN)
         await writer.write_page(
             PageWrite(
                 vendor="linkedin",
@@ -196,21 +210,15 @@ async def ingest_asset_detail(
     return result
 
 
-def _elements(payload: dict[str, Any], domain: str) -> list[Any]:
-    elements = payload.get("elements")
-    if isinstance(elements, list):
-        return elements
-    logger.warning(
-        "LinkedIn response elements is not a list domain=%s; records_count=0",
-        domain,
-    )
-    return []
+def _urns(elements: list[LinkedInLearningAsset]) -> list[str]:
+    return [element.urn for element in elements]
 
 
-def _urns(elements: list[Any]) -> list[str]:
-    values: list[str] = []
-    for element in elements:
-        value = element.get("urn") if isinstance(element, dict) else None
-        if value is not None and str(value).strip():
-            values.append(str(value))
-    return values
+def _warn_extra_fields(contract: LinkedInContractModel, domain: str) -> None:
+    paths = extra_field_paths(contract)
+    if paths:
+        logger.warning(
+            "LinkedIn response contains new contract fields domain=%s fields=%s",
+            domain,
+            ",".join(paths),
+        )

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import random
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
@@ -10,6 +11,8 @@ import httpx
 
 from app.config import Settings
 from app.helpers.http_client import RetryingHttpClient
+
+logger = logging.getLogger(__name__)
 
 
 class LinkedInResponseContractError(RuntimeError):
@@ -55,12 +58,16 @@ class LinkedInClient:
             raise LinkedInResponseContractError(
                 "LinkedIn token response must be valid JSON"
             ) from exc
-        token = payload.get("access_token") if isinstance(payload, dict) else None
-        if not isinstance(token, str) or not token.strip():
-            raise LinkedInResponseContractError(
-                "LinkedIn token response did not contain access_token"
+        from app.vendors.linkedin.models import extra_field_paths, validate_token
+
+        contract = validate_token(payload)
+        extras = extra_field_paths(contract)
+        if extras:
+            logger.warning(
+                "LinkedIn Token contains new contract fields=%s",
+                ",".join(extras),
             )
-        self._token = token.strip()
+        self._token = contract.access_token.strip()
         return self._token
 
     async def get_json(

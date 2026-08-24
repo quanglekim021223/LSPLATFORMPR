@@ -10,10 +10,93 @@ router = APIRouter(tags=["LinkedIn Learning"])
 _CLIENT_ID = "mock-linkedin-client"
 _CLIENT_SECRET = "mock-linkedin-secret"
 _TOKEN = "mock-linkedin-token"
+
+
+def token_payload(token_value: str = _TOKEN) -> dict[str, str | int]:
+    return {"access_token": token_value, "expires_in": 7_776_000}
+
+
+def _localized(value: str) -> dict[str, Any]:
+    return {"locale": {"country": "US", "language": "en"}, "value": value}
+
+
+def asset_payload(urn: str, title: str) -> dict[str, Any]:
+    localized_title = _localized(title)
+    return {
+        "urn": urn,
+        "details": {
+            "images": {"primary": "https://example.test/course.jpg"},
+            "descriptionIncludingHtml": _localized(f"<p>{title}</p>"),
+            "lastUpdatedAt": 1_787_122_740_000,
+            "publishedAt": 1_700_000_000_000,
+            "discoverableBy": [
+                {
+                    "accessor": {
+                        "name": _localized("FPT Software"),
+                        "urn": "urn:li:enterpriseAccount:1",
+                    }
+                }
+            ],
+            "description": _localized(f"Description for {title}"),
+            "shortDescription": _localized(title),
+            "availability": "AVAILABLE",
+            "availableLocales": [{"country": "US", "language": "en"}],
+            "relationships": [],
+            "classifications": [],
+            "urls": {
+                "ssoLaunch": "https://example.test/sso",
+                "webLaunch": "https://example.test/web",
+                "aiccLaunch": "https://example.test/aicc",
+            },
+            "shortDescriptionIncludingHtml": _localized(f"<p>{title}</p>"),
+            "contributors": [],
+            "timeToComplete": {"duration": 3600, "unit": "SECOND"},
+        },
+        "title": localized_title,
+        "type": "COURSE",
+        "contents": [],
+    }
+
+
+def activity_report_payload(index: int, started_at: int) -> dict[str, Any]:
+    return {
+        "latestDataAt": started_at,
+        "learnerDetails": {
+            "name": f"Learner {index}",
+            "enterpriseGroups": ["OFFICIAL"],
+            "entity": {
+                "profileUrn": (
+                    "urn:li:enterpriseProfile:(urn:li:enterpriseAccount:1,"
+                    f"{index})"
+                )
+            },
+            "email": f"learner{index}@example.test",
+            "customAttributes": {},
+            "uniqueUserId": f"learner{index}@example.test",
+        },
+        "activities": [
+            {
+                "engagementType": "SECONDS_VIEWED",
+                "lastEngagedAt": started_at,
+                "firstEngagedAt": started_at,
+                "assetType": "COURSE",
+                "engagementMetricQualifier": "TOTAL",
+                "engagementValue": index,
+            }
+        ],
+        "contentDetails": {
+            "name": f"Course {index}",
+            "contentProviderName": "LinkedIn",
+            "contentUrn": f"urn:li:lyndaCourse:{index}",
+            "locale": {"country": "US", "language": "en"},
+        },
+    }
+
+
 _ASSETS = [
-    {"urn": "urn:li:lyndaCourse:1", "title": "Python"},
-    {"urn": "urn:li:lyndaCourse:2", "title": "SQL"},
-    {"urn": "urn:li:lyndaCourse:3", "title": "Data Engineering"},
+    asset_payload("urn:li:lyndaCourse:1", "Python"),
+    asset_payload("urn:li:lyndaCourse:2", "SQL"),
+    asset_payload("urn:li:lyndaCourse:3", "Data Engineering"),
 ]
 
 
@@ -36,7 +119,7 @@ def _page(
                 "type": "application/json",
             }
         )
-    return {
+    payload = {
         "elements": elements,
         "paging": {
             "total": len(records),
@@ -45,6 +128,9 @@ def _page(
             "links": links,
         },
     }
+    if endpoint == "learningAssets":
+        payload["metadata"] = {}
+    return payload
 
 
 @router.post("/oauth/v2/accessToken")
@@ -56,7 +142,7 @@ async def token(request: Request) -> dict[str, str | int]:
         "client_secret": [_CLIENT_SECRET],
     }:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid mock credentials")
-    return {"access_token": _TOKEN, "expires_in": 3600}
+    return token_payload()
 
 
 @router.get("/learningAssets")
@@ -91,11 +177,5 @@ async def activity_reports(
     _validate_bearer(authorization)
     if q != "criteria" or unit != "DAY":
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid criteria")
-    records = [
-        {
-            "id": f"activity-{started_at}",
-            "startedAt": started_at,
-            "durationDays": duration,
-        }
-    ]
+    records = [activity_report_payload(duration, started_at)]
     return _page(records, start, count, "learningActivityReports")

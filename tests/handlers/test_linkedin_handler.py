@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 from collections import Counter
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -11,8 +10,41 @@ import httpx
 import pytest
 
 from app.handlers.linkedin_handler import run_linkedin_ingestion
+from app.mocks.linkedin import activity_report_payload, asset_payload, token_payload
 from app.models import RunStatus
 from tests.conftest import no_sleep, response
+
+
+def _page(
+    elements: list[dict[str, object]],
+    *,
+    start: int,
+    count: int = 2,
+    total: int | None = None,
+    next_start: int | None = None,
+    metadata: bool = False,
+) -> dict[str, object]:
+    links = []
+    if next_start is not None:
+        links.append(
+            {
+                "type": "application/json",
+                "rel": "next",
+                "href": f"/v2/resource?start={next_start}&count={count}",
+            }
+        )
+    payload: dict[str, object] = {
+        "elements": elements,
+        "paging": {
+            "start": start,
+            "count": count,
+            "links": links,
+            "total": len(elements) if total is None else total,
+        },
+    }
+    if metadata:
+        payload["metadata"] = {}
+    return payload
 
 
 @pytest.mark.asyncio
@@ -29,18 +61,24 @@ async def test_full_pipeline_windows_pagination_raw_and_concurrency(
     history_calls: list[tuple[int, int, int]] = []
     active_details = 0
     maximum_details = 0
-    catalog_raw = (
-        b'{\n  "elements": [{"urn":"urn:li:course:1"},'
-        b'{"urn":"urn:li:course:2"}], "paging": {"links": ['
-        b'{"rel":"next","href":"/v2/learningAssets?start=2&count=2"}]}}'
+    first_catalog_page = _page(
+        [
+            asset_payload("urn:li:course:1", "Course 1"),
+            asset_payload("urn:li:course:2", "Course 2"),
+        ],
+        start=0,
+        total=3,
+        next_start=2,
+        metadata=True,
     )
+    catalog_raw = json.dumps(first_catalog_page, indent=2).encode()
 
     async def handler(request: httpx.Request) -> httpx.Response:
         nonlocal active_details, maximum_details
         path = request.url.path
         calls[path] += 1
         if path == "/oauth/v2/accessToken":
-            return response(request, 200, {"access_token": "shared-token"})
+            return response(request, 200, token_payload("shared-token"))
         assert request.headers["Authorization"] == "Bearer shared-token"
         if path == "/v2/learningAssets":
             detail_urn = request.url.params.get("assetFilteringCriteria.urn")
@@ -52,7 +90,12 @@ async def test_full_pipeline_windows_pagination_raw_and_concurrency(
                 return response(
                     request,
                     200,
-                    {"elements": [{"urn": detail_urn}], "paging": {"links": []}},
+                    _page(
+                        [asset_payload(detail_urn, f"Detail {detail_urn}")],
+                        start=0,
+                        total=1,
+                        metadata=True,
+                    ),
                 )
             start = int(request.url.params["start"])
             catalog_starts.append(start)
@@ -66,10 +109,12 @@ async def test_full_pipeline_windows_pagination_raw_and_concurrency(
             return response(
                 request,
                 200,
-                {
-                    "elements": [{"urn": "urn:li:course:3"}],
-                    "paging": {"links": []},
-                },
+                _page(
+                    [asset_payload("urn:li:course:3", "Course 3")],
+                    start=2,
+                    total=3,
+                    metadata=True,
+                ),
             )
         if path == "/v2/learningActivityReports":
             assert request.url.params["q"] == "criteria"
@@ -79,19 +124,23 @@ async def test_full_pipeline_windows_pagination_raw_and_concurrency(
             started_at = int(request.url.params["startedAt"])
             start = int(request.url.params["start"])
             history_calls.append((started_at, duration, start))
-            links = (
+            elements = (
                 [
-                    {
-                        "rel": "next",
-                        "href": "/v2/learningActivityReports?start=2&count=2",
-                    }
+                    activity_report_payload(1, started_at),
+                    activity_report_payload(2, started_at),
                 ]
                 if start == 0
-                else []
+                else [activity_report_payload(3, started_at)]
             )
-            elements = [{"id": 1}, {"id": 2}] if start == 0 else [{"id": 3}]
             return response(
-                request, 200, {"elements": elements, "paging": {"links": links}}
+                request,
+                200,
+                _page(
+                    elements,
+                    start=start,
+                    total=3,
+                    next_start=2 if start == 0 else None,
+                ),
             )
         raise AssertionError(request.url)
 
@@ -123,8 +172,8 @@ async def test_full_pipeline_windows_pagination_raw_and_concurrency(
 
 
 @pytest.mark.asyncio
-async def test_non_list_elements_warns_counts_zero_and_preserves_raw(
-    settings_factory: Callable[..., object], caplog: pytest.LogCaptureFixture
+async def test_invalid_contract_fails_without_writing_raw_to_bronze(
+    settings_factory: Callable[..., object],
 ) -> None:
     settings = settings_factory(
         linkedin_history_start_time=(datetime.now(UTC) - timedelta(hours=1)).isoformat()
@@ -133,7 +182,7 @@ async def test_non_list_elements_warns_counts_zero_and_preserves_raw(
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/oauth/v2/accessToken":
-            return response(request, 200, {"access_token": "token"})
+            return response(request, 200, token_payload("token"))
         return httpx.Response(
             200,
             content=invalid_raw,
@@ -141,23 +190,17 @@ async def test_non_list_elements_warns_counts_zero_and_preserves_raw(
             request=request,
         )
 
-    caplog.set_level(logging.WARNING)
     summary = await run_linkedin_ingestion(
         settings,  # type: ignore[arg-type]
         transport=httpx.MockTransport(handler),
         sleep=no_sleep,
     )
 
-    assert summary.status == RunStatus.SUCCEEDED
-    assert summary.records_by_domain == {
-        "course_catalog": 0,
-        "learning_history": 0,
-    }
-    assert caplog.text.count("elements is not a list") == 2
+    assert summary.status == RunStatus.FAILED
+    assert summary.records_by_domain == {}
     raw_pages = list(settings.bronze_local_path.rglob("*.json"))  # type: ignore[attr-defined]
     response_pages = [path for path in raw_pages if path.name.startswith("offset=")]
-    assert len(response_pages) == 2
-    assert all(page.read_bytes() == invalid_raw for page in response_pages)
+    assert response_pages == []
 
 
 @pytest.mark.asyncio
