@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # FSA Learning Vendor Ingestion
 
 FastAPI service for scheduled ingestion of learning-vendor data into a raw Bronze layer. It
@@ -372,3 +373,6 @@ provided. This service therefore always sends `startDate` from
 `SKILLUP_ASSESSMENT_START_DATE` (default `2000-01-01T00:00:00Z`) and sets `endDate` to the current
 UTC time. Pagination then retrieves every report in that configured range.
 # LSPLATFORMPR
+=======
+DataLake
+>>>>>>> main
