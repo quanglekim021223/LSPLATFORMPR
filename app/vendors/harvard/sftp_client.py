@@ -15,7 +15,13 @@ from app.helpers.security import sanitize_text
 from app.models import BinaryFileWrite
 from app.repositories.checkpoint_repository import CheckpointStore
 from app.storage import BronzeWriter
-from app.vendors.harvard.models import HarvardVendorConfig, RemoteFile, SFTPTransport
+from app.vendors.harvard.models import (
+    HarvardResponseContractError,
+    HarvardVendorConfig,
+    RemoteFile,
+    SFTPTransport,
+    validate_history_csv,
+)
 
 DOMAIN = "learning_history"
 
@@ -199,6 +205,7 @@ async def ingest_learning_history(
                 now=now,
                 sleep=sleep,
             )
+            records_count = validate_history_csv(remote_file.content, vendor.vendor)
             await writer.write_file(
                 BinaryFileWrite(
                     vendor=vendor.vendor,
@@ -211,15 +218,26 @@ async def ingest_learning_history(
                     file_size=remote_file.size,
                     remote_modified_time=remote_file.modified_at,
                     downloaded_at=datetime.now(UTC),
+                    records_count=records_count,
                 )
             )
-            await checkpoints.record_completed_page(run_id, DOMAIN, offset, 0)
+            await checkpoints.record_completed_page(
+                run_id, DOMAIN, offset, records_count
+            )
             await checkpoints.record_completed_source_file(
                 vendor.vendor, DOMAIN, source_key, run_id
             )
         except Exception as exc:
             message = sanitize_text(exc, settings.harvard_secrets(vendor.vendor))
-            retryable = not isinstance(exc, (FileNotFoundError, TypeError, ValueError))
+            retryable = not isinstance(
+                exc,
+                (
+                    FileNotFoundError,
+                    HarvardResponseContractError,
+                    TypeError,
+                    ValueError,
+                ),
+            )
             await checkpoints.record_failed_page(
                 run_id, DOMAIN, offset, message, retryable=retryable
             )

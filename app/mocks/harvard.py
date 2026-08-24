@@ -18,20 +18,68 @@ _CLIENTS = {
     "mock-hmm-client": ("mock-hmm-secret", "mock-hmm-token"),
     "mock-spark-client": ("mock-spark-secret", "mock-spark-token"),
 }
+
+
+def token_payload(token_value: str) -> dict[str, str | int]:
+    return {"access_token": token_value, "expires_in": 3600}
+
+
+def catalog_item(product_id: str, title: str) -> dict[str, str]:
+    return {
+        "ProductId": product_id,
+        "AssetType": "Topic",
+        "AssetFormat": "HTML",
+        "Title": title,
+        "Description": f"Description for {title}",
+        "URL": f"https://example.test/assets/{product_id}",
+        "ImageURL": "https://example.test/catalog.png",
+        "Authors": "Harvard Business Publishing",
+        "Duration": "60",
+        "Language": "ENG",
+        "PublicationDate": "2026-01-01",
+        "CopyrightHolder": "Harvard Business Publishing",
+        "SubjectTags": "Leadership",
+        "Status": "Active",
+        "MajorDiscipline": "General Management",
+        "Series": "",
+        "Skills": "Leading",
+        "LastModifiedDate": "2026-08-01",
+    }
+
+
+def history_csv(vendor: str, report_date: str = "2026-08-22") -> bytes:
+    if vendor == "harvard_hmm":
+        compact_date = report_date.replace("-", "")
+        return (
+            "EventDate,Username,FirstName,LastName,Email,EventName,Title,Product\n"
+            f"{compact_date},mock-hmm@example.test,Mock,Learner,"
+            "mock-hmm@example.test,Completed,Decision Making,186DM-HTM-ENG\n"
+        ).encode()
+    if vendor == "harvard_spark":
+        return (
+            "Event Date,Username,First Name,Last Name,Email,Role,Event Name,"
+            "Title,Asset Type,Product ID,Skills,Duration,Registration Date\n"
+            f"{report_date},mock-spark@example.test,Mock,Learner,"
+            "mock-spark@example.test,Learner,Views,Course Title,Videos,"
+            "PRODUCT-1,Leadership,4,2026-01-21\n"
+        ).encode()
+    raise ValueError(f"Unsupported Harvard vendor: {vendor}")
+
+
 _ORGS = {
     "mock-hmm-org": (
         "HMM",
         [
-            {"id": "hmm-1", "title": "HMM Course 1"},
-            {"id": "hmm-2", "title": "HMM Course 2"},
-            {"id": "hmm-3", "title": "HMM Course 3"},
+            catalog_item("hmm-1", "HMM Course 1"),
+            catalog_item("hmm-2", "HMM Course 2"),
+            catalog_item("hmm-3", "HMM Course 3"),
         ],
     ),
     "mock-spark-org": (
         "HBR_SPARK",
         [
-            {"id": "spark-1", "title": "Spark Course 1"},
-            {"id": "spark-2", "title": "Spark Course 2"},
+            catalog_item("spark-1", "Spark Course 1"),
+            catalog_item("spark-2", "Spark Course 2"),
         ],
     ),
 }
@@ -87,8 +135,8 @@ class GeneratedMockHarvardSFTPTransport:
         self.calls.append(remote_path)
         file_name = PurePosixPath(remote_path).name
         prefixes = {
-            "harvard_hmm_reporting_": ("hmm", "hmm-course-001"),
-            "harvard_Spark_reporting_": ("spark", "spark-course-001"),
+            "harvard_hmm_reporting_": "hmm",
+            "harvard_Spark_reporting_": "spark",
         }
         matched = next(
             (
@@ -100,16 +148,13 @@ class GeneratedMockHarvardSFTPTransport:
         )
         if matched is None:
             return None
-        prefix, (vendor, course_id) = matched
+        prefix, vendor = matched
         date_value = file_name.removeprefix(prefix).removesuffix(".csv")
         try:
             report_date = datetime.strptime(date_value, "%Y%m%d").date()
         except ValueError:
             return None
-        content = (
-            "employee_id,course_id,status,report_date\n"
-            f"mock-{vendor}-learner,{course_id},COMPLETED,{report_date.isoformat()}\n"
-        ).encode()
+        content = history_csv(f"harvard_{vendor}", report_date.isoformat())
         return RemoteFile(
             remote_path=remote_path,
             file_name=file_name,
@@ -142,7 +187,7 @@ async def token(
         or form.get("scope") != ["hbp.org.api/catalog.read"]
     ):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid mock credentials")
-    return {"access_token": expected[1], "expires_in": 3600}
+    return token_payload(expected[1])
 
 
 @router.get("/v1/api/catalog/{org_key}")
@@ -164,4 +209,9 @@ async def catalog(
     if authorization != f"Bearer {expected_token}":
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid mock token")
     records = config[1]
-    return {"count": len(records), "list": records[start : start + limit]}
+    return {
+        "count": len(records),
+        "limit": limit,
+        "list": records[start : start + limit],
+        "start": start,
+    }

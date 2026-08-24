@@ -16,13 +16,22 @@ import pytest
 from app.config import Settings
 from app.handlers.harvard_hmm_handler import run_harvard_hmm_ingestion
 from app.handlers.harvard_spark_handler import run_harvard_spark_ingestion
-from app.mocks.harvard import MockHarvardSFTPTransport
+from app.mocks.harvard import (
+    MockHarvardSFTPTransport,
+    catalog_item,
+    history_csv,
+    token_payload,
+)
 from app.models import RunStatus
 from app.vendors.harvard.models import RemoteFile
 from app.vendors.harvard.sftp_client import AsyncSSHSFTPTransport
 from tests.conftest import no_sleep, response
 
 NOW = datetime(2026, 8, 23, 5, 0, tzinfo=ZoneInfo("Asia/Ho_Chi_Minh"))
+
+
+def _empty_catalog() -> dict[str, object]:
+    return {"count": 0, "limit": 2, "list": [], "start": 0}
 
 
 @pytest.mark.parametrize(
@@ -55,13 +64,20 @@ async def test_full_pipeline_paginates_and_preserves_catalog_and_csv(
 ) -> None:
     settings = settings_factory()
     starts: list[int] = []
-    raw_first_page = (
-        b'{\n  "count": 3, "list": [{"id": "one"}, {"id": "two"}]\n}'
-    )
+    first_page = {
+        "count": 3,
+        "limit": 2,
+        "list": [
+            catalog_item("one", "Course One"),
+            catalog_item("two", "Course Two"),
+        ],
+        "start": 0,
+    }
+    raw_first_page = json.dumps(first_page, indent=2).encode()
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.method == "POST":
-            return response(request, 200, {"access_token": "catalog-token"})
+            return response(request, 200, token_payload("catalog-token"))
         assert request.url.path == f"/v1/api/catalog/{org_key}"
         assert request.headers["Authorization"] == "Bearer catalog-token"
         assert request.url.params["catalogs"] == catalog_code
@@ -75,11 +91,20 @@ async def test_full_pipeline_paginates_and_preserves_catalog_and_csv(
                 headers={"Content-Type": "application/json"},
                 request=request,
             )
-        return response(request, 200, {"count": 3, "list": [{"id": "three"}]})
+        return response(
+            request,
+            200,
+            {
+                "count": 3,
+                "limit": 2,
+                "list": [catalog_item("three", "Course Three")],
+                "start": 2,
+            },
+        )
 
     file_name = f"{prefix}20260822.csv"
     remote_path = f"/reports/{file_name}"
-    raw_csv = b'user_id,course_id,status\r\n1,course-1,completed\r\n'
+    raw_csv = history_csv(vendor, "2026-08-22")
     sftp = MockHarvardSFTPTransport(
         {
             remote_path: RemoteFile(
@@ -105,7 +130,7 @@ async def test_full_pipeline_paginates_and_preserves_catalog_and_csv(
     assert summary.status == RunStatus.SUCCEEDED
     assert summary.records_by_domain == {
         "course_catalog": 3,
-        "learning_history": 0,
+        "learning_history": 1,
     }
     assert starts == [0, 2]
     assert sftp.calls == [remote_path, remote_path, remote_path]
@@ -167,8 +192,8 @@ async def test_local_mock_mode_runs_without_real_sftp_credentials(
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.method == "POST":
-            return response(request, 200, {"access_token": "mock-token"})
-        return response(request, 200, {"count": 0, "list": []})
+            return response(request, 200, token_payload("mock-token"))
+        return response(request, 200, _empty_catalog())
 
     summary = await runner(
         settings,
@@ -184,7 +209,6 @@ async def test_local_mock_mode_runs_without_real_sftp_credentials(
         )
     )
     assert b"mock-" in csv_path.read_bytes()
-    assert b"COMPLETED" in csv_path.read_bytes()
 
 
 @pytest.mark.asyncio
@@ -195,13 +219,16 @@ async def test_history_backfills_once_then_only_downloads_new_date(
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.method == "POST":
-            return response(request, 200, {"access_token": "token"})
-        return response(request, 200, {"count": 0, "list": []})
+            return response(request, 200, token_payload("token"))
+        return response(request, 200, _empty_catalog())
 
     def remote(report_date: str) -> RemoteFile:
         name = f"harvard_hmm_reporting_{report_date}.csv"
         path = f"/reports/{name}"
-        content = f"report_date\n{report_date}\n".encode()
+        content = history_csv(
+            "harvard_hmm",
+            datetime.strptime(report_date, "%Y%m%d").date().isoformat(),
+        )
         return RemoteFile(
             remote_path=path,
             file_name=name,
@@ -277,13 +304,16 @@ async def test_backfill_keeps_successful_files_and_retries_only_missing_file(
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.method == "POST":
-            return response(request, 200, {"access_token": "token"})
-        return response(request, 200, {"count": 0, "list": []})
+            return response(request, 200, token_payload("token"))
+        return response(request, 200, _empty_catalog())
 
     def remote(report_date: str) -> RemoteFile:
         name = f"harvard_hmm_reporting_{report_date}.csv"
         path = f"/reports/{name}"
-        content = f"{report_date}\n".encode()
+        content = history_csv(
+            "harvard_hmm",
+            datetime.strptime(report_date, "%Y%m%d").date().isoformat(),
+        )
         return RemoteFile(
             remote_path=path,
             file_name=name,
@@ -334,9 +364,9 @@ async def test_start_date_is_only_sent_when_explicitly_requested(
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.method == "POST":
-            return response(request, 200, {"access_token": "token"})
+            return response(request, 200, token_payload("token"))
         assert request.url.params["startDate"] == "20260801"
-        return response(request, 200, {"count": 0, "list": []})
+        return response(request, 200, _empty_catalog())
 
     file_name = "harvard_hmm_reporting_20260822.csv"
     sftp = MockHarvardSFTPTransport(
@@ -344,8 +374,8 @@ async def test_start_date_is_only_sent_when_explicitly_requested(
             f"/reports/{file_name}": RemoteFile(
                 remote_path=f"/reports/{file_name}",
                 file_name=file_name,
-                content=b"header\n",
-                size=7,
+                content=history_csv("harvard_hmm"),
+                size=len(history_csv("harvard_hmm")),
                 modified_at=datetime(2026, 8, 22, tzinfo=UTC),
             )
         }
@@ -362,7 +392,7 @@ async def test_start_date_is_only_sent_when_explicitly_requested(
 
 
 @pytest.mark.asyncio
-async def test_invalid_catalog_contract_keeps_raw_and_causes_partial_failure(
+async def test_invalid_catalog_contract_is_not_written_and_causes_partial_failure(
     settings_factory: Callable[..., Settings],
 ) -> None:
     settings = settings_factory()
@@ -370,7 +400,7 @@ async def test_invalid_catalog_contract_keeps_raw_and_causes_partial_failure(
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.method == "POST":
-            return response(request, 200, {"access_token": "token"})
+            return response(request, 200, token_payload("token"))
         return httpx.Response(
             200,
             content=invalid_raw,
@@ -385,8 +415,8 @@ async def test_invalid_catalog_contract_keeps_raw_and_causes_partial_failure(
             path: RemoteFile(
                 remote_path=path,
                 file_name=file_name,
-                content=b"header\n",
-                size=7,
+                content=history_csv("harvard_hmm"),
+                size=len(history_csv("harvard_hmm")),
                 modified_at=datetime(2026, 8, 22, tzinfo=UTC),
             )
         }
@@ -400,12 +430,53 @@ async def test_invalid_catalog_contract_keeps_raw_and_causes_partial_failure(
     )
 
     assert summary.status == RunStatus.PARTIAL_FAILURE
-    stored = next(
+    assert not list(
         settings.bronze_local_path.glob(
             "harvard_hmm/course_catalog/**/offset=000000.json"
         )
     )
-    assert stored.read_bytes() == invalid_raw
+
+
+@pytest.mark.asyncio
+async def test_invalid_history_contract_is_not_written_and_causes_partial_failure(
+    settings_factory: Callable[..., Settings],
+) -> None:
+    settings = settings_factory()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return response(request, 200, token_payload("token"))
+        return response(request, 200, _empty_catalog())
+
+    file_name = "harvard_hmm_reporting_20260822.csv"
+    path = f"/reports/{file_name}"
+    invalid_csv = b"EventDate,Unexpected\n20260822,value\n"
+    sftp = MockHarvardSFTPTransport(
+        {
+            path: RemoteFile(
+                remote_path=path,
+                file_name=file_name,
+                content=invalid_csv,
+                size=len(invalid_csv),
+                modified_at=datetime(2026, 8, 22, tzinfo=UTC),
+            )
+        }
+    )
+
+    summary = await run_harvard_hmm_ingestion(
+        settings,
+        transport=httpx.MockTransport(handler),
+        sftp_transport=sftp,
+        sleep=no_sleep,
+        now=lambda: NOW,
+    )
+
+    assert summary.status == RunStatus.PARTIAL_FAILURE
+    assert not list(
+        settings.bronze_local_path.glob(
+            "harvard_hmm/learning_history/**/*.csv"
+        )
+    )
 
 
 @pytest.mark.asyncio
@@ -416,8 +487,8 @@ async def test_missing_sftp_file_causes_partial_failure_and_redacts_secrets(
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.method == "POST":
-            return response(request, 200, {"access_token": "token"})
-        return response(request, 200, {"count": 0, "list": []})
+            return response(request, 200, token_payload("token"))
+        return response(request, 200, _empty_catalog())
 
     class SecretFailureTransport:
         async def __aenter__(self) -> SecretFailureTransport:
@@ -469,8 +540,8 @@ async def test_missing_catalog_configuration_only_fails_catalog_branch(
             path: RemoteFile(
                 remote_path=path,
                 file_name=file_name,
-                content=b"header\n",
-                size=7,
+                content=history_csv("harvard_hmm"),
+                size=len(history_csv("harvard_hmm")),
                 modified_at=datetime(2026, 8, 22, tzinfo=UTC),
             )
         }

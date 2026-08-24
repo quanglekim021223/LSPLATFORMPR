@@ -55,6 +55,7 @@ class BinaryFileWrite:
     file_size: int
     remote_modified_time: datetime
     downloaded_at: datetime
+    records_count: int = 0
 
 
 @dataclass(slots=True)

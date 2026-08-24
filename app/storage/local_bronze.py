@@ -117,6 +117,7 @@ class LocalBronzeWriter:
             "remote_modified_time": file.remote_modified_time.isoformat(),
             "downloaded_at": file.downloaded_at.isoformat(),
             "sha256": hashlib.sha256(file.raw_payload).hexdigest(),
+            "records_count": file.records_count,
         }
         files = {
             str(item["remote_path"]): item

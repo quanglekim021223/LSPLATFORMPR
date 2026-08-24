@@ -162,6 +162,10 @@ credentials, Catalog codes, locks, run summaries, and Bronze directories. Each b
 Catalog token with HTTP Basic credentials and form scope `hbp.org.api/catalog.read`; a `401`
 refreshes the token and retries exactly once. Daily scheduling performs a full Catalog load from
 `start=0`; `startDate=YYYYMMDD` is available only to explicit callers for a future delta flow.
+Token and Catalog responses use shared Harvard Pydantic contracts. HMM and Spark CSV reports use
+separate header/row contracts because their column names and shapes differ. Contract-invalid JSON
+or CSV fails the affected domain and is not written to Bronze; valid payload bytes are preserved
+unchanged. Additive Catalog fields are retained and logged by field path only.
 
 Learning History does not use the Catalog token. It connects with `asyncssh`, and
 `HARVARD_SFTP_KNOWN_HOSTS` must point to a trusted OpenSSH known-hosts file. Unknown host keys are
@@ -339,9 +343,9 @@ write semantics.
 - LinkedIn follows the same one-token and parallel pipeline pattern. Asset Details use at most
   `LINKEDIN_MAX_CONCURRENCY` requests; history pages are written immediately and use globally
   increasing Bronze offsets so pages from separate 14-day windows cannot overwrite one another.
-- Each Harvard job runs Catalog and SFTP History independently in parallel. Catalog pages are
-  written immediately and counted from `len(payload["list"])`; a non-array `list` preserves raw
-  JSON but fails that domain. History backfills all configured dates sequentially, writes each
+- Each Harvard job runs Catalog and SFTP History independently in parallel. Contract-valid Catalog
+  pages are written immediately and counted from the validated `list`; an invalid response does
+  not enter Bronze. History backfills all configured dates sequentially, writes each
   exact CSV plus checksum metadata, and skips remote paths already recorded in
   `ingested_source_files`. Missing dates do not discard files that succeeded. One failed branch
   produces `PARTIAL_FAILURE` while preserving the successful branch.

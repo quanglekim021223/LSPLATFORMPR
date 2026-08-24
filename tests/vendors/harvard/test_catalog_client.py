@@ -8,6 +8,7 @@ import httpx
 import pytest
 
 from app.config import Settings
+from app.mocks.harvard import token_payload
 from app.vendors.harvard.catalog_client import HarvardCatalogClient
 from app.vendors.harvard.models import vendor_config
 from tests.conftest import no_sleep, response
@@ -37,7 +38,9 @@ async def test_basic_auth_form_and_refreshes_401_exactly_once(
                 "grant_type": ["client_credentials"],
                 "scope": ["hbp.org.api/catalog.read"],
             }
-            return response(request, 200, {"access_token": f"token-{token_calls}"})
+            return response(
+                request, 200, token_payload(f"token-{token_calls}")
+            )
 
         get_tokens.append(request.headers["Authorization"])
         if len(get_tokens) == 1:
@@ -70,7 +73,9 @@ async def test_second_401_is_returned_without_another_refresh(
         nonlocal token_calls, get_calls
         if request.method == "POST":
             token_calls += 1
-            return response(request, 200, {"access_token": f"token-{token_calls}"})
+            return response(
+                request, 200, token_payload(f"token-{token_calls}")
+            )
         get_calls += 1
         return response(request, 401, {"message": "still unauthorized"})
 
@@ -100,7 +105,7 @@ async def test_authentication_uses_shared_http_retry(
         calls += 1
         if calls == 1:
             return response(request, 500, {"message": "temporary"})
-        return response(request, 200, {"access_token": "token"})
+        return response(request, 200, token_payload("token"))
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         client = HarvardCatalogClient(

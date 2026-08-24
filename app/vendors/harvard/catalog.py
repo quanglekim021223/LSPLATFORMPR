@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import quote
@@ -11,12 +12,16 @@ from app.repositories.checkpoint_repository import CheckpointStore
 from app.storage import BronzeWriter
 from app.vendors.harvard.catalog_client import (
     HarvardCatalogClient,
-    HarvardCatalogContractError,
     is_retryable_error,
 )
-from app.vendors.harvard.models import HarvardVendorConfig
+from app.vendors.harvard.models import (
+    HarvardVendorConfig,
+    extra_field_paths,
+    validate_catalog,
+)
 
 DOMAIN = "course_catalog"
+logger = logging.getLogger(__name__)
 
 
 async def ingest_catalog(
@@ -43,8 +48,17 @@ async def ingest_catalog(
             params["startDate"] = start_date
         try:
             payload, raw_payload = await client.get_json(path, params)
-            items = payload.get("list")
-            records_count = len(items) if isinstance(items, list) else 0
+            contract = validate_catalog(payload)
+            items = contract.items
+            records_count = len(items)
+            extras = extra_field_paths(contract)
+            if extras:
+                logger.warning(
+                    "Harvard Catalog contains new contract fields "
+                    "vendor=%s fields=%s",
+                    vendor.vendor,
+                    ",".join(extras),
+                )
             await writer.write_page(
                 PageWrite(
                     vendor=vendor.vendor,
@@ -58,20 +72,11 @@ async def ingest_catalog(
                     fetched_at=datetime.now(UTC),
                 )
             )
-            if not isinstance(items, list):
-                raise HarvardCatalogContractError(
-                    "Harvard catalog response field 'list' must be an array"
-                )
             await checkpoints.record_completed_page(
                 run_id, DOMAIN, start, records_count
             )
             received += records_count
-            total_count = payload.get("count")
-            reached_total = (
-                isinstance(total_count, int)
-                and not isinstance(total_count, bool)
-                and received >= total_count
-            )
+            reached_total = received >= contract.count
         except Exception as exc:
             message = sanitize_text(exc, client.sensitive_values())
             retryable = is_retryable_error(exc)

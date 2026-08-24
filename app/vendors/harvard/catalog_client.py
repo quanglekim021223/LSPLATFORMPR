@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import random
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
@@ -9,10 +10,17 @@ import httpx
 
 from app.config import Settings
 from app.helpers.http_client import RetryingHttpClient
-from app.vendors.harvard.models import HarvardVendorConfig
+from app.vendors.harvard.models import (
+    HarvardResponseContractError,
+    HarvardVendorConfig,
+    extra_field_paths,
+    validate_token,
+)
+
+logger = logging.getLogger(__name__)
 
 
-class HarvardCatalogContractError(RuntimeError):
+class HarvardCatalogContractError(HarvardResponseContractError):
     pass
 
 
@@ -55,12 +63,14 @@ class HarvardCatalogClient:
             raise HarvardCatalogContractError(
                 "Harvard token response must be valid JSON"
             ) from exc
-        token = payload.get("access_token") if isinstance(payload, dict) else None
-        if not isinstance(token, str) or not token.strip():
-            raise HarvardCatalogContractError(
-                "Harvard token response did not contain access_token"
+        contract = validate_token(payload)
+        extras = extra_field_paths(contract)
+        if extras:
+            logger.warning(
+                "Harvard Token contains new contract fields=%s",
+                ",".join(extras),
             )
-        self._token = token.strip()
+        self._token = contract.access_token.strip()
         return self._token
 
     async def get_json(
@@ -117,6 +127,8 @@ def is_retryable_error(exc: BaseException) -> bool:
     if isinstance(exc, httpx.HTTPStatusError):
         status_code = exc.response.status_code
         return status_code == 408 or status_code == 429 or status_code >= 500
-    if isinstance(exc, (HarvardCatalogContractError, ValueError)):
+    if isinstance(
+        exc, (HarvardCatalogContractError, HarvardResponseContractError, ValueError)
+    ):
         return False
     return True
