@@ -133,7 +133,9 @@ refreshes the token and retries exactly once. Daily scheduling performs a full C
 
 Learning History does not use the Catalog token. It connects with `asyncssh`, and
 `HARVARD_SFTP_KNOWN_HOSTS` must point to a trusted OpenSSH known-hosts file. Unknown host keys are
-never accepted automatically. The report date is the local run date minus
+never accepted automatically. For local demos only, `HARVARD_SFTP_MOCK_ENABLED=true` replaces the
+network connection with deterministic generated CSV files and therefore does not require SFTP
+credentials or a known-hosts file. Keep this setting `false` in production. The report date is the local run date minus
 `HARVARD_REPORT_DATE_OFFSET_DAYS`. Set `HARVARD_HMM_HISTORY_START_DATE` and
 `HARVARD_SPARK_HISTORY_START_DATE` in `YYYY-MM-DD` format to enable historical backfill. The
 first run downloads each dated CSV from that start date through the report cutoff. SQLite
@@ -188,12 +190,11 @@ For a quick scheduler test, set `INGESTION_TIME` in `.env` to a future minute in
 `Asia/Ho_Chi_Minh` before starting Terminal 2. At that minute the single scheduler registers and
 starts `levelup-daily-ingestion`, `skillup-daily-ingestion`, `datacamp-daily-ingestion`,
 `coursera-daily-ingestion`, `linkedin-daily-ingestion`, and `fams-daily-ingestion` when their mock
-credentials are configured. Harvard Catalog routes are also exposed
-by this hub, and FAMS is available under `/fams`. Harvard SFTP is mocked in automated tests rather
-than over HTTP; leave Harvard SFTP
-credentials blank during this local HTTP-only demo so those jobs are not scheduled. With real
-verified SFTP configuration, the scheduler additionally registers `harvard_hmm-daily-ingestion`
-and `harvard_spark-daily-ingestion`. Keep Terminal 2 running, then check the relevant
+credentials are configured. Harvard Catalog routes are also exposed by this hub, and FAMS is
+available under `/fams`. With `HARVARD_SFTP_MOCK_ENABLED=true`, the ingestion process generates
+local Harvard CSV responses without another server, so the scheduler also registers
+`harvard_hmm-daily-ingestion` and `harvard_spark-daily-ingestion`. Keep Terminal 2 running, then
+check the relevant
 `/jobs/{vendor}/latest`
 endpoints and vendor directories under
 `data/bronze/`. Swagger on port `8000` is status-only. The shared mock Swagger at

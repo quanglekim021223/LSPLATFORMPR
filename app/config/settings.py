@@ -85,6 +85,7 @@ class Settings(BaseSettings):
     harvard_sftp_poll_interval_seconds: int = Field(default=300, ge=1)
     harvard_sftp_max_wait_seconds: int = Field(default=7200, ge=0)
     harvard_sftp_max_retries: int = Field(default=3, ge=0, le=10)
+    harvard_sftp_mock_enabled: bool = False
 
     fams_base_url: str = "https://fams.fa.edu.vn"
     fams_api_key: SecretStr = Field(default=SecretStr(""))
@@ -434,6 +435,8 @@ class Settings(BaseSettings):
         return [name for name, value in values.items() if not value]
 
     def _missing_harvard_sftp_configuration(self) -> list[str]:
+        if self.harvard_sftp_mock_enabled:
+            return []
         values: dict[str, object] = {
             "HARVARD_SFTP_HOST": self.harvard_sftp_host,
             "HARVARD_SFTP_USERNAME": self.harvard_sftp_username.get_secret_value(),

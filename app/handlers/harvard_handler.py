@@ -110,9 +110,17 @@ class HarvardJob:
             async def history_branch() -> None:
                 try:
                     self.settings.validate_harvard_sftp_runtime()
-                    sftp = self.sftp_transport or AsyncSSHSFTPTransport(
-                        self.settings, sleep=self.sleep
-                    )
+                    if self.sftp_transport is not None:
+                        sftp = self.sftp_transport
+                    elif self.settings.harvard_sftp_mock_enabled:
+                        from app.mocks.harvard import GeneratedMockHarvardSFTPTransport
+
+                        sftp = GeneratedMockHarvardSFTPTransport()
+                    else:
+                        sftp = AsyncSSHSFTPTransport(
+                            self.settings,
+                            sleep=self.sleep,
+                        )
                 except Exception as exc:
                     message = sanitize_text(exc, self.sensitive_values())
                     await self.checkpoints.record_failed_page(

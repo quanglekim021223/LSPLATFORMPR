@@ -3,6 +3,8 @@ from __future__ import annotations
 import base64
 import binascii
 from collections.abc import Mapping
+from datetime import UTC, datetime, time
+from pathlib import PurePosixPath
 from typing import Annotated, Any, Self
 from urllib.parse import parse_qs
 
@@ -62,6 +64,59 @@ class MockHarvardSFTPTransport:
         if len(self.calls) <= self.available_after:
             return None
         return self.files.get(remote_path)
+
+
+class GeneratedMockHarvardSFTPTransport:
+    """Generate deterministic Harvard CSV files for local scheduled runs."""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(
+        self,
+        _exc_type: type[BaseException] | None,
+        _exc: BaseException | None,
+        _traceback: object | None,
+    ) -> None:
+        return None
+
+    async def fetch(self, remote_path: str) -> RemoteFile | None:
+        self.calls.append(remote_path)
+        file_name = PurePosixPath(remote_path).name
+        prefixes = {
+            "harvard_hmm_reporting_": ("hmm", "hmm-course-001"),
+            "harvard_Spark_reporting_": ("spark", "spark-course-001"),
+        }
+        matched = next(
+            (
+                (prefix, values)
+                for prefix, values in prefixes.items()
+                if file_name.startswith(prefix) and file_name.endswith(".csv")
+            ),
+            None,
+        )
+        if matched is None:
+            return None
+        prefix, (vendor, course_id) = matched
+        date_value = file_name.removeprefix(prefix).removesuffix(".csv")
+        try:
+            report_date = datetime.strptime(date_value, "%Y%m%d").date()
+        except ValueError:
+            return None
+        content = (
+            "employee_id,course_id,status,report_date\n"
+            f"mock-{vendor}-learner,{course_id},COMPLETED,{report_date.isoformat()}\n"
+        ).encode()
+        return RemoteFile(
+            remote_path=remote_path,
+            file_name=file_name,
+            content=content,
+            size=len(content),
+            modified_at=datetime.combine(report_date, time(hour=23), UTC),
+        )
 
 
 @router.post("/v1/api/oauth/v2/accesstoken")

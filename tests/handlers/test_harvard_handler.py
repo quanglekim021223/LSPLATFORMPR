@@ -131,6 +131,62 @@ async def test_full_pipeline_paginates_and_preserves_catalog_and_csv(
     assert manifest["ingestion_date"] == "2026-08-23"
 
 
+@pytest.mark.parametrize(
+    ("vendor", "prefix", "runner"),
+    [
+        (
+            "harvard_hmm",
+            "harvard_hmm_reporting_",
+            run_harvard_hmm_ingestion,
+        ),
+        (
+            "harvard_spark",
+            "harvard_Spark_reporting_",
+            run_harvard_spark_ingestion,
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_local_mock_mode_runs_without_real_sftp_credentials(
+    settings_factory: Callable[..., Settings],
+    vendor: str,
+    prefix: str,
+    runner: Callable[..., Awaitable[Any]],
+) -> None:
+    settings = settings_factory(
+        harvard_sftp_mock_enabled=True,
+        harvard_sftp_username="",
+        harvard_sftp_password="",
+        harvard_sftp_known_hosts=None,
+    )
+    assert (
+        settings.harvard_hmm_configured
+        if vendor == "harvard_hmm"
+        else settings.harvard_spark_configured
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return response(request, 200, {"access_token": "mock-token"})
+        return response(request, 200, {"count": 0, "list": []})
+
+    summary = await runner(
+        settings,
+        transport=httpx.MockTransport(handler),
+        sleep=no_sleep,
+        now=lambda: NOW,
+    )
+
+    assert summary.status == RunStatus.SUCCEEDED
+    csv_path = next(
+        settings.bronze_local_path.glob(
+            f"{vendor}/learning_history/**/{prefix}20260822.csv"
+        )
+    )
+    assert b"mock-" in csv_path.read_bytes()
+    assert b"COMPLETED" in csv_path.read_bytes()
+
+
 @pytest.mark.asyncio
 async def test_history_backfills_once_then_only_downloads_new_date(
     settings_factory: Callable[..., Settings],
