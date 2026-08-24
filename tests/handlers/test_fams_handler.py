@@ -36,7 +36,7 @@ async def test_full_load_header_counts_and_exact_raw_bronze(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     settings = settings_factory()
-    caplog.set_level(logging.INFO)
+    caplog.set_level(logging.DEBUG, logger="app.vendors.fams.training_data")
     raw_payload = (
         b'{\n  "success": true, "message": "ok", "error_code": "",\n'
         b'  "data": {"classList": [{"classId": "c1"}], '

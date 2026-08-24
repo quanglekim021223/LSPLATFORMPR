@@ -77,7 +77,7 @@ async def ingest_training_data(
         if validation_error is not None:
             raise validation_error
 
-        logger.info(
+        logger.debug(
             "FAMS training data received class_count=%d student_count=%d",
             class_count,
             student_count,

@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # FSA Learning Vendor Ingestion
 
 FastAPI service for scheduled ingestion of learning-vendor data into a raw Bronze layer. It
@@ -209,6 +208,17 @@ mypy app
 pytest
 ```
 
+## Runtime logs
+
+Set `LOG_LEVEL=INFO` for concise operational logs: run start, run result, duration, total records by
+domain, retry warnings, schema drift, and failures. Failed pages include their domain, offset,
+retryability, and sanitized error message. Set `LOG_LEVEL=DEBUG` only when troubleshooting deeply;
+it additionally shows every HTTP response and successful Bronze page/file write.
+
+Query parameters, request headers, credentials, tokens, API keys, raw response content, and learner
+data are deliberately excluded from these logs. Retry logs include only the safe endpoint path,
+status or network error type, attempt number, and wait time.
+
 ## Local multi-vendor mock demo
 
 The local `.env` points every mock vendor to a path on the same port. Start these two processes in
@@ -395,7 +405,3 @@ The iMocha `GET /v3/reports` contract returns only the most recent seven days wh
 provided. This service therefore always sends `startDate` from
 `SKILLUP_ASSESSMENT_START_DATE` (default `2000-01-01T00:00:00Z`) and sets `endDate` to the current
 UTC time. Pagination then retrieves every report in that configured range.
-# LSPLATFORMPR
-=======
-DataLake
->>>>>>> main

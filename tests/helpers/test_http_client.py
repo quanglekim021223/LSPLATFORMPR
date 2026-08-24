@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 import httpx
 import pytest
 
@@ -70,3 +72,35 @@ async def test_non_retryable_4xx_is_not_retried(status_code: int) -> None:
         )
     assert result.status_code == status_code
     assert attempts == 1
+
+
+@pytest.mark.asyncio
+async def test_request_log_has_metadata_without_query_or_credentials(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    secret = "do-not-log-token"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return response(request, 200, {"ok": True})
+
+    caplog.set_level(logging.DEBUG, logger="app.helpers.http_client")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await RetryingHttpClient(client, 0).request(
+            "GET",
+            f"https://example.test/resource?api_key={secret}",
+            headers={"Authorization": f"Bearer {secret}"},
+        )
+
+    messages = "\n".join(
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "app.helpers.http_client"
+    )
+    assert result.status_code == 200
+    assert "method=GET" in messages
+    assert "endpoint=/resource" in messages
+    assert "status_code=200" in messages
+    assert "attempt=1" in messages
+    assert "duration_ms=" in messages
+    assert "api_key" not in messages
+    assert secret not in messages

@@ -99,7 +99,7 @@ async def ingest_course_catalog(
         )
         await checkpoints.add_courses(run_id, course_ids)
         pages += 1
-        logger.info(
+        logger.debug(
             "LevelUP catalog page stored run_id=%s page=%d offset=%d "
             "courses_received=%d courses_selected=%d",
             run_id,

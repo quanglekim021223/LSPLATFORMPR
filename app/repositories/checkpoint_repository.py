@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from app.models import RunStatus, RunSummary
+
+logger = logging.getLogger(__name__)
 
 
 class JobAlreadyRunning(RuntimeError):
@@ -222,6 +225,7 @@ class CheckpointStore:
 
     async def start_run(self, run_id: str, vendor: str) -> None:
         await asyncio.to_thread(self._start_run, run_id, vendor)
+        logger.info("Ingestion run started vendor=%s run_id=%s", vendor, run_id)
 
     def _start_run(self, run_id: str, vendor: str) -> None:
         now = _now()
@@ -244,6 +248,25 @@ class CheckpointStore:
         summary = await self.get_run(run_id)
         if summary is None:
             raise RuntimeError(f"Run {run_id} was not persisted")
+        duration_seconds = (
+            (summary.finished_at - summary.started_at).total_seconds()
+            if summary.finished_at is not None
+            else 0.0
+        )
+        log = logger.info if status == RunStatus.SUCCEEDED else logger.error
+        log(
+            "Ingestion run finished vendor=%s run_id=%s status=%s "
+            "duration_seconds=%.3f records_by_domain=%s courses_succeeded=%d "
+            "courses_failed=%d error=%s",
+            summary.vendor,
+            run_id,
+            status.value,
+            duration_seconds,
+            summary.records_by_domain,
+            summary.courses_succeeded,
+            summary.courses_failed,
+            error_message or "none",
+        )
         return summary
 
     def _finish_run(
@@ -443,6 +466,16 @@ class CheckpointStore:
             error_message,
             course_id or "",
             retryable,
+        )
+        logger.error(
+            "Ingestion page failed run_id=%s domain=%s offset=%d course_id=%s "
+            "retryable=%s error=%s",
+            run_id,
+            data_domain,
+            offset,
+            course_id or "none",
+            retryable,
+            error_message,
         )
 
     def _record_failed_page(

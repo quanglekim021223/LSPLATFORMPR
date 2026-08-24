@@ -25,6 +25,21 @@ logger = logging.getLogger(__name__)
 IngestionRunner = Callable[..., Awaitable[object]]
 
 
+def _configure_application_logging(level: str) -> None:
+    app_logger = logging.getLogger("app")
+    app_logger.setLevel(level)
+    if app_logger.handlers or logging.getLogger().handlers:
+        return
+
+    uvicorn_handlers = (
+        logging.getLogger("uvicorn.error").handlers
+        or logging.getLogger("uvicorn").handlers
+    )
+    if uvicorn_handlers:
+        app_logger.handlers = list(uvicorn_handlers)
+        app_logger.propagate = False
+
+
 def _scheduled_jobs(
     config: Settings,
     store: CheckpointStore,
@@ -74,11 +89,13 @@ def create_app(
     bronze_writer: BronzeWriter | None = None,
 ) -> FastAPI:
     config = settings or get_settings()
+    _configure_application_logging(config.log_level)
     store = checkpoint_store or CheckpointStore(config.checkpoint_db_path)
     writer = bronze_writer or LocalBronzeWriter(config.bronze_local_path)
 
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
+        _configure_application_logging(config.log_level)
         await store.initialize()
         scheduler = None
         if config.scheduler_may_run:

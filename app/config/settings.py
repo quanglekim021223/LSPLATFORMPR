@@ -128,6 +128,14 @@ class Settings(BaseSettings):
             raise ValueError("INGESTION_TIME must use a valid 24-hour time")
         return f"{hour:02d}:{minute:02d}"
 
+    @field_validator("log_level")
+    @classmethod
+    def validate_log_level(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if normalized not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
+            raise ValueError("LOG_LEVEL must be DEBUG, INFO, WARNING, ERROR, or CRITICAL")
+        return normalized
+
     @field_validator("ingestion_timezone")
     @classmethod
     def validate_timezone(cls, value: str) -> str:

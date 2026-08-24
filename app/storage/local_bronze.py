@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import tempfile
 from pathlib import Path
@@ -11,6 +12,8 @@ from urllib.parse import quote
 
 from app.helpers.security import sanitize_mapping
 from app.models import BinaryFileWrite, PageWrite
+
+logger = logging.getLogger(__name__)
 
 
 class LocalBronzeWriter:
@@ -79,6 +82,17 @@ class LocalBronzeWriter:
             manifest_path,
             json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8"),
         )
+        logger.debug(
+            "Bronze page stored vendor=%s domain=%s run_id=%s offset=%d "
+            "records_count=%d payload_bytes=%d file=%s",
+            page.vendor,
+            page.data_domain,
+            page.run_id,
+            page.offset,
+            page.records_count,
+            len(page.raw_payload),
+            output_path.name,
+        )
         return output_path
 
     def _write_file(self, file: BinaryFileWrite) -> Path:
@@ -130,6 +144,16 @@ class LocalBronzeWriter:
         self._atomic_write(
             manifest_path,
             json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8"),
+        )
+        logger.debug(
+            "Bronze file stored vendor=%s domain=%s run_id=%s "
+            "records_count=%d payload_bytes=%d file=%s",
+            file.vendor,
+            file.data_domain,
+            file.run_id,
+            file.records_count,
+            len(file.raw_payload),
+            output_path.name,
         )
         return output_path
 

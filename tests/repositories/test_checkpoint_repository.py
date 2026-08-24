@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import sqlite3
 from pathlib import Path
 
@@ -11,6 +12,61 @@ from app.repositories.checkpoint_repository import (
     JobAlreadyRunning,
     JobLockLost,
 )
+
+
+@pytest.mark.asyncio
+async def test_run_logs_concise_lifecycle_summary(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    store = CheckpointStore(tmp_path / "state.db")
+    await store.initialize()
+    caplog.set_level(logging.INFO, logger="app.repositories.checkpoint_repository")
+
+    await store.start_run("run-logs", "skillup")
+    await store.record_completed_page("run-logs", "skill_taxonomy", 1, 3)
+    await store.finish_run("run-logs", RunStatus.SUCCEEDED)
+
+    messages = "\n".join(
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "app.repositories.checkpoint_repository"
+    )
+    assert "Ingestion run started vendor=skillup run_id=run-logs" in messages
+    assert "status=succeeded" in messages
+    assert "records_by_domain={'skill_taxonomy': 3}" in messages
+    assert "duration_seconds=" in messages
+
+
+@pytest.mark.asyncio
+async def test_failed_page_log_contains_debug_context(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    store = CheckpointStore(tmp_path / "state.db")
+    await store.initialize()
+    await store.start_run("run-failed", "datacamp")
+    caplog.clear()
+    caplog.set_level(logging.ERROR, logger="app.repositories.checkpoint_repository")
+
+    await store.record_failed_page(
+        "run-failed",
+        "learning_history",
+        4,
+        "response contract missing meta.numberOfPages",
+        retryable=False,
+    )
+
+    messages = "\n".join(
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "app.repositories.checkpoint_repository"
+    )
+    assert "run_id=run-failed" in messages
+    assert "domain=learning_history" in messages
+    assert "offset=4" in messages
+    assert "retryable=False" in messages
+    assert "missing meta.numberOfPages" in messages
 
 
 @pytest.mark.asyncio
