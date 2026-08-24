@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import random
 from collections.abc import Awaitable, Callable, Mapping
 from string import Formatter
@@ -11,6 +12,8 @@ import httpx
 
 from app.config import Settings
 from app.helpers.http_client import RetryingHttpClient
+
+logger = logging.getLogger(__name__)
 
 
 class CourseraResponseContractError(RuntimeError):
@@ -51,12 +54,16 @@ class CourseraClient:
             raise CourseraResponseContractError(
                 "Coursera token response must be valid JSON"
             ) from exc
-        token = payload.get("access_token") if isinstance(payload, dict) else None
-        if not isinstance(token, str) or not token.strip():
-            raise CourseraResponseContractError(
-                "Coursera token response did not contain access_token"
+        from app.vendors.coursera.models import extra_field_paths, validate_token
+
+        contract = validate_token(payload)
+        extras = extra_field_paths(contract)
+        if extras:
+            logger.warning(
+                "Coursera Token contains new contract fields fields=%s",
+                ",".join(extras),
             )
-        self._token = token.strip()
+        self._token = contract.access_token.strip()
         return self._token
 
     async def get_json(

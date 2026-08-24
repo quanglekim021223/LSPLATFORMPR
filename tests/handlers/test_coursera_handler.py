@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 from collections import Counter
 from collections.abc import Callable
 
@@ -10,6 +9,7 @@ import httpx
 import pytest
 
 from app.handlers.coursera_handler import run_coursera_ingestion
+from app.mocks.coursera import course_payload, enrollment_payload, token_payload
 from app.models import RunStatus
 from tests.conftest import no_sleep, response
 
@@ -23,17 +23,22 @@ async def test_full_pipeline_pagination_raw_and_detail_concurrency(
     starts: dict[str, list[int]] = {"catalog": [], "history": []}
     active_details = 0
     maximum_details = 0
-    catalog_raw = (
-        b'{\n  "elements": [{"contentId":"c1"},{"contentId":"c2"}],'
-        b' "paging": {"next": 2}\n}'
-    )
+    catalog_page = {
+        "elements": [
+            course_payload("c1", "Course One"),
+            course_payload("c2", "Course Two"),
+        ],
+        "paging": {"next": "2", "total": 3},
+        "linked": {},
+    }
+    catalog_raw = json.dumps(catalog_page, indent=2).encode() + b"\n"
 
     async def handler(request: httpx.Request) -> httpx.Response:
         nonlocal active_details, maximum_details
         path = request.url.path
         calls[path] += 1
         if path == "/oauth2/client_credentials/token":
-            return response(request, 200, {"access_token": "shared-token"})
+            return response(request, 200, token_payload("shared-token"))
         assert request.headers["Authorization"] == "Bearer shared-token"
         if path == "/test-org/contents":
             start = int(request.url.params["start"])
@@ -48,21 +53,47 @@ async def test_full_pipeline_pagination_raw_and_detail_concurrency(
             return response(
                 request,
                 200,
-                {"elements": [{"contentId": "c3"}], "paging": {}},
+                {
+                    "elements": [course_payload("c3", "Course Three")],
+                    "paging": {"total": 3},
+                    "linked": {},
+                },
             )
         if path == "/test-org/enrollmentReports":
             assert request.url.params["includeS12n"] == "true"
             start = int(request.url.params["start"])
             starts["history"].append(start)
-            elements = [{"id": "e1"}, {"id": "e2"}] if start == 0 else [{"id": "e3"}]
-            paging = {"next": 2} if start == 0 else {}
-            return response(request, 200, {"elements": elements, "paging": paging})
+            elements = (
+                [
+                    enrollment_payload("e1", "c1", completed=True),
+                    enrollment_payload("e2", "c2", completed=False),
+                ]
+                if start == 0
+                else [enrollment_payload("e3", "c3", completed=True)]
+            )
+            paging = {"next": "2", "total": 3} if start == 0 else {"total": 3}
+            return response(
+                request,
+                200,
+                {"elements": elements, "paging": paging, "linked": {}},
+            )
         if path.startswith("/test-org/contents/") and path.endswith("/detail"):
             active_details += 1
             maximum_details = max(maximum_details, active_details)
             await asyncio.sleep(0.01)
             active_details -= 1
-            return response(request, 200, {"elements": [{"detail": path}]})
+            content_id = path.removeprefix("/test-org/contents/").removesuffix(
+                "/detail"
+            )
+            return response(
+                request,
+                200,
+                {
+                    "elements": [course_payload(content_id, "Course Detail")],
+                    "paging": {},
+                    "linked": {},
+                },
+            )
         raise AssertionError(request.url)
 
     summary = await run_coursera_ingestion(
@@ -92,15 +123,15 @@ async def test_full_pipeline_pagination_raw_and_detail_concurrency(
 
 
 @pytest.mark.asyncio
-async def test_non_list_elements_warns_counts_zero_and_preserves_raw(
-    settings_factory: Callable[..., object], caplog: pytest.LogCaptureFixture
+async def test_non_list_elements_fail_without_entering_bronze(
+    settings_factory: Callable[..., object],
 ) -> None:
     settings = settings_factory()
     invalid_raw = b'{\n  "elements": {"unexpected": true}, "paging": {}\n}'
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/oauth2/client_credentials/token":
-            return response(request, 200, {"access_token": "token"})
+            return response(request, 200, token_payload("token"))
         return httpx.Response(
             200,
             content=invalid_raw,
@@ -108,22 +139,15 @@ async def test_non_list_elements_warns_counts_zero_and_preserves_raw(
             request=request,
         )
 
-    caplog.set_level(logging.WARNING)
     summary = await run_coursera_ingestion(
         settings,  # type: ignore[arg-type]
         transport=httpx.MockTransport(handler),
         sleep=no_sleep,
     )
 
-    assert summary.status == RunStatus.SUCCEEDED
-    assert summary.records_by_domain == {
-        "course_catalog": 0,
-        "learning_history": 0,
-    }
-    assert caplog.text.count("elements is not a list") == 2
-    raw_pages = list(settings.bronze_local_path.rglob("offset=000000.json"))  # type: ignore[attr-defined]
-    assert len(raw_pages) == 2
-    assert all(page.read_bytes() == invalid_raw for page in raw_pages)
+    assert summary.status == RunStatus.FAILED
+    assert summary.records_by_domain == {}
+    assert not list(settings.bronze_local_path.rglob("offset=*.json"))  # type: ignore[attr-defined]
 
 
 @pytest.mark.asyncio
@@ -135,21 +159,37 @@ async def test_one_detail_failure_is_isolated(
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path
         if path == "/oauth2/client_credentials/token":
-            return response(request, 200, {"access_token": "token"})
+            return response(request, 200, token_payload("token"))
         if path == "/test-org/contents":
             return response(
                 request,
                 200,
                 {
-                    "elements": [{"contentId": "bad"}, {"contentId": "good"}],
-                    "paging": {},
+                    "elements": [
+                        course_payload("bad", "Bad Course"),
+                        course_payload("good", "Good Course"),
+                    ],
+                    "paging": {"total": 2},
+                    "linked": {},
                 },
             )
         if path == "/test-org/enrollmentReports":
-            return response(request, 200, {"elements": [], "paging": {}})
+            return response(
+                request,
+                200,
+                {"elements": [], "paging": {"total": 0}, "linked": {}},
+            )
         if "/bad/" in path:
             return response(request, 404, {"error": "missing"})
-        return response(request, 200, {"elements": [{"id": "good"}]})
+        return response(
+            request,
+            200,
+            {
+                "elements": [course_payload("good", "Good Course")],
+                "paging": {},
+                "linked": {},
+            },
+        )
 
     summary = await run_coursera_ingestion(
         settings,  # type: ignore[arg-type]

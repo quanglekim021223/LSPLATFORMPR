@@ -7,6 +7,7 @@ from collections.abc import Callable
 import httpx
 import pytest
 
+from app.mocks.coursera import token_payload
 from app.vendors.coursera.client import CourseraClient
 from tests.conftest import no_sleep, response
 
@@ -24,7 +25,7 @@ async def test_coursera_authentication_contract_and_secrets_not_logged(
         assert request.headers["Authorization"] == f"Basic {expected}"
         assert request.headers["Accept"] == "application/json"
         assert request.content == b"grant_type=client_credentials"
-        return response(request, 200, {"access_token": "run-token"})
+        return response(request, 200, token_payload("run-token"))
 
     caplog.set_level(logging.DEBUG)
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
@@ -45,7 +46,9 @@ async def test_401_refreshes_once_and_retries_get_once(
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/oauth2/client_credentials/token":
             calls["auth"] += 1
-            return response(request, 200, {"access_token": f"token-{calls['auth']}"})
+            return response(
+                request, 200, token_payload(f"token-{calls['auth']}")
+            )
         calls["get"] += 1
         expected = "token-1" if calls["get"] == 1 else "token-2"
         assert request.headers["Authorization"] == f"Bearer {expected}"
@@ -70,7 +73,9 @@ async def test_second_401_is_not_retried(
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/oauth2/client_credentials/token":
             calls["auth"] += 1
-            return response(request, 200, {"access_token": f"token-{calls['auth']}"})
+            return response(
+                request, 200, token_payload(f"token-{calls['auth']}")
+            )
         calls["get"] += 1
         return response(request, 401, {})
 
@@ -94,7 +99,7 @@ async def test_authentication_reuses_shared_http_retry(
         calls += 1
         if calls == 1:
             return response(request, 500, {"error": "temporary"})
-        return response(request, 200, {"access_token": "token"})
+        return response(request, 200, token_payload("token"))
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
         client = CourseraClient(settings, http_client, sleep=no_sleep)  # type: ignore[arg-type]

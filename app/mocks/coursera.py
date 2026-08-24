@@ -12,15 +12,118 @@ _USERNAME = "mock-coursera-user"
 _PASSWORD = "mock-coursera-password"
 _TOKEN = "mock-coursera-token"
 _ORG_ID = "mock-org"
+
+
+def token_payload(token_value: str = _TOKEN) -> dict[str, Any]:
+    return {
+        "token_type": "Bearer",
+        "access_token": token_value,
+        "grant_type": "client_credentials",
+        "issued_at": 1787213698,
+        "expires_in": 1799,
+    }
+
+
+def course_payload(content_id: str, name: str) -> dict[str, Any]:
+    slug = name.lower().replace(" ", "-")
+    return {
+        "subtitleLanguageCodes": ["en", "vi"],
+        "lastUpdatedAt": 1769778943,
+        "difficultyLevel": "BEGINNER",
+        "contentId": content_id,
+        "description": f"Description for {name}",
+        "languageCode": "en",
+        "instructors": [
+            {
+                "photoUrl": "https://example.test/instructor.jpg",
+                "name": "Coursera Instructor",
+                "title": "Professor",
+                "department": "Computer Science",
+            }
+        ],
+        "partners": [
+            {
+                "name": "Coursera Partner",
+                "logoUrl": "https://example.test/partner.png",
+            }
+        ],
+        "name": name,
+        "programs": [
+            {
+                "contentUrl": f"https://example.test/learn/{slug}",
+                "programId": "mock-program",
+            }
+        ],
+        "id": f"Course~{content_id}",
+        "extraMetadata": {
+            "typeName": "courseMetadata",
+            "definition": {
+                "skills": [{"skillName": "Python", "skillId": "python"}],
+                "estimatedLearningTime": 3600,
+                "promoPhoto": "https://example.test/course.png",
+                "domainTypes": [
+                    {
+                        "domain": {"name": "Technology", "domainId": "technology"},
+                        "subdomain": {
+                            "name": "Software Development",
+                            "subdomainId": "software-development",
+                        },
+                    }
+                ],
+            },
+        },
+        "contentType": "Course",
+        "slug": slug,
+    }
+
+
+def enrollment_payload(
+    enrollment_id: str, content_id: str, *, completed: bool
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "id": enrollment_id,
+        "programId": "mock-program",
+        "externalId": "learner@example.test",
+        "contentId": content_id,
+        "contentType": "Course",
+        "isCompleted": completed,
+        "lastActivityAt": 1757911517000,
+        "membershipState": "MEMBER",
+        "enrolledAt": 1745199035000,
+        "overallProgress": 100 if completed else 2,
+        "approxTotalCourseHrs": 1.5,
+        "updatedAt": 1787206959000,
+        "contentName": f"Course {content_id}",
+        "contentSlug": content_id,
+        "partnerNames": ["Coursera Partner"],
+        "fullName": "NGUYEN VAN A",
+        "email": "learner@example.test",
+        "programName": "Mock Learning Program",
+        "programSlug": "mock-learning-program",
+        "contractId": "mock-contract",
+        "contractName": "Mock Licenses",
+        "courseType": "Course",
+    }
+    if completed:
+        payload.update(
+            {
+                "completedAt": 1750071584000,
+                "grade": 0.977,
+                "contentCertificateUrl": "https://example.test/certificate",
+            }
+        )
+    return payload
+
+
 _CONTENTS = [
-    {"contentId": "course-1", "name": "Python"},
-    {"contentId": "course-2", "name": "SQL"},
-    {"contentId": "course-3", "name": "Data Engineering"},
+    course_payload("course-1", "Python"),
+    course_payload("course-2", "SQL"),
+    course_payload("course-3", "Data Engineering"),
 ]
 _ENROLLMENTS = [
-    {"id": "enrollment-1", "contentId": "course-1"},
-    {"id": "enrollment-2", "contentId": "course-2"},
-    {"id": "enrollment-3", "contentId": "course-3"},
+    enrollment_payload("enrollment-1", "course-1", completed=True),
+    enrollment_payload("enrollment-2", "course-2", completed=False),
+    enrollment_payload("enrollment-3", "course-3", completed=True),
 ]
 
 
@@ -39,15 +142,15 @@ def _page(records: list[dict[str, Any]], start: int, limit: int) -> dict[str, An
     next_offset = start + limit
     paging: dict[str, Any] = {"total": len(records)}
     if next_offset < len(records):
-        paging["next"] = next_offset
-    return {"elements": elements, "paging": paging}
+        paging["next"] = str(next_offset)
+    return {"elements": elements, "paging": paging, "linked": {}}
 
 
 @router.post("/oauth2/client_credentials/token")
 async def token(
     request: Request,
     authorization: Annotated[str | None, Header()] = None,
-) -> dict[str, str | int]:
+) -> dict[str, Any]:
     expected = base64.b64encode(f"{_USERNAME}:{_PASSWORD}".encode()).decode()
     form = parse_qs((await request.body()).decode())
     if (
@@ -55,7 +158,7 @@ async def token(
         or form.get("grant_type") != ["client_credentials"]
     ):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid mock credentials")
-    return {"access_token": _TOKEN, "token_type": "Bearer", "expires_in": 3600}
+    return token_payload()
 
 
 @router.get("/{org_id}/contents")
@@ -81,7 +184,7 @@ async def content_detail(
     matches = [item for item in _CONTENTS if item["contentId"] == content_id]
     if not matches:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown mock content")
-    return {"elements": matches}
+    return {"elements": matches, "paging": {}, "linked": {}}
 
 
 @router.get("/{org_id}/enrollmentReports")

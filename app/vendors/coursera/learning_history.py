@@ -11,6 +11,7 @@ from app.models import PageWrite
 from app.repositories.checkpoint_repository import CheckpointStore
 from app.storage import BronzeWriter
 from app.vendors.coursera.client import CourseraClient, is_retryable_error
+from app.vendors.coursera.models import extra_field_paths, validate_learning_history
 from app.vendors.coursera.pagination import next_start
 
 DOMAIN = "learning_history"
@@ -35,7 +36,14 @@ async def ingest_learning_history(
         }
         try:
             payload, raw_payload = await client.get_json(path, params)
-            elements = _elements(payload)
+            contract = validate_learning_history(payload)
+            elements = contract.elements
+            extras = extra_field_paths(contract)
+            if extras:
+                logger.warning(
+                    "Coursera Learning History contains new contract fields fields=%s",
+                    ",".join(extras),
+                )
             await writer.write_page(
                 PageWrite(
                     vendor="coursera",
@@ -70,14 +78,3 @@ async def ingest_learning_history(
             break
         start = following_start
     await checkpoints.mark_domain(run_id, DOMAIN, "completed")
-
-
-def _elements(payload: dict[str, Any]) -> list[Any]:
-    elements = payload.get("elements")
-    if isinstance(elements, list):
-        return elements
-    logger.warning(
-        "Coursera response elements is not a list domain=%s; records_count=0",
-        DOMAIN,
-    )
-    return []

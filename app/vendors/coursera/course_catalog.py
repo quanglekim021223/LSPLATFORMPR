@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import UTC, datetime
-from typing import Any
 from urllib.parse import quote
 
 from app.config import Settings
@@ -12,6 +11,12 @@ from app.models import CourseResult, PageWrite
 from app.repositories.checkpoint_repository import CheckpointStore
 from app.storage import BronzeWriter
 from app.vendors.coursera.client import CourseraClient, is_retryable_error
+from app.vendors.coursera.models import (
+    CourseraContent,
+    extra_field_paths,
+    validate_course_detail,
+    validate_course_list,
+)
 from app.vendors.coursera.pagination import next_start
 
 CATALOG_DOMAIN = "course_catalog"
@@ -63,7 +68,14 @@ async def ingest_course_list(
         params = {"start": start, "limit": settings.coursera_page_size}
         try:
             payload, raw_payload = await client.get_json(path, params)
-            elements = _elements(payload, CATALOG_DOMAIN)
+            contract = validate_course_list(payload)
+            elements = contract.elements
+            extras = extra_field_paths(contract)
+            if extras:
+                logger.warning(
+                    "Coursera Course List contains new contract fields fields=%s",
+                    ",".join(extras),
+                )
             await writer.write_page(
                 PageWrite(
                     vendor="coursera",
@@ -158,7 +170,16 @@ async def ingest_course_detail(
     try:
         path = client.content_detail_path(content_id)
         payload, raw_payload = await client.get_json(path, {})
-        elements = _elements(payload, DETAIL_DOMAIN)
+        contract = validate_course_detail(
+            payload, expected_content_id=content_id
+        )
+        elements = contract.elements
+        extras = extra_field_paths(contract)
+        if extras:
+            logger.warning(
+                "Coursera Course Detail contains new contract fields fields=%s",
+                ",".join(extras),
+            )
         await writer.write_page(
             PageWrite(
                 vendor="coursera",
@@ -205,21 +226,5 @@ async def ingest_course_detail(
     return result
 
 
-def _elements(payload: dict[str, Any], domain: str) -> list[Any]:
-    elements = payload.get("elements")
-    if isinstance(elements, list):
-        return elements
-    logger.warning(
-        "Coursera response elements is not a list domain=%s; records_count=0",
-        domain,
-    )
-    return []
-
-
-def _content_ids(elements: list[Any]) -> list[str]:
-    result: list[str] = []
-    for element in elements:
-        value = element.get("contentId") if isinstance(element, dict) else None
-        if value is not None and str(value).strip():
-            result.append(str(value))
-    return result
+def _content_ids(elements: list[CourseraContent]) -> list[str]:
+    return [element.content_id for element in elements]

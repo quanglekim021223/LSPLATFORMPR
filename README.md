@@ -133,6 +133,13 @@ retries that request exactly once. Course List and Learning History use `start`/
 `COURSERA_CONTENT_DETAIL_PATH_TEMPLATE`, using only `{org_id}` and `{content_id}` placeholders.
 For the local mock this is `/{org_id}/contents/{content_id}/detail`; production must use the exact
 path from the organization's Coursera contract/Postman configuration.
+Token, Course List, Course Detail, and Enrollment Reports are validated against Coursera-specific
+Pydantic contracts. The token is held only in memory and is never written to Bronze or logs.
+Contract-invalid list, detail, or history responses fail the affected domain and do not enter
+Bronze. Valid response bytes remain unchanged; additive fields are retained and logged by field
+path only. Course Detail must contain exactly one element whose `contentId` matches the request.
+Completion-only enrollment fields (`completedAt`, `grade`, and `contentCertificateUrl`) may be
+absent for incomplete enrollments.
 
 LinkedIn Learning exchanges form-encoded `client_id` and `client_secret` for one run-scoped token.
 Catalog and activity requests use `Authorization: Bearer <token>`; a `401` refreshes the token and
@@ -323,8 +330,8 @@ write semantics.
   `meta` objects and are validated, written, and checkpointed one page at a time.
 - Coursera authenticates once per run, then runs its catalog pipeline and Learning History in
   parallel. Course Details run with at most `COURSERA_MAX_CONCURRENCY` requests. Every list,
-  detail, and history response is stored raw; `records_count` is the length of `elements`, or zero
-  with a warning when `elements` is not a list.
+  detail, and history response is contract-validated before its exact bytes are stored;
+  `records_count` is the length of validated `elements`.
 - LinkedIn follows the same one-token and parallel pipeline pattern. Asset Details use at most
   `LINKEDIN_MAX_CONCURRENCY` requests; history pages are written immediately and use globally
   increasing Bronze offsets so pages from separate 14-day windows cannot overwrite one another.
