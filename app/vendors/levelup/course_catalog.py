@@ -9,7 +9,12 @@ from app.helpers.security import sanitize_text
 from app.models import PageWrite
 from app.repositories.checkpoint_repository import CheckpointStore
 from app.storage import BronzeWriter
-from app.vendors.levelup.client import LevelUpClient, is_retryable_error
+from app.vendors.levelup.client import (
+    LevelUpClient,
+    ResponseContractError,
+    is_retryable_error,
+)
+from app.vendors.levelup.models import extra_field_paths, validate_course_list
 from app.vendors.levelup.pagination import is_last_page
 
 logger = logging.getLogger(__name__)
@@ -45,17 +50,21 @@ async def ingest_course_catalog(
             )
             raise
 
-        raw_courses = payload.get("courses", [])
-        if not isinstance(raw_courses, list):
-            raise ValueError("LevelUP courses response must contain a courses list")
-        valid_courses = [course for course in raw_courses if include_course(course)]
-        course_ids = [
-            course_id
-            for course in valid_courses
-            if (course_id := extract_course_id(course)) is not None
-        ]
+        try:
+            contract = validate_course_list(payload)
+        except ResponseContractError as exc:
+            await checkpoints.record_failed_page(
+                run_id,
+                "course_catalog",
+                offset,
+                str(exc),
+                retryable=False,
+            )
+            raise
+        raw_courses = payload.get("courses") if isinstance(payload, dict) else None
+        records_count = len(raw_courses) if isinstance(raw_courses, list) else 0
 
-        # The filtered list only feeds Learning History. Bronze stays byte-for-byte raw.
+        # Only contract-valid responses enter Bronze; their original bytes stay unchanged.
         fetched_at = datetime.now(UTC)
         await writer.write_page(
             PageWrite(
@@ -65,13 +74,28 @@ async def ingest_course_catalog(
                 run_id=run_id,
                 offset=offset,
                 raw_payload=raw_payload,
-                records_count=len(raw_courses),
+                records_count=records_count,
                 request_parameters=params,
                 fetched_at=fetched_at,
             )
         )
+        assert isinstance(payload, dict)
+        assert isinstance(raw_courses, list)
+        extras = extra_field_paths(contract)
+        if extras:
+            logger.warning(
+                "LevelUP Course List contains new contract fields fields=%s",
+                ",".join(extras),
+            )
+        valid_courses = [course for course in raw_courses if include_course(course)]
+        course_ids = [
+            course_id
+            for course in valid_courses
+            if (course_id := extract_course_id(course)) is not None
+        ]
+
         await checkpoints.record_completed_page(
-            run_id, "course_catalog", offset, len(raw_courses)
+            run_id, "course_catalog", offset, records_count
         )
         await checkpoints.add_courses(run_id, course_ids)
         pages += 1
@@ -81,10 +105,10 @@ async def ingest_course_catalog(
             run_id,
             pages,
             offset,
-            len(raw_courses),
+            records_count,
             len(valid_courses),
         )
-        if is_last_page(payload, len(raw_courses), offset, page_size):
+        if is_last_page(payload, records_count, offset, page_size):
             break
         offset += page_size
     await checkpoints.mark_catalog_completed(run_id)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
@@ -10,8 +11,49 @@ import httpx
 import pytest
 
 from app.handlers.levelup_handler import run_levelup_ingestion
+from app.mocks.levelup import course_payload, enrollment_payload
 from app.models import RunStatus
 from tests.conftest import no_sleep, response
+
+
+def course(course_id: str, vendor: str | None = "LevelUP") -> dict[str, object]:
+    return course_payload(course_id, f"Course {course_id}", vendor)
+
+
+def enrollment(enrollment_id: str, course_id: str) -> dict[str, object]:
+    return enrollment_payload(enrollment_id, course_id, f"user-{enrollment_id}")
+
+
+def course_page(
+    courses: list[dict[str, object]],
+    *,
+    total: int | None = None,
+    limit: int = 2,
+    offset: int = 0,
+) -> dict[str, object]:
+    return {
+        "totalItems": len(courses) if total is None else total,
+        "returnedItems": len(courses),
+        "limit": limit,
+        "offset": offset,
+        "courses": courses,
+    }
+
+
+def enrollment_page(
+    enrollments: list[dict[str, object]],
+    *,
+    total: int | None = None,
+    limit: int = 2,
+    offset: int = 0,
+) -> dict[str, object]:
+    return {
+        "totalItems": len(enrollments) if total is None else total,
+        "returnedItems": len(enrollments),
+        "limit": limit,
+        "offset": offset,
+        "enrollments": enrollments,
+    }
 
 
 @pytest.mark.asyncio
@@ -20,12 +62,11 @@ async def test_catalog_pagination_filter_and_course_list_reuse(
 ) -> None:
     settings = settings_factory()
     calls: Counter[str] = Counter()
-    first_raw_payload = (
-        b'{\n  "totalItems": 3, "returnedItems": 2, "courses": ['
-        b'{"id":"c1","vendor":null,"name":"Course 1"},'
-        b'{"id":"linkedin","vendor":"LinkedIn Learning","name":"Excluded"}'
-        b"]\n}"
+    first_page = course_page(
+        [course("c1", None), course("linkedin", "LinkedIn Learning")],
+        total=3,
     )
+    first_raw_payload = json.dumps(first_page, indent=2).encode() + b"\n"
 
     def handler(request: httpx.Request) -> httpx.Response:
         calls[request.url.path] += 1
@@ -45,17 +86,13 @@ async def test_catalog_pagination_filter_and_course_list_reuse(
             return response(
                 request,
                 200,
-                {
-                    "totalItems": 3,
-                    "returnedItems": 1,
-                    "courses": [{"id": "c2", "vendor": "Other"}],
-                },
+                course_page([course("c2", "Other")], total=3, offset=2),
             )
         if request.url.path in {"/courses/c1/enrollments", "/courses/c2/enrollments"}:
             return response(
                 request,
                 200,
-                {"totalItems": 0, "returnedItems": 0, "enrollments": []},
+                enrollment_page([], offset=0),
             )
         raise AssertionError(request.url)
 
@@ -97,37 +134,35 @@ async def test_enrollment_pagination_and_empty_course_are_successful(
             return response(
                 request,
                 200,
-                {
-                    "totalItems": 2,
-                    "returnedItems": 2,
-                    "courses": [{"id": "with-data"}, {"id": "empty"}],
-                },
+                course_page([course("with-data"), course("empty")]),
             )
         course_id = request.url.path.split("/")[2]
         offset = int(request.url.params["_offset"])
         offsets.append((course_id, offset))
         if course_id == "empty":
             return response(
-                request, 200, {"totalItems": 0, "returnedItems": 0, "enrollments": []}
+                request,
+                200,
+                enrollment_page([], offset=offset),
             )
         if offset == 0:
             return response(
                 request,
                 200,
-                {
-                    "totalItems": 3,
-                    "returnedItems": 2,
-                    "enrollments": [{"id": "e1"}, {"id": "e2"}],
-                },
+                enrollment_page(
+                    [enrollment("e1", course_id), enrollment("e2", course_id)],
+                    total=3,
+                    offset=offset,
+                ),
             )
         return response(
             request,
             200,
-            {
-                "totalItems": 3,
-                "returnedItems": 1,
-                "enrollments": [{"id": "e3"}],
-            },
+            enrollment_page(
+                [enrollment("e3", course_id)],
+                total=3,
+                offset=offset,
+            ),
         )
 
     summary = await run_levelup_ingestion(
@@ -154,18 +189,20 @@ async def test_course_concurrency_never_exceeds_setting(
         if request.url.path == "/authenticate":
             return response(request, 200, "token")
         if request.url.path == "/courses":
-            courses = [{"id": f"c{index}"} for index in range(6)]
+            courses = [course(f"c{index}") for index in range(6)]
             return response(
                 request,
                 200,
-                {"totalItems": 6, "returnedItems": 6, "courses": courses},
+                course_page(courses, limit=10),
             )
         active += 1
         maximum_active = max(maximum_active, active)
         await asyncio.sleep(0.01)
         active -= 1
         return response(
-            request, 200, {"totalItems": 0, "returnedItems": 0, "enrollments": []}
+            request,
+            200,
+            enrollment_page([], limit=10),
         )
 
     summary = await run_levelup_ingestion(
@@ -192,17 +229,15 @@ async def test_one_course_failure_does_not_stop_other_courses(
             return response(
                 request,
                 200,
-                {
-                    "totalItems": 2,
-                    "returnedItems": 2,
-                    "courses": [{"id": "bad"}, {"id": "good"}],
-                },
+                course_page([course("bad"), course("good")]),
             )
         called.append(request.url.path)
         if "/bad/" in request.url.path:
             return response(request, 404, {"error": "missing"})
         return response(
-            request, 200, {"totalItems": 0, "returnedItems": 0, "enrollments": []}
+            request,
+            200,
+            enrollment_page([]),
         )
 
     summary = await run_levelup_ingestion(
@@ -251,18 +286,18 @@ async def test_next_ingestion_starts_new_run_after_failure(
             return response(
                 request,
                 200,
-                {"totalItems": 1, "returnedItems": 1, "courses": [{"id": "c1"}]},
+                course_page([course("c1")], total=1),
             )
         offset = int(request.url.params["_offset"])
         if offset == 0:
             return response(
                 request,
                 200,
-                {
-                    "totalItems": 4,
-                    "returnedItems": 2,
-                    "enrollments": [{"id": "e1"}, {"id": "e2"}],
-                },
+                enrollment_page(
+                    [enrollment("e1", "c1"), enrollment("e2", "c1")],
+                    total=4,
+                    offset=offset,
+                ),
             )
         return response(request, 500, {"error": "temporary"})
 
@@ -285,17 +320,17 @@ async def test_next_ingestion_starts_new_run_after_failure(
             return response(
                 request,
                 200,
-                {"totalItems": 1, "returnedItems": 1, "courses": [{"id": "c1"}]},
+                course_page([course("c1")], total=1),
             )
         second_offsets.append(int(request.url.params["_offset"]))
         return response(
             request,
             200,
-            {
-                "totalItems": 4,
-                "returnedItems": 2,
-                "enrollments": [{"id": "e3"}, {"id": "e4"}],
-            },
+            enrollment_page(
+                [enrollment("e3", "c1"), enrollment("e4", "c1")],
+                total=4,
+                offset=second_offsets[-1],
+            ),
         )
 
     second = await run_levelup_ingestion(
@@ -311,3 +346,107 @@ async def test_next_ingestion_starts_new_run_after_failure(
     assert second.courses_failed == 0
     assert second_offsets == [0, 2]
     assert second_calls["/courses"] == 1
+
+
+@pytest.mark.asyncio
+async def test_missing_required_course_field_does_not_enter_bronze_and_fails_run(
+    settings_factory: Callable[..., object],
+) -> None:
+    settings = settings_factory()
+    invalid_course = course("broken")
+    del invalid_course["name"]
+    raw_payload = json.dumps(course_page([invalid_course])).encode()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/authenticate":
+            return response(request, 200, "token")
+        assert request.url.path == "/courses"
+        return httpx.Response(
+            200,
+            content=raw_payload,
+            headers={"Content-Type": "application/json"},
+            request=request,
+        )
+
+    summary = await run_levelup_ingestion(
+        settings,  # type: ignore[arg-type]
+        transport=httpx.MockTransport(handler),
+        sleep=no_sleep,
+    )
+
+    assert summary.status == RunStatus.FAILED
+    assert summary.error_message is not None
+    assert "courses.0.name:missing" in summary.error_message
+    assert not list(
+        settings.bronze_local_path.glob(  # type: ignore[attr-defined]
+            "levelup/course_catalog/**/offset=*.json"
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_wrong_enrollment_field_type_skips_bronze_without_logging_pii(
+    settings_factory: Callable[..., object],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    settings = settings_factory()
+    invalid_enrollment = enrollment("bad", "c1")
+    invalid_enrollment["status"] = "COMPLETED"
+    invalid_enrollment["fullName"] = "Sensitive Learner Name"
+    raw_payload = json.dumps(enrollment_page([invalid_enrollment])).encode()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/authenticate":
+            return response(request, 200, "token")
+        if request.url.path == "/courses":
+            return response(request, 200, course_page([course("c1")]))
+        return httpx.Response(
+            200,
+            content=raw_payload,
+            headers={"Content-Type": "application/json"},
+            request=request,
+        )
+
+    caplog.set_level(logging.ERROR)
+    summary = await run_levelup_ingestion(
+        settings,  # type: ignore[arg-type]
+        transport=httpx.MockTransport(handler),
+        sleep=no_sleep,
+    )
+
+    assert summary.status == RunStatus.PARTIAL_FAILURE
+    assert "enrollments.0.status:int_type" in caplog.text
+    assert "Sensitive Learner Name" not in caplog.text
+    assert not list(
+        settings.bronze_local_path.glob(  # type: ignore[attr-defined]
+            "levelup/learning_history/**/offset=*.json"
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_new_vendor_field_warns_but_does_not_fail(
+    settings_factory: Callable[..., object],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    settings = settings_factory()
+    expanded_course = course("c1")
+    expanded_course["newVendorField"] = "new-value-must-not-be-logged"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/authenticate":
+            return response(request, 200, "token")
+        if request.url.path == "/courses":
+            return response(request, 200, course_page([expanded_course]))
+        return response(request, 200, enrollment_page([]))
+
+    caplog.set_level(logging.WARNING)
+    summary = await run_levelup_ingestion(
+        settings,  # type: ignore[arg-type]
+        transport=httpx.MockTransport(handler),
+        sleep=no_sleep,
+    )
+
+    assert summary.status == RunStatus.SUCCEEDED
+    assert "courses.0.newVendorField" in caplog.text
+    assert "new-value-must-not-be-logged" not in caplog.text

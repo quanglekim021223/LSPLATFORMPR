@@ -94,6 +94,16 @@ supplied matrix:
 - a plain-string token response (JSON `token` / `access_token` envelopes are also accepted)
 - subsequent `Authorization` header contains the token exactly as returned by Absorb
 
+LevelUP Course List and Enrollment pages are validated against vendor-specific Pydantic objects
+before they are written to Bronze or their checkpoints are marked completed. Missing required keys,
+incompatible types, invalid ISO-8601 timestamps, or inconsistent `returnedItems` counts fail the
+affected run/course and are not written to Bronze. Contract-valid responses are written
+byte-for-byte without re-serialization. Additive vendor fields are retained and produce a
+schema-drift warning containing field paths only, never response values.
+Fields whose non-null production shape has not yet been supplied (`prices`, cost/time, audience,
+goals, and similar nullable fields) remain required keys but temporarily accept their original
+value type.
+
 SkillUp uses `x-api-key: <SKILLUP_API_KEY>` for every request. Its Intelligence and Reports APIs
 use separate base URLs configured by `SKILLUP_INTELLIGENCE_BASE_URL` and
 `SKILLUP_REPORTS_BASE_URL`. Assessment History always sends a range from

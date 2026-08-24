@@ -10,7 +10,11 @@ from app.helpers.security import sanitize_text
 from app.models import CourseResult, PageWrite
 from app.repositories.checkpoint_repository import CheckpointStore
 from app.storage import BronzeWriter
-from app.vendors.levelup.client import LevelUpClient, is_retryable_error
+from app.vendors.levelup.client import (
+    LevelUpClient,
+    is_retryable_error,
+)
+from app.vendors.levelup.models import extra_field_paths, validate_enrollments
 from app.vendors.levelup.pagination import is_last_page
 
 logger = logging.getLogger(__name__)
@@ -85,11 +89,11 @@ async def ingest_course(
                 f"/{safe_course_id}/enrollments"
             )
             payload, raw_payload = await client.get_json(path, params)
-            enrollments = payload.get("enrollments", [])
-            if not isinstance(enrollments, list):
-                raise ValueError(
-                    "LevelUP enrollments response must contain an enrollments list"
-                )
+            contract = validate_enrollments(payload)
+            enrollments = (
+                payload.get("enrollments") if isinstance(payload, dict) else None
+            )
+            records_count = len(enrollments) if isinstance(enrollments, list) else 0
             fetched_at = datetime.now(UTC)
             await writer.write_page(
                 PageWrite(
@@ -100,16 +104,23 @@ async def ingest_course(
                     course_id=course_id,
                     offset=offset,
                     raw_payload=raw_payload,
-                    records_count=len(enrollments),
+                    records_count=records_count,
                     request_parameters=params,
                     fetched_at=fetched_at,
                 )
             )
+            assert isinstance(payload, dict)
+            extras = extra_field_paths(contract)
+            if extras:
+                logger.warning(
+                    "LevelUP Enrollments contains new contract fields fields=%s",
+                    ",".join(extras),
+                )
             await checkpoints.record_completed_page(
-                run_id, "learning_history", offset, len(enrollments), course_id
+                run_id, "learning_history", offset, records_count, course_id
             )
-            result.records_count += len(enrollments)
-            if is_last_page(payload, len(enrollments), offset, page_size):
+            result.records_count += records_count
+            if is_last_page(payload, records_count, offset, page_size):
                 break
             offset += page_size
         await checkpoints.mark_course(run_id, course_id, "completed")

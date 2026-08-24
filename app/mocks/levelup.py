@@ -9,26 +9,88 @@ router = APIRouter(tags=["LevelUP"])
 
 _API_KEY = "mock-private-key"
 _TOKEN = "mock-token"
+
+
+def course_payload(
+    course_id: str, name: str, vendor: str | None
+) -> dict[str, object]:
+    return {
+        "id": course_id,
+        "courseType": "OnlineCourse",
+        "name": name,
+        "description": f"<p>{name}</p>",
+        "notes": None,
+        "externalId": None,
+        "accessDate": None,
+        "expireType": 0,
+        "expireDuration": {"years": 0, "months": 0, "days": 0, "hours": 0},
+        "expiryDate": None,
+        "activeStatus": 0,
+        "tagIds": [],
+        "resourceIds": [],
+        "editorIds": [],
+        "prices": [],
+        "competencyDefinitionIds": [],
+        "prerequisiteCourseIds": [],
+        "postEnrollmentCourseIds": [],
+        "allowCourseEvaluation": True,
+        "categoryId": "mock-category",
+        "certificateUrl": None,
+        "audience": None,
+        "goals": None,
+        "vendor": vendor,
+        "companyCost": None,
+        "learnerCost": None,
+        "companyTime": None,
+        "learnerTime": None,
+        "dateEdited": "2026-08-24T04:00:00",
+        "dateAdded": "2026-08-20T04:00:00",
+    }
+
+
+def enrollment_payload(
+    enrollment_id: str, course_id: str, user_id: str
+) -> dict[str, object]:
+    return {
+        "id": enrollment_id,
+        "courseId": course_id,
+        "courseName": "Mock course",
+        "progress": 100.0,
+        "score": 90.0,
+        "status": 3,
+        "dateCompleted": "2026-08-24T04:30:00",
+        "dateExpires": None,
+        "fullName": f"Mock Learner {user_id}",
+        "jobTitle": "Software Engineer",
+        "courseVersionId": None,
+        "userId": user_id,
+        "acceptedTermsAndConditions": False,
+        "timeSpent": "00:30:00",
+        "dateStarted": "2026-08-24T04:00:00",
+        "enrollmentKeyId": None,
+        "certificateId": None,
+        "credits": None,
+        "isActive": True,
+        "dateDue": None,
+        "dateEdited": "2026-08-24T04:30:00",
+        "dateAdded": "2026-08-24T04:00:00",
+    }
+
+
 _COURSES = [
-    {"id": "python-basic", "vendor": "LevelUP", "name": "Python Basic"},
-    {
-        "id": "linkedin-course",
-        "vendor": "LinkedIn Learning",
-        "name": "LinkedIn Course",
-    },
-    {
-        "id": "data-engineering",
-        "vendor": "LevelUP",
-        "name": "Data Engineering",
-    },
+    course_payload("python-basic", "Python Basic", "LevelUP"),
+    course_payload("linkedin-course", "LinkedIn Course", "LinkedIn Learning"),
+    course_payload("data-engineering", "Data Engineering", "LevelUP"),
 ]
 _ENROLLMENTS = {
     "python-basic": [
-        {"id": "e1", "userId": "user-01"},
-        {"id": "e2", "userId": "user-02"},
-        {"id": "e3", "userId": "user-03"},
+        enrollment_payload("e1", "python-basic", "user-01"),
+        enrollment_payload("e2", "python-basic", "user-02"),
+        enrollment_payload("e3", "python-basic", "user-03"),
     ],
-    "linkedin-course": [{"id": "ignored", "userId": "user-04"}],
+    "linkedin-course": [
+        enrollment_payload("ignored", "linkedin-course", "user-04")
+    ],
     "data-engineering": [],
 }
 
@@ -81,6 +143,8 @@ async def courses(
     return {
         "totalItems": len(_COURSES),
         "returnedItems": len(page),
+        "limit": limit,
+        "offset": offset,
         "courses": page,
     }
 
@@ -102,5 +166,7 @@ async def enrollments(
     return {
         "totalItems": len(all_enrollments),
         "returnedItems": len(page),
+        "limit": limit,
+        "offset": offset,
         "enrollments": page,
     }

@@ -54,7 +54,7 @@ class LevelUpClient:
 
     async def get_json(
         self, path: str, params: Mapping[str, Any]
-    ) -> tuple[dict[str, Any], bytes]:
+    ) -> tuple[Any, bytes]:
         if self._token is None:
             await self.authenticate()
         token_used = self._token
@@ -70,8 +70,6 @@ class LevelUpClient:
             payload = response.json()
         except ValueError as exc:
             raise ResponseContractError(f"Expected a JSON object from {path}") from exc
-        if not isinstance(payload, dict):
-            raise ResponseContractError(f"Expected a JSON object from {path}")
         return payload, response.content
 
     async def _authorized_get(
