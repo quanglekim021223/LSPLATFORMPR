@@ -5,5 +5,5 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 *.py[cod]
+.DS_Store
 data/
-

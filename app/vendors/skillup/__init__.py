@@ -1,1 +1,0 @@
-"""SkillUp (iMocha) ingestion implementation."""

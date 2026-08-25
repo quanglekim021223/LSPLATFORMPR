@@ -1,1 +1,0 @@
-"""DataCamp ingestion implementation."""

@@ -48,29 +48,18 @@ credentials or raw personal data.
 ## Code layout
 
 ```text
-app/main.py                  application composition and lifespan
-app/routers/                 health, readiness, and job-status APIs
-app/handlers/                per-vendor run orchestration
-app/vendors/levelup/         LevelUP authentication, catalog, and learning history
-app/vendors/skillup/         iMocha client and three SkillUp data domains
-app/vendors/datacamp/        DataCamp client, catalogs, and event history
-app/vendors/coursera/        Coursera OAuth, catalog/detail, and learning history
-app/vendors/linkedin/        LinkedIn OAuth, assets/detail, and activity history
-app/vendors/harvard/         shared Harvard Catalog API and verified-host SFTP implementation
-app/vendors/fams/            FAMS API-key client and single training_data domain
-app/helpers/                 shared HTTP retry and secret sanitization
-app/config/                  settings and APScheduler configuration
-app/repositories/            SQLite checkpoint history and vendor lock
-app/storage/                 Bronze writer contract and local implementation
-app/models/                  ingestion data models
-app/mocks/app.py             single local mock hub entrypoint for every vendor
-app/mocks/levelup.py         LevelUP mock routes and data
-app/mocks/skillup.py         SkillUp mock routes and data
-app/mocks/datacamp.py        DataCamp mock routes and data
-app/mocks/coursera.py        Coursera mock routes and data
-app/mocks/linkedin.py        LinkedIn Learning mock routes and data
-app/mocks/harvard.py         Harvard HMM/Spark Catalog API and injectable SFTP mock
-app/mocks/fams.py            FAMS full/filtered training-data mock route
+backend/src/app/main.py                  application composition and lifespan
+backend/src/app/api/v1/                 versioned health, readiness, and job-status APIs
+backend/src/app/core/                    runtime config, security, retry, and logging
+backend/src/app/config/scheduler.py      APScheduler construction
+backend/src/app/clients/                 shared HTTP transport and raw vendor clients
+backend/src/app/schemas/                 vendor response and CSV contracts
+backend/src/app/models/                  shared ingestion and domain models
+backend/src/app/services/                vendor orchestration and domain ingestion
+backend/src/app/repositories/            run state, vendor locks, and Bronze writers
+backend/src/app/mocks/                   single local mock hub and vendor fixtures
+backend/tests/unit/                      isolated client, schema, core, and repository tests
+backend/tests/integration/               API, service orchestration, and mock-hub tests
 ```
 
 ## Local setup
@@ -80,12 +69,13 @@ Python 3.11+ is required.
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install -e '.[dev]'
-cp .env.example .env
+python -m pip install -e 'backend[dev]'
+cp backend/.env.example backend/.env
+cd backend
 uvicorn app.main:app --reload
 ```
 
-Fill the vendor values in `.env`; never commit that file. LevelUP authentication follows the
+Fill the vendor values in `backend/.env`; never commit that file. LevelUP authentication follows the
 supplied matrix:
 
 - `POST /authenticate`
@@ -146,7 +136,7 @@ retries once. Catalog pagination follows the official `paging.links` entry with 
 Activity History starts at `LINKEDIN_HISTORY_START_TIME` (ISO-8601 with timezone or epoch
 milliseconds), splits through the current UTC time into windows no longer than 14 days, and sends
 `q=criteria`, `startedAt`, `timeOffset.unit=DAY`, and `timeOffset.duration` for each window.
-`LINKEDIN_ASSET_DETAIL_QUERY_TEMPLATE` is deliberately blank in `.env.example`; an administrator
+`LINKEDIN_ASSET_DETAIL_QUERY_TEMPLATE` is deliberately blank in `backend/.env.example`; an administrator
 must provide the exact query string containing one `{urn}` placeholder. The production filter is
 never inferred by code. See the official [Learning Assets](https://learn.microsoft.com/en-us/linkedin/learning/integrations/criteria-api)
 and [Learning Activity Reports](https://learn.microsoft.com/en-us/linkedin/learning/reference/learning-activity-reports-reference)
@@ -204,7 +194,7 @@ Run checks with:
 
 ```bash
 ruff check .
-mypy app
+mypy src/app
 pytest
 ```
 
@@ -221,14 +211,16 @@ status or network error type, attempt number, and wait time.
 
 ## Local multi-vendor mock demo
 
-The local `.env` points every mock vendor to a path on the same port. Start these two processes in
-separate terminals:
+The local `backend/.env` points every mock vendor to a path on the same port. Start these two
+processes in separate terminals from the repository root:
 
 ```bash
 # Terminal 1: shared upstream mock hub
+cd backend
 uvicorn app.mocks.app:app --host 127.0.0.1 --port 9000
 
 # Terminal 2: ingestion service and scheduler
+cd backend
 uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
@@ -245,7 +237,7 @@ the expected mock host key. This checks the application's authentication and tru
 it does not implement an SSH network protocol or replace the real `asyncssh` host-key verification
 used when `HARVARD_SFTP_MOCK_ENABLED=false`.
 
-For a quick scheduler test, set `INGESTION_TIME` in `.env` to a future minute in
+For a quick scheduler test, set `INGESTION_TIME` in `backend/.env` to a future minute in
 `Asia/Ho_Chi_Minh` before starting Terminal 2. At that minute the single scheduler registers and
 starts `levelup-daily-ingestion`, `skillup-daily-ingestion`, `datacamp-daily-ingestion`,
 `coursera-daily-ingestion`, `linkedin-daily-ingestion`, and `fams-daily-ingestion` when their mock
@@ -256,7 +248,8 @@ local Harvard CSV responses without another server, so the scheduler also regist
 check the relevant
 `/jobs/{vendor}/latest`
 endpoints and vendor directories under
-`data/bronze/`. Swagger on port `8000` is status-only. The shared mock Swagger at
+`backend/data/bronze/` (the configured `./data/bronze` path is relative to the `backend/`
+working directory). Swagger on port `8000` is status-only. The shared mock Swagger at
 `http://127.0.0.1:9000/docs` exposes all mock vendors and can grow to include future vendor routers
 without adding more processes.
 
@@ -280,6 +273,8 @@ job invocation. `max_instances=1`, coalescing, and a five-minute misfire grace p
 or accumulated catch-up executions within one process. It is always disabled when `APP_ENV=test`.
 
 ## Bronze layout
+
+The following local paths are relative to `backend/`:
 
 ```text
 data/bronze/levelup/
