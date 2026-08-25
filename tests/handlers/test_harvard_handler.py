@@ -6,6 +6,7 @@ import sqlite3
 import sys
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -17,11 +18,13 @@ from app.config import Settings
 from app.handlers.harvard_hmm_handler import run_harvard_hmm_ingestion
 from app.handlers.harvard_spark_handler import run_harvard_spark_ingestion
 from app.mocks.harvard import (
+    GeneratedMockHarvardSFTPTransport,
     MockHarvardSFTPTransport,
     catalog_item,
     history_csv,
     token_payload,
 )
+from app.mocks.settings import get_mock_settings
 from app.models import RunStatus
 from app.vendors.harvard.models import RemoteFile
 from app.vendors.harvard.sftp_client import AsyncSSHSFTPTransport
@@ -172,17 +175,25 @@ async def test_full_pipeline_paginates_and_preserves_catalog_and_csv(
     ],
 )
 @pytest.mark.asyncio
-async def test_local_mock_mode_runs_without_real_sftp_credentials(
+async def test_local_mock_mode_validates_sftp_credentials_and_host_key(
     settings_factory: Callable[..., Settings],
+    tmp_path: Path,
     vendor: str,
     prefix: str,
     runner: Callable[..., Awaitable[Any]],
 ) -> None:
+    mock = get_mock_settings()
+    known_hosts = tmp_path / "known_hosts"
+    known_hosts.write_text(
+        f"{mock.mock_harvard_sftp_host} {mock.mock_harvard_sftp_host_key}\n",
+        encoding="utf-8",
+    )
     settings = settings_factory(
         harvard_sftp_mock_enabled=True,
-        harvard_sftp_username="",
-        harvard_sftp_password="",
-        harvard_sftp_known_hosts=None,
+        harvard_sftp_host=mock.mock_harvard_sftp_host,
+        harvard_sftp_username=mock.mock_harvard_sftp_username.get_secret_value(),
+        harvard_sftp_password=mock.mock_harvard_sftp_password.get_secret_value(),
+        harvard_sftp_known_hosts=known_hosts,
     )
     assert (
         settings.harvard_hmm_configured
@@ -209,6 +220,37 @@ async def test_local_mock_mode_runs_without_real_sftp_credentials(
         )
     )
     assert b"mock-" in csv_path.read_bytes()
+
+
+@pytest.mark.asyncio
+async def test_local_sftp_mock_rejects_wrong_password_and_untrusted_host(
+    settings_factory: Callable[..., Settings],
+    tmp_path: Path,
+) -> None:
+    mock = get_mock_settings()
+    untrusted = tmp_path / "known_hosts"
+    untrusted.write_text("other-host ssh-ed25519 other-key\n", encoding="utf-8")
+    wrong_password = settings_factory(
+        harvard_sftp_mock_enabled=True,
+        harvard_sftp_host=mock.mock_harvard_sftp_host,
+        harvard_sftp_username=mock.mock_harvard_sftp_username.get_secret_value(),
+        harvard_sftp_password="wrong",
+        harvard_sftp_known_hosts=untrusted,
+    )
+    with pytest.raises(PermissionError, match="credentials"):
+        async with GeneratedMockHarvardSFTPTransport(wrong_password):
+            pass
+
+    valid_password = settings_factory(
+        harvard_sftp_mock_enabled=True,
+        harvard_sftp_host=mock.mock_harvard_sftp_host,
+        harvard_sftp_username=mock.mock_harvard_sftp_username.get_secret_value(),
+        harvard_sftp_password=mock.mock_harvard_sftp_password.get_secret_value(),
+        harvard_sftp_known_hosts=untrusted,
+    )
+    with pytest.raises(ValueError, match="host key is not trusted"):
+        async with GeneratedMockHarvardSFTPTransport(valid_password):
+            pass
 
 
 @pytest.mark.asyncio

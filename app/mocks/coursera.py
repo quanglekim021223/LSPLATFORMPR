@@ -6,18 +6,15 @@ from urllib.parse import parse_qs
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 
+from app.mocks.settings import get_mock_settings
+
 router = APIRouter(tags=["Coursera"])
 
-_USERNAME = "mock-coursera-user"
-_PASSWORD = "mock-coursera-password"
-_TOKEN = "mock-coursera-token"
-_ORG_ID = "mock-org"
-
-
-def token_payload(token_value: str = _TOKEN) -> dict[str, Any]:
+def token_payload(token_value: str | None = None) -> dict[str, Any]:
+    token = token_value or get_mock_settings().mock_coursera_access_token.get_secret_value()
     return {
         "token_type": "Bearer",
-        "access_token": token_value,
+        "access_token": token,
         "grant_type": "client_credentials",
         "issued_at": 1787213698,
         "expires_in": 1799,
@@ -128,12 +125,13 @@ _ENROLLMENTS = [
 
 
 def _validate_bearer(authorization: str | None) -> None:
-    if authorization != f"Bearer {_TOKEN}":
+    token = get_mock_settings().mock_coursera_access_token.get_secret_value()
+    if authorization != f"Bearer {token}":
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid mock token")
 
 
 def _validate_org(org_id: str) -> None:
-    if org_id != _ORG_ID:
+    if org_id != get_mock_settings().mock_coursera_org_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown mock organization")
 
 
@@ -151,7 +149,10 @@ async def token(
     request: Request,
     authorization: Annotated[str | None, Header()] = None,
 ) -> dict[str, Any]:
-    expected = base64.b64encode(f"{_USERNAME}:{_PASSWORD}".encode()).decode()
+    settings = get_mock_settings()
+    username = settings.mock_coursera_username.get_secret_value()
+    password = settings.mock_coursera_password.get_secret_value()
+    expected = base64.b64encode(f"{username}:{password}".encode()).decode()
     form = parse_qs((await request.body()).decode())
     if (
         authorization != f"Basic {expected}"

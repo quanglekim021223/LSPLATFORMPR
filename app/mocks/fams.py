@@ -4,9 +4,9 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Header, HTTPException, Query, status
 
-router = APIRouter(tags=["FAMS"])
+from app.mocks.settings import get_mock_settings
 
-_API_KEY = "mock-fams-key"
+router = APIRouter(tags=["FAMS"])
 _CLASSES = [
     {
         "classId": "class-001",
@@ -43,7 +43,8 @@ async def training_data(
         Query(alias="actualStartDateTo"),
     ] = None,
 ) -> dict[str, Any]:
-    if api_key != _API_KEY or accept != "application/json":
+    expected_key = get_mock_settings().mock_fams_api_key.get_secret_value()
+    if api_key != expected_key or accept != "application/json":
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid FAMS API key")
 
     statuses = set(status_filter.split(",")) if status_filter else None

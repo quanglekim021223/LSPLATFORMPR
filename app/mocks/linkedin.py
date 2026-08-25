@@ -5,15 +5,13 @@ from urllib.parse import parse_qs
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 
+from app.mocks.settings import get_mock_settings
+
 router = APIRouter(tags=["LinkedIn Learning"])
 
-_CLIENT_ID = "mock-linkedin-client"
-_CLIENT_SECRET = "mock-linkedin-secret"
-_TOKEN = "mock-linkedin-token"
-
-
-def token_payload(token_value: str = _TOKEN) -> dict[str, str | int]:
-    return {"access_token": token_value, "expires_in": 7_776_000}
+def token_payload(token_value: str | None = None) -> dict[str, str | int]:
+    token = token_value or get_mock_settings().mock_linkedin_access_token.get_secret_value()
+    return {"access_token": token, "expires_in": 7_776_000}
 
 
 def _localized(value: str) -> dict[str, Any]:
@@ -101,7 +99,8 @@ _ASSETS = [
 
 
 def _validate_bearer(authorization: str | None) -> None:
-    if authorization != f"Bearer {_TOKEN}":
+    token = get_mock_settings().mock_linkedin_access_token.get_secret_value()
+    if authorization != f"Bearer {token}":
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid mock token")
 
 
@@ -135,11 +134,12 @@ def _page(
 
 @router.post("/oauth/v2/accessToken")
 async def token(request: Request) -> dict[str, str | int]:
+    settings = get_mock_settings()
     form = parse_qs((await request.body()).decode())
     if form != {
         "grant_type": ["client_credentials"],
-        "client_id": [_CLIENT_ID],
-        "client_secret": [_CLIENT_SECRET],
+        "client_id": [settings.mock_linkedin_client_id.get_secret_value()],
+        "client_secret": [settings.mock_linkedin_client_secret.get_secret_value()],
     }:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid mock credentials")
     return token_payload()

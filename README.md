@@ -232,6 +232,19 @@ uvicorn app.mocks.app:app --host 127.0.0.1 --port 9000
 uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
+Mock authentication has independent client-side and vendor-side settings. For example,
+`SKILLUP_API_KEY` is what the ingestion client sends, while `MOCK_SKILLUP_API_KEY` is what the mock
+vendor accepts. Matching values succeed; different values return `401`, which allows realistic
+negative authentication tests. The same pattern covers direct API keys, pre-issued Bearer tokens,
+username/password login, and OAuth client credentials. Access tokens returned by the mock token
+endpoints come from the corresponding `MOCK_*_ACCESS_TOKEN` settings and are never logged.
+
+The generated Harvard SFTP mock also compares the configured client username/password with its
+`MOCK_HARVARD_SFTP_*` values and requires the configured `HARVARD_SFTP_KNOWN_HOSTS` file to contain
+the expected mock host key. This checks the application's authentication and trust configuration;
+it does not implement an SSH network protocol or replace the real `asyncssh` host-key verification
+used when `HARVARD_SFTP_MOCK_ENABLED=false`.
+
 For a quick scheduler test, set `INGESTION_TIME` in `.env` to a future minute in
 `Asia/Ho_Chi_Minh` before starting Terminal 2. At that minute the single scheduler registers and
 starts `levelup-daily-ingestion`, `skillup-daily-ingestion`, `datacamp-daily-ingestion`,

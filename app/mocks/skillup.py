@@ -6,9 +6,9 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Header, HTTPException, Query, status
 
-router = APIRouter(tags=["SkillUp"])
+from app.mocks.settings import get_mock_settings
 
-_API_KEY = "mock-skillup-key"
+router = APIRouter(tags=["SkillUp"])
 _TAXONOMY: list[dict[str, Any]] = [
     {
         "taxonomySkillId": 97915,
@@ -207,7 +207,7 @@ def assessment_report(index: int = 0) -> dict[str, Any]:
 
 
 def _validate_api_key(api_key: str | None) -> None:
-    if api_key != _API_KEY:
+    if api_key != get_mock_settings().mock_skillup_api_key.get_secret_value():
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid mock API key")
 
 

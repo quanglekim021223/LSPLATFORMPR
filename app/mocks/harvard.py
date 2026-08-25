@@ -10,15 +10,11 @@ from urllib.parse import parse_qs
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 
+from app.config import Settings
+from app.mocks.settings import MockSettings, get_mock_settings
 from app.vendors.harvard.models import RemoteFile
 
 router = APIRouter(tags=["Harvard Catalog"])
-
-_CLIENTS = {
-    "mock-hmm-client": ("mock-hmm-secret", "mock-hmm-token"),
-    "mock-spark-client": ("mock-spark-secret", "mock-spark-token"),
-}
-
 
 def token_payload(token_value: str) -> dict[str, str | int]:
     return {"access_token": token_value, "expires_in": 3600}
@@ -66,23 +62,15 @@ def history_csv(vendor: str, report_date: str = "2026-08-22") -> bytes:
     raise ValueError(f"Unsupported Harvard vendor: {vendor}")
 
 
-_ORGS = {
-    "mock-hmm-org": (
-        "HMM",
-        [
-            catalog_item("hmm-1", "HMM Course 1"),
-            catalog_item("hmm-2", "HMM Course 2"),
-            catalog_item("hmm-3", "HMM Course 3"),
-        ],
-    ),
-    "mock-spark-org": (
-        "HBR_SPARK",
-        [
-            catalog_item("spark-1", "Spark Course 1"),
-            catalog_item("spark-2", "Spark Course 2"),
-        ],
-    ),
-}
+_HMM_CATALOG = [
+    catalog_item("hmm-1", "HMM Course 1"),
+    catalog_item("hmm-2", "HMM Course 2"),
+    catalog_item("hmm-3", "HMM Course 3"),
+]
+_SPARK_CATALOG = [
+    catalog_item("spark-1", "Spark Course 1"),
+    catalog_item("spark-2", "Spark Course 2"),
+]
 
 
 class MockHarvardSFTPTransport:
@@ -117,10 +105,12 @@ class MockHarvardSFTPTransport:
 class GeneratedMockHarvardSFTPTransport:
     """Generate deterministic Harvard CSV files for local scheduled runs."""
 
-    def __init__(self) -> None:
+    def __init__(self, settings: Settings) -> None:
+        self.settings = settings
         self.calls: list[str] = []
 
     async def __aenter__(self) -> Self:
+        self._validate_connection(get_mock_settings())
         return self
 
     async def __aexit__(
@@ -163,12 +153,37 @@ class GeneratedMockHarvardSFTPTransport:
             modified_at=datetime.combine(report_date, time(hour=23), UTC),
         )
 
+    def _validate_connection(self, mock: MockSettings) -> None:
+        if self.settings.harvard_sftp_host != mock.mock_harvard_sftp_host:
+            raise ConnectionError("Unknown mock Harvard SFTP host")
+        if (
+            self.settings.harvard_sftp_username.get_secret_value()
+            != mock.mock_harvard_sftp_username.get_secret_value()
+            or self.settings.harvard_sftp_password.get_secret_value()
+            != mock.mock_harvard_sftp_password.get_secret_value()
+        ):
+            raise PermissionError("Invalid mock Harvard SFTP credentials")
+        known_hosts = self.settings.harvard_sftp_known_hosts
+        if known_hosts is None or not known_hosts.is_file():
+            raise ValueError("Mock Harvard SFTP known-hosts file is required")
+        expected_entry = (
+            f"{mock.mock_harvard_sftp_host} {mock.mock_harvard_sftp_host_key}"
+        )
+        trusted_entries = {
+            line.strip()
+            for line in known_hosts.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        }
+        if expected_entry not in trusted_entries:
+            raise ValueError("Mock Harvard SFTP host key is not trusted")
+
 
 @router.post("/v1/api/oauth/v2/accesstoken")
 async def token(
     request: Request,
     authorization: Annotated[str | None, Header()] = None,
 ) -> dict[str, str | int]:
+    settings = get_mock_settings()
     if not authorization or not authorization.startswith("Basic "):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid mock credentials")
     try:
@@ -178,7 +193,17 @@ async def token(
         raise HTTPException(
             status.HTTP_401_UNAUTHORIZED, "Invalid mock credentials"
         ) from None
-    expected = _CLIENTS.get(client_id)
+    clients = {
+        settings.mock_harvard_hmm_client_id.get_secret_value(): (
+            settings.mock_harvard_hmm_client_secret.get_secret_value(),
+            settings.mock_harvard_hmm_access_token.get_secret_value(),
+        ),
+        settings.mock_harvard_spark_client_id.get_secret_value(): (
+            settings.mock_harvard_spark_client_secret.get_secret_value(),
+            settings.mock_harvard_spark_access_token.get_secret_value(),
+        ),
+    }
+    expected = clients.get(client_id)
     form = parse_qs((await request.body()).decode())
     if (
         expected is None
@@ -200,11 +225,18 @@ async def catalog(
     authorization: Annotated[str | None, Header()] = None,
 ) -> dict[str, Any]:
     del start_date
-    config = _ORGS.get(org_key)
+    settings = get_mock_settings()
+    orgs = {
+        settings.mock_harvard_hmm_org_key: ("HMM", _HMM_CATALOG),
+        settings.mock_harvard_spark_org_key: ("HBR_SPARK", _SPARK_CATALOG),
+    }
+    config = orgs.get(org_key)
     if config is None or catalogs != config[0]:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown mock catalog")
     expected_token = (
-        "mock-hmm-token" if catalogs == "HMM" else "mock-spark-token"
+        settings.mock_harvard_hmm_access_token.get_secret_value()
+        if catalogs == "HMM"
+        else settings.mock_harvard_spark_access_token.get_secret_value()
     )
     if authorization != f"Bearer {expected_token}":
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid mock token")

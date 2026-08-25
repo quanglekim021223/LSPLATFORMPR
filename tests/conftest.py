@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -8,6 +9,41 @@ import httpx
 import pytest
 
 from app.config import Settings
+
+_MOCK_ENV = {
+    "MOCK_LEVELUP_USERNAME": "mock-user",
+    "MOCK_LEVELUP_PASSWORD": "mock-password",
+    "MOCK_LEVELUP_API_KEY": "mock-private-key",
+    "MOCK_LEVELUP_API_VERSION": "2",
+    "MOCK_LEVELUP_ACCESS_TOKEN": "mock-levelup-token",
+    "MOCK_SKILLUP_API_KEY": "mock-skillup-key",
+    "MOCK_DATACAMP_TOKEN": "mock-datacamp-token",
+    "MOCK_COURSERA_USERNAME": "mock-coursera-user",
+    "MOCK_COURSERA_PASSWORD": "mock-coursera-password",
+    "MOCK_COURSERA_ORG_ID": "mock-org",
+    "MOCK_COURSERA_ACCESS_TOKEN": "mock-coursera-token",
+    "MOCK_LINKEDIN_CLIENT_ID": "mock-linkedin-client",
+    "MOCK_LINKEDIN_CLIENT_SECRET": "mock-linkedin-secret",
+    "MOCK_LINKEDIN_ACCESS_TOKEN": "mock-linkedin-token",
+    "MOCK_HARVARD_HMM_CLIENT_ID": "mock-hmm-client",
+    "MOCK_HARVARD_HMM_CLIENT_SECRET": "mock-hmm-secret",
+    "MOCK_HARVARD_HMM_ORG_KEY": "mock-hmm-org",
+    "MOCK_HARVARD_HMM_ACCESS_TOKEN": "mock-hmm-token",
+    "MOCK_HARVARD_SPARK_CLIENT_ID": "mock-spark-client",
+    "MOCK_HARVARD_SPARK_CLIENT_SECRET": "mock-spark-secret",
+    "MOCK_HARVARD_SPARK_ORG_KEY": "mock-spark-org",
+    "MOCK_HARVARD_SPARK_ACCESS_TOKEN": "mock-spark-token",
+    "MOCK_HARVARD_SFTP_HOST": "mock-harvard-sftp",
+    "MOCK_HARVARD_SFTP_USERNAME": "mock-harvard-sftp-user",
+    "MOCK_HARVARD_SFTP_PASSWORD": "mock-harvard-sftp-password",
+    "MOCK_HARVARD_SFTP_HOST_KEY": (
+        "ssh-ed25519 "
+        "AAAAC3NzaC1lZDI1NTE5AAAAIANeqwMmZ87//cJ6mwB8qeyF+egQrDQhkRrsyhymF8UO"
+    ),
+    "MOCK_FAMS_API_KEY": "mock-fams-key",
+}
+for _name, _value in _MOCK_ENV.items():
+    os.environ.setdefault(_name, _value)
 
 
 @pytest.fixture

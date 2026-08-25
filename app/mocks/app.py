@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 
 from app.mocks.coursera import router as coursera_router
@@ -8,9 +11,17 @@ from app.mocks.fams import router as fams_router
 from app.mocks.harvard import router as harvard_router
 from app.mocks.levelup import router as levelup_router
 from app.mocks.linkedin import router as linkedin_router
+from app.mocks.settings import get_mock_settings
 from app.mocks.skillup import router as skillup_router
 
-app = FastAPI(title="Mock Learning Vendor Hub")
+
+@asynccontextmanager
+async def lifespan(_application: FastAPI) -> AsyncGenerator[None, None]:
+    get_mock_settings().validate_runtime()
+    yield
+
+
+app = FastAPI(title="Mock Learning Vendor Hub", lifespan=lifespan)
 
 app.include_router(levelup_router, prefix="/levelup")
 app.include_router(skillup_router, prefix="/skillup")

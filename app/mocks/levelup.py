@@ -5,10 +5,9 @@ from typing import Annotated
 from fastapi import APIRouter, Header, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
-router = APIRouter(tags=["LevelUP"])
+from app.mocks.settings import get_mock_settings
 
-_API_KEY = "mock-private-key"
-_TOKEN = "mock-token"
+router = APIRouter(tags=["LevelUP"])
 
 
 def course_payload(
@@ -102,7 +101,11 @@ class AuthenticationRequest(BaseModel):
 
 
 def _validate_client(api_key: str | None, api_version: str | None) -> None:
-    if api_key != _API_KEY or api_version != "2":
+    settings = get_mock_settings()
+    if (
+        api_key != settings.mock_levelup_api_key.get_secret_value()
+        or api_version != settings.mock_levelup_api_version
+    ):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid mock API credentials")
 
 
@@ -110,7 +113,7 @@ def _validate_token(
     authorization: str | None, api_key: str | None, api_version: str | None
 ) -> None:
     _validate_client(api_key, api_version)
-    if authorization != _TOKEN:
+    if authorization != get_mock_settings().mock_levelup_access_token.get_secret_value():
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid mock token")
 
 
@@ -120,14 +123,16 @@ async def authenticate(
     api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,
     api_version: Annotated[str | None, Header(alias="x-api-version")] = None,
 ) -> str:
+    settings = get_mock_settings()
     _validate_client(api_key, api_version)
     if (
-        credentials.username != "mock-user"
-        or credentials.password != "mock-password"
-        or credentials.private_key != _API_KEY
+        credentials.username != settings.mock_levelup_username.get_secret_value()
+        or credentials.password != settings.mock_levelup_password.get_secret_value()
+        or credentials.private_key
+        != settings.mock_levelup_api_key.get_secret_value()
     ):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid mock login")
-    return _TOKEN
+    return settings.mock_levelup_access_token.get_secret_value()
 
 
 @router.get("/courses")

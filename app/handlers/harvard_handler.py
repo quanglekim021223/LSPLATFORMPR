@@ -115,7 +115,7 @@ class HarvardJob:
                     elif self.settings.harvard_sftp_mock_enabled:
                         from app.mocks.harvard import GeneratedMockHarvardSFTPTransport
 
-                        sftp = GeneratedMockHarvardSFTPTransport()
+                        sftp = GeneratedMockHarvardSFTPTransport(self.settings)
                     else:
                         sftp = AsyncSSHSFTPTransport(
                             self.settings,

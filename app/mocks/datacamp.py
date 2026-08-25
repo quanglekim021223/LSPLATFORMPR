@@ -5,9 +5,9 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Header, HTTPException, Query, status
 
-router = APIRouter(tags=["DataCamp"])
+from app.mocks.settings import get_mock_settings
 
-_TOKEN = "mock-datacamp-token"
+router = APIRouter(tags=["DataCamp"])
 
 
 def course_payload(
@@ -87,7 +87,8 @@ _EVENTS = [event_payload(1), event_payload(2), event_payload(3)]
 
 
 def _validate_headers(authorization: str | None, accept: str | None) -> None:
-    if authorization != f"Bearer {_TOKEN}" or accept != "application/json":
+    token = get_mock_settings().mock_datacamp_token.get_secret_value()
+    if authorization != f"Bearer {token}" or accept != "application/json":
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid mock credentials")
 
 

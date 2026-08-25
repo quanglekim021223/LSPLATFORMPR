@@ -451,8 +451,6 @@ class Settings(BaseSettings):
         return [name for name, value in values.items() if not value]
 
     def _missing_harvard_sftp_configuration(self) -> list[str]:
-        if self.harvard_sftp_mock_enabled:
-            return []
         values: dict[str, object] = {
             "HARVARD_SFTP_HOST": self.harvard_sftp_host,
             "HARVARD_SFTP_USERNAME": self.harvard_sftp_username.get_secret_value(),
