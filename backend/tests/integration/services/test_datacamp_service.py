@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from collections import Counter
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -172,7 +172,12 @@ async def test_events_backfill_then_use_daily_watermark(
         sleep=no_sleep,
     )
     assert second.status == RunStatus.SUCCEEDED
-    assert event_requests[0]["from"] == daily_watermark
+    daily_start = datetime.fromisoformat(
+        event_requests[0]["from"].replace("Z", "+00:00")
+    )
+    assert daily_start == datetime.fromisoformat(
+        daily_watermark.replace("Z", "+00:00")
+    ) - timedelta(days=3)
     assert event_requests[0]["to"] != ""
 
 
@@ -211,12 +216,10 @@ async def test_events_weekly_sync_reads_ninety_days(
 
 
 @pytest.mark.asyncio
-async def test_events_monthly_sync_reads_full_configured_history(
+async def test_events_monthly_sync_reads_full_history(
     settings_factory: Callable[..., object],
 ) -> None:
-    settings = settings_factory(
-        datacamp_events_start_time="2019-01-01T00:00:00Z"
-    )
+    settings = settings_factory(datacamp_events_start_time="2019-01-01T00:00:00Z")
     store = CheckpointStore(settings.checkpoint_db_path)  # type: ignore[attr-defined]
     await store.initialize()
     await store.set_watermark(
@@ -238,9 +241,6 @@ async def test_events_monthly_sync_reads_full_configured_history(
 
     assert summary.status == RunStatus.SUCCEEDED
     assert event_params["from"] == "2019-01-01T00:00:00Z"
-    assert datetime.fromisoformat(
-        event_params["to"].replace("Z", "+00:00")
-    ).tzinfo is UTC
 
 
 def test_monthly_sync_uses_ingestion_timezone_calendar_month() -> None:

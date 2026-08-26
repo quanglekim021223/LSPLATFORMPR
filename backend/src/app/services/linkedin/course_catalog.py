@@ -20,6 +20,7 @@ from app.services.linkedin.pagination import next_start
 
 CATALOG_DOMAIN = "course_catalog"
 DETAIL_DOMAIN = "course_detail"
+VENDOR = "linkedin"
 logger = logging.getLogger(__name__)
 
 
@@ -30,10 +31,19 @@ async def ingest_catalog_pipeline(
     writer: BronzeWriter,
     run_id: str,
     ingestion_date: str,
+    *,
+    last_modified_after: int | None = None,
+    sync_watermark: str | None = None,
 ) -> list[CourseResult]:
     try:
         await ingest_course_catalog(
-            settings, client, checkpoints, writer, run_id, ingestion_date
+            settings,
+            client,
+            checkpoints,
+            writer,
+            run_id,
+            ingestion_date,
+            last_modified_after=last_modified_after,
         )
     except Exception as exc:
         message = sanitize_text(exc, client.sensitive_values())
@@ -42,9 +52,17 @@ async def ingest_catalog_pipeline(
         )
         raise
     urns = await checkpoints.courses_to_process(run_id)
-    return await ingest_asset_details(
+    results = await ingest_asset_details(
         settings, client, checkpoints, writer, run_id, ingestion_date, urns
     )
+    if sync_watermark is not None and all(result.succeeded for result in results):
+        await checkpoints.set_watermark(
+            VENDOR,
+            CATALOG_DOMAIN,
+            sync_watermark,
+            run_id,
+        )
+    return results
 
 
 async def ingest_course_catalog(
@@ -54,14 +72,20 @@ async def ingest_course_catalog(
     writer: BronzeWriter,
     run_id: str,
     ingestion_date: str,
+    *,
+    last_modified_after: int | None = None,
 ) -> None:
     start = 0
     while True:
         params = {
             "q": "criteria",
+            "assetFilteringCriteria.assetTypes[0]": "COURSE",
+            "assetRetrievalCriteria.includeRetired": True,
             "start": start,
             "count": settings.linkedin_page_size,
         }
+        if last_modified_after is not None:
+            params["assetFilteringCriteria.lastModifiedAfter"] = last_modified_after
         try:
             payload, raw_payload = await client.get_json("/learningAssets", params)
             contract = validate_learning_assets(

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from collections import Counter
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -12,8 +12,9 @@ from app.mocks.skillup import assessment_report, skill_profile, taxonomy_item
 from app.models import RunStatus
 from app.repositories import CheckpointStore
 from app.services.skillup.assessment_history import (
+    DAILY_SYNC_SCOPE,
     FULL_SYNC_SCOPE,
-    LOOKBACK_SYNC_SCOPE,
+    WEEKLY_SYNC_SCOPE,
 )
 from app.services.skillup.service import run_skillup_ingestion
 from tests.conftest import no_sleep, response
@@ -220,13 +221,17 @@ async def test_skillup_uses_incremental_filters_and_daily_assessment_window(
     full_sync_watermark = await store.get_watermark(
         "skillup", "assessment_history", FULL_SYNC_SCOPE
     )
-    lookback_sync_watermark = await store.get_watermark(
-        "skillup", "assessment_history", LOOKBACK_SYNC_SCOPE
+    daily_sync_watermark = await store.get_watermark(
+        "skillup", "assessment_history", DAILY_SYNC_SCOPE
+    )
+    weekly_sync_watermark = await store.get_watermark(
+        "skillup", "assessment_history", WEEKLY_SYNC_SCOPE
     )
     assert taxonomy_watermark is not None
     assert inventory_watermark is not None
     assert full_sync_watermark is not None
-    assert lookback_sync_watermark is not None
+    assert daily_sync_watermark == full_sync_watermark
+    assert weekly_sync_watermark is not None
 
     seen.clear()
     second = await run_skillup_ingestion(
@@ -243,8 +248,16 @@ async def test_skillup_uses_incremental_filters_and_daily_assessment_window(
         requests["/employees/skills-profile"]["SkillProfileModifiedSince"]
         == inventory_watermark
     )
-    assert "startDate" not in requests["/v3/reports"]
-    assert "endDate" not in requests["/v3/reports"]
+    daily_start = datetime.fromisoformat(
+        requests["/v3/reports"]["startDate"].replace("Z", "+00:00")
+    )
+    daily_end = datetime.fromisoformat(
+        requests["/v3/reports"]["endDate"].replace("Z", "+00:00")
+    )
+    assert daily_end - daily_start >= timedelta(days=3)
+    assert daily_start == datetime.fromisoformat(
+        daily_sync_watermark.replace("Z", "+00:00")
+    ) - timedelta(days=3)
     assert second.records_by_domain == {
         "assessment_history": 1,
         "skill_inventory": 0,
@@ -253,10 +266,10 @@ async def test_skillup_uses_incremental_filters_and_daily_assessment_window(
 
 
 @pytest.mark.asyncio
-async def test_skillup_periodic_assessment_full_sync(
+async def test_skillup_monthly_assessment_full_sync(
     settings_factory: Callable[..., object],
 ) -> None:
-    settings = settings_factory(skillup_assessment_full_sync_interval_days=30)
+    settings = settings_factory()
     store = CheckpointStore(settings.checkpoint_db_path)  # type: ignore[attr-defined]
     await store.initialize()
     await store.set_watermark(
@@ -287,7 +300,7 @@ async def test_skillup_periodic_assessment_full_sync(
         "skillup", "assessment_history", FULL_SYNC_SCOPE
     ) != "2026-01-01T00:00:00Z"
     assert await store.get_watermark(
-        "skillup", "assessment_history", LOOKBACK_SYNC_SCOPE
+        "skillup", "assessment_history", WEEKLY_SYNC_SCOPE
     ) is not None
 
 
@@ -304,7 +317,7 @@ async def test_skillup_weekly_assessment_reads_ninety_days(
     await store.set_watermark(
         "skillup",
         "assessment_history",
-        "2099-01-01T00:00:00Z",
+        datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         "recent-full-run",
         FULL_SYNC_SCOPE,
     )
@@ -313,7 +326,7 @@ async def test_skillup_weekly_assessment_reads_ninety_days(
         "assessment_history",
         "2026-01-01T00:00:00Z",
         "old-lookback-run",
-        LOOKBACK_SYNC_SCOPE,
+        WEEKLY_SYNC_SCOPE,
     )
     assessment_params: dict[str, str] = {}
 
@@ -334,7 +347,7 @@ async def test_skillup_weekly_assessment_reads_ninety_days(
     end = datetime.fromisoformat(assessment_params["endDate"].replace("Z", "+00:00"))
     assert (end - start).days == 90
     assert await store.get_watermark(
-        "skillup", "assessment_history", LOOKBACK_SYNC_SCOPE
+        "skillup", "assessment_history", WEEKLY_SYNC_SCOPE
     ) != "2026-01-01T00:00:00Z"
 
 

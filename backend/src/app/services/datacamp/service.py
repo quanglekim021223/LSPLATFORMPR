@@ -177,6 +177,14 @@ class DataCampJob:
             LEARNING_HISTORY,
             FULL_SYNC_SCOPE,
         )
+        if last_full_sync is None:
+            return (
+                self.settings.datacamp_events_start_time,
+                run_end,
+                run_end,
+                run_end,
+                run_end,
+            )
         if _monthly_sync_due(
             last_full_sync,
             now,
@@ -196,8 +204,9 @@ class DataCampJob:
             WEEKLY_SYNC_SCOPE,
         )
         if _sync_due(last_weekly_sync, now, WEEKLY_SYNC_INTERVAL_DAYS):
-            lookback_start = now - timedelta(
-                days=self.settings.datacamp_events_lookback_days
+            lookback_start = max(
+                _parse_utc(self.settings.datacamp_events_start_time),
+                now - timedelta(days=self.settings.datacamp_events_lookback_days),
             )
             return _utc_text(lookback_start), run_end, run_end, run_end, None
 
@@ -206,7 +215,12 @@ class DataCampJob:
             LEARNING_HISTORY,
             DAILY_SYNC_SCOPE,
         )
-        return last_daily_sync or last_full_sync, run_end, run_end, None, None
+        daily_start = max(
+            _parse_utc(self.settings.datacamp_events_start_time),
+            _parse_utc(last_daily_sync or last_full_sync)
+            - timedelta(days=self.settings.datacamp_events_daily_overlap_days),
+        )
+        return _utc_text(daily_start), run_end, run_end, None, None
 
     async def _heartbeat_loop(
         self,
@@ -302,3 +316,15 @@ def _monthly_sync_due(
 
 def _utc_text(value: datetime) -> str:
     return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _parse_utc(value: str | None) -> datetime:
+    if value is None:
+        raise ValueError("DataCamp Learning History watermark is missing")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("DataCamp Learning History watermark must be ISO-8601") from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)

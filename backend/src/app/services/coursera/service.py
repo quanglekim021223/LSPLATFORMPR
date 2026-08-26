@@ -199,7 +199,18 @@ class CourseraJob:
             LEARNING_HISTORY,
             DAILY_SYNC_SCOPE,
         )
-        return _parse_epoch(last_daily_sync or last_full_sync), sync_watermark, None, None
+        daily_anchor = _parse_epoch(last_daily_sync or last_full_sync)
+        if daily_anchor is None:
+            return None, sync_watermark, sync_watermark, sync_watermark
+        overlap_milliseconds = (
+            self.settings.coursera_history_daily_overlap_days * 24 * 60 * 60 * 1000
+        )
+        return (
+            max(0, daily_anchor - overlap_milliseconds),
+            sync_watermark,
+            None,
+            None,
+        )
 
     async def _heartbeat_loop(
         self,

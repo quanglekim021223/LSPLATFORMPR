@@ -14,6 +14,10 @@ from app.schemas.linkedin import extra_field_paths, validate_activity_reports
 from app.services.linkedin.pagination import next_start
 
 DOMAIN = "learning_history"
+VENDOR = "linkedin"
+DAILY_SYNC_SCOPE = "daily_sync"
+WEEKLY_SYNC_SCOPE = "weekly_sync"
+FULL_SYNC_SCOPE = "full_sync"
 MAX_WINDOW_DAYS = 14
 logger = logging.getLogger(__name__)
 
@@ -25,9 +29,17 @@ async def ingest_learning_history(
     writer: BronzeWriter,
     run_id: str,
     ingestion_date: str,
+    *,
+    history_start: datetime | None = None,
+    history_end: datetime | None = None,
+    daily_sync_watermark: str | None = None,
+    weekly_sync_watermark: str | None = None,
+    full_sync_watermark: str | None = None,
 ) -> None:
-    history_start = parse_history_start(settings.linkedin_history_start_time)
-    history_end = datetime.now(UTC)
+    history_start = history_start or parse_history_start(
+        settings.linkedin_history_start_time
+    )
+    history_end = history_end or datetime.now(UTC)
     if history_start > history_end:
         raise ValueError("LINKEDIN_HISTORY_START_TIME must not be in the future")
 
@@ -105,6 +117,30 @@ async def ingest_learning_history(
                 break
             start = following_start
         window_start += timedelta(days=duration_days)
+    if daily_sync_watermark is not None:
+        await checkpoints.set_watermark(
+            VENDOR,
+            DOMAIN,
+            daily_sync_watermark,
+            run_id,
+            DAILY_SYNC_SCOPE,
+        )
+    if weekly_sync_watermark is not None:
+        await checkpoints.set_watermark(
+            VENDOR,
+            DOMAIN,
+            weekly_sync_watermark,
+            run_id,
+            WEEKLY_SYNC_SCOPE,
+        )
+    if full_sync_watermark is not None:
+        await checkpoints.set_watermark(
+            VENDOR,
+            DOMAIN,
+            full_sync_watermark,
+            run_id,
+            FULL_SYNC_SCOPE,
+        )
     await checkpoints.mark_domain(run_id, DOMAIN, "completed")
 
 

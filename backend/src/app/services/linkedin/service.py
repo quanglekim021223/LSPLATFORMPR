@@ -4,7 +4,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -21,13 +21,20 @@ from app.services.linkedin.course_catalog import (
     DETAIL_DOMAIN,
     ingest_catalog_pipeline,
 )
+from app.services.linkedin.learning_history import (
+    DAILY_SYNC_SCOPE,
+    FULL_SYNC_SCOPE,
+    WEEKLY_SYNC_SCOPE,
+    ingest_learning_history,
+    parse_history_start,
+)
 from app.services.linkedin.learning_history import DOMAIN as LEARNING_HISTORY
-from app.services.linkedin.learning_history import ingest_learning_history
 
 logger = logging.getLogger(__name__)
 
 VENDOR = "linkedin"
 DOMAINS = (CATALOG_DOMAIN, DETAIL_DOMAIN, LEARNING_HISTORY)
+WEEKLY_SYNC_INTERVAL_DAYS = 7
 
 
 class LinkedInJob:
@@ -62,9 +69,22 @@ class LinkedInJob:
             self.settings.validate_linkedin_runtime()
             self.client.asset_detail_params("urn:li:learningAsset:configuration-check")
             await self.client.authenticate()
-            ingestion_date = datetime.now(
+            now = datetime.now(UTC)
+            ingestion_date = now.astimezone(
                 ZoneInfo(self.settings.ingestion_timezone)
             ).date().isoformat()
+            previous_catalog_watermark = await self.checkpoints.get_watermark(
+                VENDOR,
+                CATALOG_DOMAIN,
+            )
+            catalog_watermark = str(int(now.timestamp() * 1000))
+            (
+                history_start,
+                history_end,
+                daily_sync_watermark,
+                weekly_sync_watermark,
+                full_sync_watermark,
+            ) = await self._history_sync_plan(now)
             tasks: list[Awaitable[object]] = [
                 ingest_catalog_pipeline(
                     self.settings,
@@ -73,6 +93,10 @@ class LinkedInJob:
                     self.writer,
                     current_run_id,
                     ingestion_date,
+                    last_modified_after=_parse_catalog_watermark(
+                        previous_catalog_watermark
+                    ),
+                    sync_watermark=catalog_watermark,
                 ),
                 ingest_learning_history(
                     self.settings,
@@ -81,6 +105,11 @@ class LinkedInJob:
                     self.writer,
                     current_run_id,
                     ingestion_date,
+                    history_start=history_start,
+                    history_end=history_end,
+                    daily_sync_watermark=daily_sync_watermark,
+                    weekly_sync_watermark=weekly_sync_watermark,
+                    full_sync_watermark=full_sync_watermark,
                 ),
             ]
             catalog_result, history_result = await asyncio.gather(
@@ -135,6 +164,65 @@ class LinkedInJob:
                 await heartbeat_task
             await self.checkpoints.release_lock(VENDOR, current_run_id)
 
+    async def _history_sync_plan(
+        self,
+        now: datetime,
+    ) -> tuple[datetime, datetime, str, str | None, str | None]:
+        configured_start = parse_history_start(
+            self.settings.linkedin_history_start_time
+        )
+        sync_watermark = str(int(now.timestamp() * 1000))
+        last_full_sync = await self.checkpoints.get_watermark(
+            VENDOR,
+            LEARNING_HISTORY,
+            FULL_SYNC_SCOPE,
+        )
+        if last_full_sync is None:
+            return (
+                configured_start,
+                now,
+                sync_watermark,
+                sync_watermark,
+                sync_watermark,
+            )
+        if _monthly_sync_due(
+            last_full_sync,
+            now,
+            self.settings.ingestion_timezone,
+        ):
+            return (
+                configured_start,
+                now,
+                sync_watermark,
+                sync_watermark,
+                sync_watermark,
+            )
+
+        last_weekly_sync = await self.checkpoints.get_watermark(
+            VENDOR,
+            LEARNING_HISTORY,
+            WEEKLY_SYNC_SCOPE,
+        )
+        if _sync_due(last_weekly_sync, now, WEEKLY_SYNC_INTERVAL_DAYS):
+            history_start = max(
+                configured_start,
+                now - timedelta(days=self.settings.linkedin_history_lookback_days),
+            )
+            return history_start, now, sync_watermark, sync_watermark, None
+
+        last_daily_sync = await self.checkpoints.get_watermark(
+            VENDOR,
+            LEARNING_HISTORY,
+            DAILY_SYNC_SCOPE,
+        )
+        daily_anchor = _parse_epoch(last_daily_sync or last_full_sync)
+        history_start = max(
+            configured_start,
+            daily_anchor
+            - timedelta(days=self.settings.linkedin_history_daily_lookback_days),
+        )
+        return history_start, now, sync_watermark, None, None
+
     async def _heartbeat_loop(
         self,
         run_id: str,
@@ -181,3 +269,50 @@ async def run_linkedin_ingestion(
     async with httpx.AsyncClient(timeout=timeout, transport=transport) as http_client:
         client = LinkedInClient(settings, http_client, sleep=sleep)
         return await LinkedInJob(settings, client, store, writer).run()
+
+
+def _parse_epoch(value: str | None) -> datetime:
+    if value is None:
+        raise ValueError("LinkedIn history watermark is missing")
+    try:
+        milliseconds = int(value)
+    except ValueError as exc:
+        raise ValueError("LinkedIn history watermark must be epoch milliseconds") from exc
+    return datetime.fromtimestamp(milliseconds / 1000, UTC)
+
+
+def _parse_catalog_watermark(value: str | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        parsed = int(value)
+    except ValueError:
+        return None
+    return parsed if parsed >= 0 else None
+
+
+def _sync_due(last_sync: str | None, now: datetime, interval_days: int) -> bool:
+    if last_sync is None:
+        return True
+    try:
+        completed_at = _parse_epoch(last_sync)
+    except (ValueError, OverflowError, OSError):
+        return True
+    return now - completed_at >= timedelta(days=interval_days)
+
+
+def _monthly_sync_due(
+    last_sync: str | None,
+    now: datetime,
+    timezone: str,
+) -> bool:
+    if last_sync is None:
+        return True
+    try:
+        completed_at = _parse_epoch(last_sync)
+    except (ValueError, OverflowError, OSError):
+        return True
+    zone = ZoneInfo(timezone)
+    return completed_at.astimezone(zone).strftime("%Y-%m") != now.astimezone(
+        zone
+    ).strftime("%Y-%m")

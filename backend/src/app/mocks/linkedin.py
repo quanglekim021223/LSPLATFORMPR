@@ -150,6 +150,15 @@ async def learning_assets(
     q: Annotated[str, Query()] = "criteria",
     start: Annotated[int, Query(ge=0)] = 0,
     count: Annotated[int, Query(ge=1, le=100)] = 100,
+    asset_type: Annotated[
+        str | None, Query(alias="assetFilteringCriteria.assetTypes[0]")
+    ] = None,
+    last_modified_after: Annotated[
+        int | None, Query(alias="assetFilteringCriteria.lastModifiedAfter", ge=0)
+    ] = None,
+    include_retired: Annotated[
+        bool, Query(alias="assetRetrievalCriteria.includeRetired")
+    ] = False,
     asset_urn: Annotated[
         str | None, Query(alias="assetFilteringCriteria.urn")
     ] = None,
@@ -161,7 +170,19 @@ async def learning_assets(
     if asset_urn is not None:
         matches = [asset for asset in _ASSETS if asset["urn"] == asset_urn]
         return _page(matches, 0, count, "learningAssets")
-    return _page(_ASSETS, start, count, "learningAssets")
+    if asset_type != "COURSE" or not include_retired:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Catalog requires one COURSE type and includeRetired=true",
+        )
+    matches = _ASSETS
+    if last_modified_after is not None:
+        matches = [
+            asset
+            for asset in matches
+            if asset["details"]["lastUpdatedAt"] > last_modified_after
+        ]
+    return _page(matches, start, count, "learningAssets")
 
 
 @router.get("/learningActivityReports")

@@ -13,8 +13,9 @@ from app.schemas.skillup import extra_field_paths, validate_assessment_history
 
 DOMAIN = "assessment_history"
 VENDOR = "skillup"
+DAILY_SYNC_SCOPE = "daily_sync"
+WEEKLY_SYNC_SCOPE = "weekly_sync"
 FULL_SYNC_SCOPE = "full_sync"
-LOOKBACK_SYNC_SCOPE = "lookback_sync"
 logger = logging.getLogger(__name__)
 
 
@@ -29,8 +30,9 @@ async def ingest_assessment_history(
     include_sections: bool | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
+    daily_sync_watermark: str | None = None,
+    weekly_sync_watermark: str | None = None,
     full_sync_watermark: str | None = None,
-    lookback_sync_watermark: str | None = None,
 ) -> None:
     page_number = await checkpoints.next_page_number(run_id, DOMAIN)
     while True:
@@ -90,6 +92,22 @@ async def ingest_assessment_history(
         if not contract.has_next_page:
             break
         page_number += 1
+    if daily_sync_watermark is not None:
+        await checkpoints.set_watermark(
+            VENDOR,
+            DOMAIN,
+            daily_sync_watermark,
+            run_id,
+            DAILY_SYNC_SCOPE,
+        )
+    if weekly_sync_watermark is not None:
+        await checkpoints.set_watermark(
+            VENDOR,
+            DOMAIN,
+            weekly_sync_watermark,
+            run_id,
+            WEEKLY_SYNC_SCOPE,
+        )
     if full_sync_watermark is not None:
         await checkpoints.set_watermark(
             VENDOR,
@@ -97,13 +115,5 @@ async def ingest_assessment_history(
             full_sync_watermark,
             run_id,
             FULL_SYNC_SCOPE,
-        )
-    if lookback_sync_watermark is not None:
-        await checkpoints.set_watermark(
-            VENDOR,
-            DOMAIN,
-            lookback_sync_watermark,
-            run_id,
-            LOOKBACK_SYNC_SCOPE,
         )
     await checkpoints.mark_domain(run_id, DOMAIN, "completed")

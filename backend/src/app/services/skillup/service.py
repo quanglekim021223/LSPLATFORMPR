@@ -17,12 +17,13 @@ from app.core.security import sanitize_text
 from app.models import RunStatus, RunSummary
 from app.repositories import BronzeWriter, CheckpointStore, LocalBronzeWriter
 from app.services.skillup.assessment_history import (
-    DOMAIN as ASSESSMENT_HISTORY,
+    DAILY_SYNC_SCOPE,
+    FULL_SYNC_SCOPE,
+    WEEKLY_SYNC_SCOPE,
+    ingest_assessment_history,
 )
 from app.services.skillup.assessment_history import (
-    FULL_SYNC_SCOPE,
-    LOOKBACK_SYNC_SCOPE,
-    ingest_assessment_history,
+    DOMAIN as ASSESSMENT_HISTORY,
 )
 from app.services.skillup.skill_inventory import DOMAIN as SKILL_INVENTORY
 from app.services.skillup.skill_inventory import ingest_skill_inventory
@@ -79,8 +80,9 @@ class SkillUpJob:
             (
                 assessment_start,
                 assessment_end,
+                daily_sync_watermark,
+                weekly_sync_watermark,
                 full_sync_watermark,
-                lookback_sync_watermark,
             ) = await self._assessment_range(start_date, end_date)
             domains = set(await self.checkpoints.domains_to_process(current_run_id))
             tasks: list[Awaitable[None]] = []
@@ -121,8 +123,9 @@ class SkillUpJob:
                         include_sections=include_sections,
                         start_date=assessment_start,
                         end_date=assessment_end,
+                        daily_sync_watermark=daily_sync_watermark,
+                        weekly_sync_watermark=weekly_sync_watermark,
                         full_sync_watermark=full_sync_watermark,
-                        lookback_sync_watermark=lookback_sync_watermark,
                     )
                 )
 
@@ -178,9 +181,15 @@ class SkillUpJob:
         self,
         start_date: str | None,
         end_date: str | None,
-    ) -> tuple[str | None, str | None, str | None, str | None]:
+    ) -> tuple[
+        str | None,
+        str | None,
+        str | None,
+        str | None,
+        str | None,
+    ]:
         if start_date is not None or end_date is not None:
-            return start_date, end_date, None, None
+            return start_date, end_date, None, None, None
 
         now = datetime.now(UTC)
         watermark = now.isoformat().replace("+00:00", "Z")
@@ -189,39 +198,58 @@ class SkillUpJob:
             ASSESSMENT_HISTORY,
             FULL_SYNC_SCOPE,
         )
-        if _sync_due(
+        if _monthly_sync_due(
             last_full_sync,
             now,
-            self.settings.skillup_assessment_full_sync_interval_days,
+            self.settings.ingestion_timezone,
         ):
             return (
                 self.settings.skillup_assessment_start_date,
                 watermark,
                 watermark,
                 watermark,
+                watermark,
             )
 
-        last_lookback_sync = await self.checkpoints.get_watermark(
+        last_weekly_sync = await self.checkpoints.get_watermark(
             VENDOR,
             ASSESSMENT_HISTORY,
-            LOOKBACK_SYNC_SCOPE,
+            WEEKLY_SYNC_SCOPE,
         )
         if _sync_due(
-            last_lookback_sync,
+            last_weekly_sync,
             now,
             self.settings.skillup_assessment_weekly_sync_interval_days,
         ):
-            lookback_start = now - timedelta(
-                days=self.settings.skillup_assessment_lookback_days
+            lookback_start = max(
+                _parse_utc(self.settings.skillup_assessment_start_date),
+                now - timedelta(days=self.settings.skillup_assessment_lookback_days),
             )
             return (
                 lookback_start.isoformat().replace("+00:00", "Z"),
                 watermark,
-                None,
                 watermark,
+                watermark,
+                None,
             )
 
-        return None, None, None, None
+        last_daily_sync = await self.checkpoints.get_watermark(
+            VENDOR,
+            ASSESSMENT_HISTORY,
+            DAILY_SYNC_SCOPE,
+        )
+        daily_start = max(
+            _parse_utc(self.settings.skillup_assessment_start_date),
+            _parse_utc(last_daily_sync or last_full_sync)
+            - timedelta(days=self.settings.skillup_assessment_daily_overlap_days),
+        )
+        return (
+            daily_start.isoformat().replace("+00:00", "Z"),
+            watermark,
+            watermark,
+            None,
+            None,
+        )
 
     async def _heartbeat_loop(
         self,
@@ -298,3 +326,32 @@ def _sync_due(
     if completed_at.tzinfo is None:
         completed_at = completed_at.replace(tzinfo=UTC)
     return now - completed_at >= timedelta(days=interval_days)
+
+
+def _monthly_sync_due(
+    last_sync: str | None,
+    now: datetime,
+    timezone: str,
+) -> bool:
+    if last_sync is None:
+        return True
+    try:
+        completed_at = _parse_utc(last_sync)
+    except ValueError:
+        return True
+    zone = ZoneInfo(timezone)
+    return completed_at.astimezone(zone).strftime("%Y-%m") != now.astimezone(
+        zone
+    ).strftime("%Y-%m")
+
+
+def _parse_utc(value: str | None) -> datetime:
+    if value is None:
+        raise ValueError("SkillUp Assessment History watermark is missing")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("SkillUp Assessment History watermark must be ISO-8601") from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)

@@ -281,7 +281,9 @@ async def test_second_run_uses_catalog_and_daily_history_watermarks(
 
     assert second.status == RunStatus.SUCCEEDED
     assert catalog_requests[0]["modifiedSinceTimestamp"] == catalog_watermark
-    assert history_requests[0]["lastActivityAfter"] == history_watermark
+    assert int(history_requests[0]["lastActivityAfter"]) == int(history_watermark) - (
+        3 * 24 * 60 * 60 * 1000
+    )
 
 
 @pytest.mark.asyncio

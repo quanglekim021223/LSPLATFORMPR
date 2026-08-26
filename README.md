@@ -96,9 +96,9 @@ value type.
 
 SkillUp uses `x-api-key: <SKILLUP_API_KEY>` for every request. Its Intelligence and Reports APIs
 use separate base URLs configured by `SKILLUP_INTELLIGENCE_BASE_URL` and
-`SKILLUP_REPORTS_BASE_URL`. Assessment History always sends a range from
-`SKILLUP_ASSESSMENT_START_DATE` through the current UTC time, so scheduled runs retrieve the full
-configured history rather than iMocha's seven-day default.
+`SKILLUP_REPORTS_BASE_URL`. Assessment History performs a full initial/monthly sync, starts daily
+syncs from the last successful watermark minus `SKILLUP_ASSESSMENT_DAILY_OVERLAP_DAYS` (default
+3), and re-reads 90 days weekly.
 Skill Taxonomy, Skill Inventory, and Assessment History responses are validated against their
 vendor-specific Pydantic contracts before Bronze writes and completed checkpoints. Required field
 removal, incompatible types, invalid timestamps, or inconsistent pagination metadata fail only the
@@ -117,13 +117,13 @@ contracts before Bronze writes. Live catalog rows must have `live=true`, archive
 Contract-invalid responses fail only their domain and do not enter Bronze. Valid responses keep
 their original bytes, while additive fields produce path-only schema-drift warnings.
 
-DataCamp Learning History uses explicit `from`/`to` event windows. The first run and the first
-scheduled run in each new calendar month (using `INGESTION_TIMEZONE`) read from
+DataCamp Learning History uses explicit `from`/`to` event windows. The first run reads from
 `DATACAMP_EVENTS_START_TIME` through the run start time. Normal daily runs start from the last
-successfully stored daily watermark, while every seven days a reconciliation run re-reads
-`DATACAMP_EVENTS_LOOKBACK_DAYS` (default 90). The daily, weekly, and full-sync watermarks advance
-only after every `/v1/events` page has entered Bronze successfully. Explicit `from`/`to` arguments
-remain manual overrides and do not alter scheduled watermarks.
+successfully stored daily watermark minus `DATACAMP_EVENTS_DAILY_OVERLAP_DAYS` (default 3), every
+seven days a reconciliation run re-reads `DATACAMP_EVENTS_LOOKBACK_DAYS` (default 90), and the
+first run in each new calendar month re-reads the full configured history. The three watermarks
+advance only after every `/v1/events` page has entered Bronze successfully. Explicit `from`/`to`
+arguments remain manual overrides and do not alter scheduled watermarks.
 
 Coursera exchanges HTTP Basic credentials for one run-scoped access token at
 `COURSERA_TOKEN_URL`, then sends `Authorization: Bearer <token>`. A `401` refreshes the token and
@@ -142,13 +142,25 @@ absent for incomplete enrollments.
 
 LinkedIn Learning exchanges form-encoded `client_id` and `client_secret` for one run-scoped token.
 Catalog and activity requests use `Authorization: Bearer <token>`; a `401` refreshes the token and
-retries once. Catalog pagination follows the official `paging.links` entry with `rel=next`.
-Activity History starts at `LINKEDIN_HISTORY_START_TIME` (ISO-8601 with timezone or epoch
-milliseconds), splits through the current UTC time into windows no longer than 14 days, and sends
-`q=criteria`, `startedAt`, `timeOffset.unit=DAY`, and `timeOffset.duration` for each window.
-`LINKEDIN_ASSET_DETAIL_QUERY_TEMPLATE` is deliberately blank in `backend/.env.example`; an administrator
-must provide the exact query string containing one `{urn}` placeholder. The production filter is
-never inferred by code. See the official [Learning Assets](https://learn.microsoft.com/en-us/linkedin/learning/integrations/criteria-api)
+retries once. Course Catalog runs a full load when no successful catalog watermark exists. Later
+runs send the previous successful epoch-millisecond watermark as
+`assetFilteringCriteria.lastModifiedAfter`. Catalog requests always use exactly one
+`assetFilteringCriteria.assetTypes[0]=COURSE` filter and
+`assetRetrievalCriteria.includeRetired=true`, then follow the official `paging.links` entry with
+`rel=next`. The catalog watermark advances only after every catalog page and changed-course detail
+request succeeds.
+Activity History starts with a full sync from `LINKEDIN_HISTORY_START_TIME` (ISO-8601 with timezone
+or epoch milliseconds). Daily runs resume from the successful watermark with
+`LINKEDIN_HISTORY_DAILY_LOOKBACK_DAYS` of overlap, weekly runs re-read
+`LINKEDIN_HISTORY_LOOKBACK_DAYS` (default 90), and the first run in each calendar month re-reads
+the full configured history. Every range is split into windows no longer
+than 14 days and sends `q=criteria`, `startedAt`, `timeOffset.unit=DAY`, and
+`timeOffset.duration` for each window. Daily, weekly, and monthly watermarks advance only after the
+complete activity range succeeds.
+`LINKEDIN_ASSET_DETAIL_QUERY_TEMPLATE` is deliberately blank in `backend/.env.example`; an
+administrator must provide the exact query string containing one `{urn}` placeholder. The
+production filter is never inferred by code. See the official
+[Learning Assets](https://learn.microsoft.com/en-us/linkedin/learning/reference/learningassets)
 and [Learning Activity Reports](https://learn.microsoft.com/en-us/linkedin/learning/reference/learning-activity-reports-reference)
 contracts. Token, Learning Assets, Asset Detail, and Learning Activity Reports are validated
 against LinkedIn-specific Pydantic contracts before Bronze is written. Contract-invalid responses
@@ -363,9 +375,8 @@ write semantics.
   page at a time, so the full dataset is never accumulated in memory. Taxonomy and Skill Inventory
   persist successful sync watermarks and send `LastModifiedOn` and
   `SkillProfileModifiedSince` on later scheduled runs. Assessment History performs an initial full
-  sync, uses `/v3/reports` without dates for the API's rolling seven-day window on daily runs,
-  re-reads the configured 90-day window weekly, and repeats the full reconciliation after
-  `SKILLUP_ASSESSMENT_FULL_SYNC_INTERVAL_DAYS`.
+  sync, re-reads from its daily watermark with a three-day overlap, re-reads the configured 90-day
+  window weekly, and repeats the full reconciliation in each new calendar month.
 - DataCamp also runs its three domains concurrently. Live and archived catalog counts use the
   length of the contract-valid response `data` list. Events require the documented `data` and
   `meta` objects and are validated, written, and checkpointed one page at a time.
@@ -374,12 +385,14 @@ write semantics.
   `modifiedSinceTimestamp` so Coursera returns only added, removed, or modified content. Course
   Details run only for active changed content, with at most `COURSERA_MAX_CONCURRENCY` requests.
   Learning History is loaded fully on the first run and once per calendar month, uses
-  `lastActivityAfter` for daily deltas, and re-reads `COURSERA_HISTORY_LOOKBACK_DAYS` every seven
-  days. Catalog and History keep separate successful watermarks because their timestamps use
+  `lastActivityAfter` with `COURSERA_HISTORY_DAILY_OVERLAP_DAYS` for daily deltas, and re-reads
+  `COURSERA_HISTORY_LOOKBACK_DAYS` every seven days. Catalog and History keep separate successful watermarks because their timestamps use
   seconds and milliseconds respectively. Every response is contract-validated before its exact
   bytes are stored; `records_count` is the length of validated `elements`.
 - LinkedIn follows the same one-token and parallel pipeline pattern. Asset Details use at most
-  `LINKEDIN_MAX_CONCURRENCY` requests; history pages are written immediately and use globally
+  `LINKEDIN_MAX_CONCURRENCY` requests. Catalog is full on its first successful run and incremental
+  afterward using `assetFilteringCriteria.lastModifiedAfter`; its watermark is not advanced when a
+  catalog page or detail request fails. History pages are written immediately and use globally
   increasing Bronze offsets so pages from separate 14-day windows cannot overwrite one another.
 - Each Harvard job runs Catalog and SFTP History independently in parallel. Contract-valid Catalog
   pages are written immediately and counted from the validated `list`; an invalid response does
@@ -431,10 +444,9 @@ write semantics.
 
 The iMocha `GET /v3/reports` contract returns only the most recent seven days when no range is
 provided. The first run sends `startDate` from `SKILLUP_ASSESSMENT_START_DATE` and `endDate` as the
-current UTC time to backfill history. Later daily runs omit both dates and use the rolling
-seven-day response. Every `SKILLUP_ASSESSMENT_WEEKLY_SYNC_INTERVAL_DAYS` (default 7), the service
-passes a range covering `SKILLUP_ASSESSMENT_LOOKBACK_DAYS` (default 90). A full reconciliation is
-repeated every
-`SKILLUP_ASSESSMENT_FULL_SYNC_INTERVAL_DAYS` (default 30) so changes older than seven days are
-eventually captured. Weekly and full-sync watermarks advance only after every report page succeeds;
-a full sync advances both because it already covers the weekly window.
+current UTC time to backfill history. Daily runs explicitly request from the last successful daily
+watermark minus `SKILLUP_ASSESSMENT_DAILY_OVERLAP_DAYS` (default 3) through the current run start.
+Every `SKILLUP_ASSESSMENT_WEEKLY_SYNC_INTERVAL_DAYS` (default 7), the service passes a range
+covering `SKILLUP_ASSESSMENT_LOOKBACK_DAYS` (default 90). The first run in each new calendar month
+repeats the full configured history. Daily, weekly, and full-sync watermarks advance only after
+every report page succeeds; broader runs also advance the narrower scopes they cover.
