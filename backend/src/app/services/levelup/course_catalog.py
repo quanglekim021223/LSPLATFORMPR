@@ -14,9 +14,15 @@ from app.core.security import sanitize_text
 from app.models import PageWrite
 from app.repositories import BronzeWriter, CheckpointStore
 from app.schemas.levelup import extra_field_paths, validate_course_list
-from app.services.levelup.pagination import is_last_page
+from app.services.levelup.pagination import (
+    incremental_filter,
+    is_last_page,
+    latest_timestamp,
+)
 
 logger = logging.getLogger(__name__)
+VENDOR = "levelup"
+DOMAIN = "course_catalog"
 
 
 async def ingest_course_catalog(
@@ -28,13 +34,20 @@ async def ingest_course_catalog(
     ingestion_date: str,
 ) -> None:
     page_size = settings.levelup_page_size
-    offset = await checkpoints.next_offset(run_id, "course_catalog", page_size)
+    watermark = await checkpoints.get_watermark(VENDOR, DOMAIN)
+    offset = await checkpoints.next_offset(run_id, DOMAIN, page_size)
     pages = 0
+    discovered_course_ids: list[str] = []
+    received_timestamps: list[str] = []
     while True:
+        filter_value = "vendor ne 'LinkedIn Learning'"
+        if watermark is not None:
+            filter_value = f"{filter_value} and {incremental_filter(watermark)}"
         params = {
             "_limit": page_size,
             "_offset": offset,
-            "_filter": "vendor ne 'LinkedIn Learning'",
+            "_filter": filter_value,
+            "_sort": "dateEdited",
         }
         try:
             payload, raw_payload = await client.get_json(settings.levelup_courses_path, params)
@@ -42,7 +55,7 @@ async def ingest_course_catalog(
             retryable = is_retryable_error(exc)
             await checkpoints.record_failed_page(
                 run_id,
-                "course_catalog",
+                DOMAIN,
                 offset,
                 sanitize_text(exc, client.sensitive_values()),
                 retryable=retryable,
@@ -54,7 +67,7 @@ async def ingest_course_catalog(
         except ResponseContractError as exc:
             await checkpoints.record_failed_page(
                 run_id,
-                "course_catalog",
+                DOMAIN,
                 offset,
                 str(exc),
                 retryable=False,
@@ -67,8 +80,8 @@ async def ingest_course_catalog(
         fetched_at = datetime.now(UTC)
         await writer.write_page(
             PageWrite(
-                vendor="levelup",
-                data_domain="course_catalog",
+                vendor=VENDOR,
+                data_domain=DOMAIN,
                 ingestion_date=ingestion_date,
                 run_id=run_id,
                 offset=offset,
@@ -92,11 +105,17 @@ async def ingest_course_catalog(
             for course in valid_courses
             if (course_id := extract_course_id(course)) is not None
         ]
+        discovered_course_ids.extend(course_ids)
+        selected_ids = set(course_ids)
+        received_timestamps.extend(
+            course.date_edited
+            for course in contract.courses
+            if course.id in selected_ids
+        )
 
         await checkpoints.record_completed_page(
-            run_id, "course_catalog", offset, records_count
+            run_id, DOMAIN, offset, records_count
         )
-        await checkpoints.add_courses(run_id, course_ids)
         pages += 1
         logger.debug(
             "LevelUP catalog page stored run_id=%s page=%d offset=%d "
@@ -110,6 +129,21 @@ async def ingest_course_catalog(
         if is_last_page(payload, records_count, offset, page_size):
             break
         offset += page_size
+
+    await checkpoints.remember_entity_keys(
+        VENDOR,
+        DOMAIN,
+        discovered_course_ids,
+        run_id,
+    )
+    next_watermark = latest_timestamp(received_timestamps)
+    if next_watermark is not None:
+        await checkpoints.set_watermark(
+            VENDOR,
+            DOMAIN,
+            next_watermark,
+            run_id,
+        )
     await checkpoints.mark_catalog_completed(run_id)
 
 

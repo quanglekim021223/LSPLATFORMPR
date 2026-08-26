@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Header, HTTPException, Query, status
@@ -8,6 +10,7 @@ from pydantic import BaseModel, Field
 from app.mocks.settings import get_mock_settings
 
 router = APIRouter(tags=["LevelUP"])
+_DATE_EDITED_FILTER = re.compile(r"dateEdited gt '([^']+)'")
 
 
 def course_payload(
@@ -117,6 +120,28 @@ def _validate_token(
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid mock token")
 
 
+def _apply_incremental_filter(
+    items: list[dict[str, object]], filter_value: str | None
+) -> list[dict[str, object]]:
+    match = _DATE_EDITED_FILTER.search(filter_value or "")
+    if match is None:
+        return items
+    watermark = _parse_timestamp(match.group(1))
+    return [
+        item
+        for item in items
+        if isinstance(item.get("dateEdited"), str)
+        and _parse_timestamp(str(item["dateEdited"])) > watermark
+    ]
+
+
+def _parse_timestamp(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
 @router.post("/authenticate")
 async def authenticate(
     credentials: AuthenticationRequest,
@@ -139,14 +164,19 @@ async def authenticate(
 async def courses(
     limit: Annotated[int, Query(alias="_limit", ge=1)] = 1000,
     offset: Annotated[int, Query(alias="_offset", ge=0)] = 0,
+    filter_value: Annotated[str | None, Query(alias="_filter")] = None,
+    sort_value: Annotated[str | None, Query(alias="_sort")] = None,
     authorization: Annotated[str | None, Header()] = None,
     api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,
     api_version: Annotated[str | None, Header(alias="x-api-version")] = None,
 ) -> dict[str, object]:
     _validate_token(authorization, api_key, api_version)
-    page = _COURSES[offset : offset + limit]
+    filtered = _apply_incremental_filter(_COURSES, filter_value)
+    if sort_value == "dateEdited":
+        filtered = sorted(filtered, key=lambda item: str(item["dateEdited"]))
+    page = filtered[offset : offset + limit]
     return {
-        "totalItems": len(_COURSES),
+        "totalItems": len(filtered),
         "returnedItems": len(page),
         "limit": limit,
         "offset": offset,
@@ -159,6 +189,8 @@ async def enrollments(
     course_id: str,
     limit: Annotated[int, Query(alias="_limit", ge=1)] = 1000,
     offset: Annotated[int, Query(alias="_offset", ge=0)] = 0,
+    filter_value: Annotated[str | None, Query(alias="_filter")] = None,
+    sort_value: Annotated[str | None, Query(alias="_sort")] = None,
     authorization: Annotated[str | None, Header()] = None,
     api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,
     api_version: Annotated[str | None, Header(alias="x-api-version")] = None,
@@ -166,7 +198,15 @@ async def enrollments(
     _validate_token(authorization, api_key, api_version)
     if course_id not in _ENROLLMENTS:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown mock course")
-    all_enrollments = _ENROLLMENTS[course_id]
+    all_enrollments = _apply_incremental_filter(
+        _ENROLLMENTS[course_id],
+        filter_value,
+    )
+    if sort_value == "dateEdited":
+        all_enrollments = sorted(
+            all_enrollments,
+            key=lambda item: str(item["dateEdited"]),
+        )
     page = all_enrollments[offset : offset + limit]
     return {
         "totalItems": len(all_enrollments),

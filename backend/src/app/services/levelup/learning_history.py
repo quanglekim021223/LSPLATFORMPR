@@ -11,9 +11,15 @@ from app.core.security import sanitize_text
 from app.models import CourseResult, PageWrite
 from app.repositories import BronzeWriter, CheckpointStore
 from app.schemas.levelup import extra_field_paths, validate_enrollments
-from app.services.levelup.pagination import is_last_page
+from app.services.levelup.pagination import (
+    incremental_filter,
+    is_last_page,
+    latest_timestamp,
+)
 
 logger = logging.getLogger(__name__)
+VENDOR = "levelup"
+DOMAIN = "learning_history"
 
 
 async def ingest_learning_history(
@@ -72,13 +78,21 @@ async def ingest_course(
     course_id: str,
 ) -> CourseResult:
     page_size = settings.levelup_page_size
+    watermark = await checkpoints.get_watermark(VENDOR, DOMAIN, course_id)
     offset = await checkpoints.next_offset(
-        run_id, "learning_history", page_size, course_id
+        run_id, DOMAIN, page_size, course_id
     )
     result = CourseResult(course_id=course_id)
+    received_timestamps: list[str] = []
     try:
         while True:
-            params = {"_limit": page_size, "_offset": offset}
+            params = {
+                "_limit": page_size,
+                "_offset": offset,
+                "_sort": "dateEdited",
+            }
+            if watermark is not None:
+                params["_filter"] = incremental_filter(watermark)
             safe_course_id = quote(course_id, safe="-_.")
             path = (
                 f"{settings.levelup_courses_path.rstrip('/')}"
@@ -93,8 +107,8 @@ async def ingest_course(
             fetched_at = datetime.now(UTC)
             await writer.write_page(
                 PageWrite(
-                    vendor="levelup",
-                    data_domain="learning_history",
+                    vendor=VENDOR,
+                    data_domain=DOMAIN,
                     ingestion_date=ingestion_date,
                     run_id=run_id,
                     course_id=course_id,
@@ -112,14 +126,26 @@ async def ingest_course(
                     "LevelUP Enrollments contains new contract fields fields=%s",
                     ",".join(extras),
                 )
+            received_timestamps.extend(
+                enrollment.date_edited for enrollment in contract.enrollments
+            )
             await checkpoints.record_completed_page(
-                run_id, "learning_history", offset, records_count, course_id
+                run_id, DOMAIN, offset, records_count, course_id
             )
             result.records_count += records_count
             if is_last_page(payload, records_count, offset, page_size):
                 break
             offset += page_size
         await checkpoints.mark_course(run_id, course_id, "completed")
+        next_watermark = latest_timestamp(received_timestamps)
+        if next_watermark is not None:
+            await checkpoints.set_watermark(
+                VENDOR,
+                DOMAIN,
+                next_watermark,
+                run_id,
+                course_id,
+            )
         return result
     except Exception as exc:
         result.succeeded = False
@@ -127,7 +153,7 @@ async def ingest_course(
         result.error_message = sanitize_text(exc, client.sensitive_values())
         await checkpoints.record_failed_page(
             run_id,
-            "learning_history",
+            DOMAIN,
             offset,
             result.error_message,
             course_id,

@@ -87,6 +87,24 @@ class CheckpointStore:
                     completed_at TEXT NOT NULL,
                     PRIMARY KEY (vendor, data_domain, source_key)
                 );
+                CREATE TABLE IF NOT EXISTS ingestion_watermarks (
+                    vendor TEXT NOT NULL,
+                    data_domain TEXT NOT NULL,
+                    scope_key TEXT NOT NULL DEFAULT '',
+                    value TEXT NOT NULL,
+                    run_id TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (vendor, data_domain, scope_key)
+                );
+                CREATE TABLE IF NOT EXISTS vendor_entity_keys (
+                    vendor TEXT NOT NULL,
+                    data_domain TEXT NOT NULL,
+                    entity_key TEXT NOT NULL,
+                    first_seen_run_id TEXT NOT NULL,
+                    last_seen_run_id TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (vendor, data_domain, entity_key)
+                );
                 CREATE INDEX IF NOT EXISTS idx_runs_vendor_started
                     ON runs(vendor, started_at DESC);
                 """
@@ -447,6 +465,130 @@ class CheckpointStore:
                 """,
                 (vendor, data_domain, source_key, run_id, _now()),
             )
+
+    async def get_watermark(
+        self,
+        vendor: str,
+        data_domain: str,
+        scope_key: str = "",
+    ) -> str | None:
+        return await asyncio.to_thread(
+            self._get_watermark,
+            vendor,
+            data_domain,
+            scope_key,
+        )
+
+    def _get_watermark(
+        self,
+        vendor: str,
+        data_domain: str,
+        scope_key: str,
+    ) -> str | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT value FROM ingestion_watermarks
+                WHERE vendor = ? AND data_domain = ? AND scope_key = ?
+                """,
+                (vendor, data_domain, scope_key),
+            ).fetchone()
+            return str(row["value"]) if row is not None else None
+
+    async def set_watermark(
+        self,
+        vendor: str,
+        data_domain: str,
+        value: str,
+        run_id: str,
+        scope_key: str = "",
+    ) -> None:
+        await asyncio.to_thread(
+            self._set_watermark,
+            vendor,
+            data_domain,
+            value,
+            run_id,
+            scope_key,
+        )
+
+    def _set_watermark(
+        self,
+        vendor: str,
+        data_domain: str,
+        value: str,
+        run_id: str,
+        scope_key: str,
+    ) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO ingestion_watermarks(
+                    vendor, data_domain, scope_key, value, run_id, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(vendor, data_domain, scope_key) DO UPDATE SET
+                    value = excluded.value,
+                    run_id = excluded.run_id,
+                    updated_at = excluded.updated_at
+                """,
+                (vendor, data_domain, scope_key, value, run_id, _now()),
+            )
+
+    async def remember_entity_keys(
+        self,
+        vendor: str,
+        data_domain: str,
+        entity_keys: list[str],
+        run_id: str,
+    ) -> None:
+        if entity_keys:
+            await asyncio.to_thread(
+                self._remember_entity_keys,
+                vendor,
+                data_domain,
+                entity_keys,
+                run_id,
+            )
+
+    def _remember_entity_keys(
+        self,
+        vendor: str,
+        data_domain: str,
+        entity_keys: list[str],
+        run_id: str,
+    ) -> None:
+        now = _now()
+        with self._connect() as connection:
+            connection.executemany(
+                """
+                INSERT INTO vendor_entity_keys(
+                    vendor, data_domain, entity_key,
+                    first_seen_run_id, last_seen_run_id, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(vendor, data_domain, entity_key) DO UPDATE SET
+                    last_seen_run_id = excluded.last_seen_run_id,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    (vendor, data_domain, entity_key, run_id, run_id, now)
+                    for entity_key in entity_keys
+                ),
+            )
+
+    async def entity_keys(self, vendor: str, data_domain: str) -> list[str]:
+        return await asyncio.to_thread(self._entity_keys, vendor, data_domain)
+
+    def _entity_keys(self, vendor: str, data_domain: str) -> list[str]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT entity_key FROM vendor_entity_keys
+                WHERE vendor = ? AND data_domain = ?
+                ORDER BY entity_key
+                """,
+                (vendor, data_domain),
+            ).fetchall()
+            return [str(row["entity_key"]) for row in rows]
 
     async def record_failed_page(
         self,

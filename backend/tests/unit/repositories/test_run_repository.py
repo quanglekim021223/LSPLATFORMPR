@@ -223,3 +223,54 @@ async def test_purge_old_runs_keeps_only_live_runs(tmp_path: Path) -> None:
             "WHERE run_id IN ('old-success', 'old-failed', 'latest-failed')"
         ).fetchone() == (0,)
     await store.release_lock("levelup", "live-run")
+
+
+@pytest.mark.asyncio
+async def test_watermarks_and_entity_keys_survive_run_retention(tmp_path: Path) -> None:
+    database_path = tmp_path / "state.db"
+    store = CheckpointStore(database_path)
+    await store.initialize()
+    await store.start_run("old-run", "levelup")
+    await store.remember_entity_keys(
+        "levelup",
+        "course_catalog",
+        ["course-2", "course-1"],
+        "old-run",
+    )
+    await store.set_watermark(
+        "levelup",
+        "course_catalog",
+        "2026-08-25T05:00:00Z",
+        "old-run",
+    )
+    await store.set_watermark(
+        "levelup",
+        "learning_history",
+        "2026-08-25T06:00:00Z",
+        "old-run",
+        "course-1",
+    )
+    await store.finish_run("old-run", RunStatus.SUCCEEDED)
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            "UPDATE runs SET finished_at = '2000-01-01T00:00:00+00:00' "
+            "WHERE run_id = 'old-run'"
+        )
+
+    assert await store.purge_old_runs("levelup", retention_days=30) == 1
+    assert await store.entity_keys("levelup", "course_catalog") == [
+        "course-1",
+        "course-2",
+    ]
+    assert (
+        await store.get_watermark("levelup", "course_catalog")
+        == "2026-08-25T05:00:00Z"
+    )
+    assert (
+        await store.get_watermark(
+            "levelup",
+            "learning_history",
+            "course-1",
+        )
+        == "2026-08-25T06:00:00Z"
+    )

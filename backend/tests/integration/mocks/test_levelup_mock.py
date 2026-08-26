@@ -33,3 +33,14 @@ async def test_mock_server_runs_full_ingestion_pipeline(
     assert summary.enrollment_records == 3
     assert summary.courses_succeeded == 2
     assert summary.courses_failed == 0
+
+    incremental = await run_levelup_ingestion(
+        settings,  # type: ignore[arg-type]
+        transport=httpx.ASGITransport(app=mock_vendor_hub),
+        sleep=no_sleep,
+    )
+
+    assert incremental.status == RunStatus.SUCCEEDED
+    assert incremental.course_catalog_records == 0
+    assert incremental.enrollment_records == 0
+    assert incremental.courses_succeeded == 2

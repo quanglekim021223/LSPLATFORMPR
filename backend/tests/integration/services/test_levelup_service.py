@@ -12,6 +12,7 @@ import pytest
 
 from app.mocks.levelup import course_payload, enrollment_payload
 from app.models import RunStatus
+from app.repositories import CheckpointStore
 from app.services.levelup.service import run_levelup_ingestion
 from tests.conftest import no_sleep, response
 
@@ -118,6 +119,91 @@ async def test_catalog_pagination_filter_and_course_list_reuse(
     assert first_catalog.read_bytes() == first_raw_payload
     stored = json.loads(first_catalog.read_text())
     assert [course["id"] for course in stored["courses"]] == ["c1", "linkedin"]
+
+
+@pytest.mark.asyncio
+async def test_second_run_pulls_only_levelup_changes_and_keeps_failed_watermark(
+    settings_factory: Callable[..., object],
+) -> None:
+    settings = settings_factory()
+    initial_course = course("c1")
+    initial_course["dateEdited"] = "2026-08-24T04:00:00Z"
+    initial_enrollment = enrollment("e1", "c1")
+    initial_enrollment["dateEdited"] = "2026-08-24T04:30:00Z"
+
+    def initial_handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/authenticate":
+            return response(request, 200, "token-1")
+        assert request.url.params["_sort"] == "dateEdited"
+        if request.url.path == "/courses":
+            assert request.url.params["_filter"] == "vendor ne 'LinkedIn Learning'"
+            return response(request, 200, course_page([initial_course]))
+        assert "_filter" not in request.url.params
+        return response(request, 200, enrollment_page([initial_enrollment]))
+
+    first = await run_levelup_ingestion(
+        settings,  # type: ignore[arg-type]
+        transport=httpx.MockTransport(initial_handler),
+        sleep=no_sleep,
+    )
+    assert first.status == RunStatus.SUCCEEDED
+
+    changed_enrollment = enrollment("e2", "c1")
+    changed_enrollment["dateEdited"] = "2026-08-25T05:00:00Z"
+
+    def incremental_handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/authenticate":
+            return response(request, 200, "token-2")
+        assert request.url.params["_sort"] == "dateEdited"
+        if request.url.path == "/courses":
+            assert request.url.params["_filter"] == (
+                "vendor ne 'LinkedIn Learning' and "
+                "dateEdited gt '2026-08-24T04:00:00Z'"
+            )
+            return response(request, 200, course_page([]))
+        assert request.url.params["_filter"] == (
+            "dateEdited gt '2026-08-24T04:30:00Z'"
+        )
+        return response(request, 200, enrollment_page([changed_enrollment]))
+
+    second = await run_levelup_ingestion(
+        settings,  # type: ignore[arg-type]
+        transport=httpx.MockTransport(incremental_handler),
+        sleep=no_sleep,
+    )
+    assert second.status == RunStatus.SUCCEEDED
+    assert second.course_catalog_records == 0
+    assert second.enrollment_records == 1
+    second_enrollment_file = next(
+        settings.bronze_local_path.glob(  # type: ignore[attr-defined]
+            f"levelup/learning_history/**/run_id={second.run_id}/**/offset=*.json"
+        )
+    )
+    assert [
+        item["id"] for item in json.loads(second_enrollment_file.read_text())["enrollments"]
+    ] == ["e2"]
+
+    def failed_handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/authenticate":
+            return response(request, 200, "token-3")
+        if request.url.path == "/courses":
+            return response(request, 200, course_page([]))
+        assert request.url.params["_filter"] == (
+            "dateEdited gt '2026-08-25T05:00:00Z'"
+        )
+        return response(request, 500, {"error": "temporary"})
+
+    third = await run_levelup_ingestion(
+        settings,  # type: ignore[arg-type]
+        transport=httpx.MockTransport(failed_handler),
+        sleep=no_sleep,
+    )
+    assert third.status == RunStatus.PARTIAL_FAILURE
+    store = CheckpointStore(settings.checkpoint_db_path)  # type: ignore[attr-defined]
+    assert (
+        await store.get_watermark("levelup", "learning_history", "c1")
+        == "2026-08-25T05:00:00Z"
+    )
 
 
 @pytest.mark.asyncio
