@@ -193,6 +193,17 @@ _REPORTS: list[dict[str, Any]] = [
     },
 ]
 
+_TAXONOMY_MODIFIED_ON = {
+    97915: "2026-08-20T01:00:00Z",
+    97916: "2026-08-20T02:00:00Z",
+    97917: "2026-08-20T03:00:00Z",
+}
+_SKILL_PROFILE_MODIFIED_ON = {
+    123456: "2026-08-20T01:00:00Z",
+    123457: "2026-08-20T02:00:00Z",
+    123458: "2026-08-20T03:00:00Z",
+}
+
 
 def taxonomy_item(index: int = 0) -> dict[str, Any]:
     return deepcopy(_TAXONOMY[index])
@@ -222,15 +233,24 @@ def _page(
 async def taxonomy(
     page_number: Annotated[int, Query(alias="PageNumber", ge=1)] = 1,
     page_size: Annotated[int, Query(alias="PageSize", ge=1, le=100)] = 100,
+    last_modified_on: Annotated[str | None, Query(alias="LastModifiedOn")] = None,
     api_key: Annotated[str | None, Header(alias="x-api-key")] = None,
 ) -> dict[str, Any]:
     _validate_api_key(api_key)
-    items, total_pages = _page(_TAXONOMY, page_number, page_size)
+    records = _TAXONOMY
+    if last_modified_on:
+        records = [
+            record
+            for record in records
+            if _TAXONOMY_MODIFIED_ON[int(record["taxonomySkillId"])]
+            > last_modified_on
+        ]
+    items, total_pages = _page(records, page_number, page_size)
     return {
         "items": items,
         "pageNumber": page_number,
         "totalPages": total_pages,
-        "totalCount": len(_TAXONOMY),
+        "totalCount": len(records),
         "hasPreviousPage": page_number > 1,
         "hasNextPage": page_number < total_pages,
     }
@@ -246,9 +266,15 @@ async def skill_inventory(
     search_text: Annotated[str | None, Query(alias="searchText")] = None,
     api_key: Annotated[str | None, Header(alias="x-api-key")] = None,
 ) -> dict[str, Any]:
-    del skill_profile_modified_since
     _validate_api_key(api_key)
     records = _SKILL_PROFILES
+    if skill_profile_modified_since:
+        records = [
+            record
+            for record in records
+            if _SKILL_PROFILE_MODIFIED_ON[int(record["employeeId"])]
+            > skill_profile_modified_since
+        ]
     if search_text:
         query = search_text.casefold()
         records = [

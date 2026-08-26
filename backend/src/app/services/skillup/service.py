@@ -4,7 +4,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -19,7 +19,11 @@ from app.repositories import BronzeWriter, CheckpointStore, LocalBronzeWriter
 from app.services.skillup.assessment_history import (
     DOMAIN as ASSESSMENT_HISTORY,
 )
-from app.services.skillup.assessment_history import ingest_assessment_history
+from app.services.skillup.assessment_history import (
+    FULL_SYNC_SCOPE,
+    LOOKBACK_SYNC_SCOPE,
+    ingest_assessment_history,
+)
 from app.services.skillup.skill_inventory import DOMAIN as SKILL_INVENTORY
 from app.services.skillup.skill_inventory import ingest_skill_inventory
 from app.services.skillup.taxonomy import DOMAIN as SKILL_TAXONOMY
@@ -72,6 +76,12 @@ class SkillUpJob:
             ingestion_date = datetime.now(
                 ZoneInfo(self.settings.ingestion_timezone)
             ).date().isoformat()
+            (
+                assessment_start,
+                assessment_end,
+                full_sync_watermark,
+                lookback_sync_watermark,
+            ) = await self._assessment_range(start_date, end_date)
             domains = set(await self.checkpoints.domains_to_process(current_run_id))
             tasks: list[Awaitable[None]] = []
             if SKILL_TAXONOMY in domains:
@@ -109,8 +119,10 @@ class SkillUpJob:
                         current_run_id,
                         ingestion_date,
                         include_sections=include_sections,
-                        start_date=start_date,
-                        end_date=end_date,
+                        start_date=assessment_start,
+                        end_date=assessment_end,
+                        full_sync_watermark=full_sync_watermark,
+                        lookback_sync_watermark=lookback_sync_watermark,
                     )
                 )
 
@@ -161,6 +173,55 @@ class SkillUpJob:
             with suppress(asyncio.CancelledError):
                 await heartbeat_task
             await self.checkpoints.release_lock(VENDOR, current_run_id)
+
+    async def _assessment_range(
+        self,
+        start_date: str | None,
+        end_date: str | None,
+    ) -> tuple[str | None, str | None, str | None, str | None]:
+        if start_date is not None or end_date is not None:
+            return start_date, end_date, None, None
+
+        now = datetime.now(UTC)
+        watermark = now.isoformat().replace("+00:00", "Z")
+        last_full_sync = await self.checkpoints.get_watermark(
+            VENDOR,
+            ASSESSMENT_HISTORY,
+            FULL_SYNC_SCOPE,
+        )
+        if _sync_due(
+            last_full_sync,
+            now,
+            self.settings.skillup_assessment_full_sync_interval_days,
+        ):
+            return (
+                self.settings.skillup_assessment_start_date,
+                watermark,
+                watermark,
+                watermark,
+            )
+
+        last_lookback_sync = await self.checkpoints.get_watermark(
+            VENDOR,
+            ASSESSMENT_HISTORY,
+            LOOKBACK_SYNC_SCOPE,
+        )
+        if _sync_due(
+            last_lookback_sync,
+            now,
+            self.settings.skillup_assessment_weekly_sync_interval_days,
+        ):
+            lookback_start = now - timedelta(
+                days=self.settings.skillup_assessment_lookback_days
+            )
+            return (
+                lookback_start.isoformat().replace("+00:00", "Z"),
+                watermark,
+                None,
+                watermark,
+            )
+
+        return None, None, None, None
 
     async def _heartbeat_loop(
         self,
@@ -213,13 +274,27 @@ async def run_skillup_ingestion(
     async with httpx.AsyncClient(timeout=timeout, transport=transport) as http_client:
         client = SkillUpClient(settings, http_client, sleep=sleep)
         job = SkillUpJob(settings, client, store, writer)
-        assessment_start = start_date or settings.skillup_assessment_start_date
-        assessment_end = end_date or datetime.now(UTC).isoformat().replace("+00:00", "Z")
         return await job.run(
             taxonomy_params=taxonomy_params,
             skill_profile_modified_since=skill_profile_modified_since,
             search_text=search_text,
             include_sections=include_sections,
-            start_date=assessment_start,
-            end_date=assessment_end,
+            start_date=start_date,
+            end_date=end_date,
         )
+
+
+def _sync_due(
+    last_sync: str | None,
+    now: datetime,
+    interval_days: int,
+) -> bool:
+    if last_sync is None:
+        return True
+    try:
+        completed_at = datetime.fromisoformat(last_sync.replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    if completed_at.tzinfo is None:
+        completed_at = completed_at.replace(tzinfo=UTC)
+    return now - completed_at >= timedelta(days=interval_days)

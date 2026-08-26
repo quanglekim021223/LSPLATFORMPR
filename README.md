@@ -350,7 +350,12 @@ write semantics.
   refreshes the shared token and repeats the request once.
 - At most `LEVELUP_MAX_CONCURRENCY` courses run concurrently via `asyncio.Semaphore`.
 - SkillUp runs its three independent domains concurrently. Each domain writes and checkpoints one
-  page at a time, so the full dataset is never accumulated in memory.
+  page at a time, so the full dataset is never accumulated in memory. Taxonomy and Skill Inventory
+  persist successful sync watermarks and send `LastModifiedOn` and
+  `SkillProfileModifiedSince` on later scheduled runs. Assessment History performs an initial full
+  sync, uses `/v3/reports` without dates for the API's rolling seven-day window on daily runs,
+  re-reads the configured 90-day window weekly, and repeats the full reconciliation after
+  `SKILLUP_ASSESSMENT_FULL_SYNC_INTERVAL_DAYS`.
 - DataCamp also runs its three domains concurrently. Live and archived catalog counts use the
   length of the contract-valid response `data` list. Events require the documented `data` and
   `meta` objects and are validated, written, and checkpointed one page at a time.
@@ -410,6 +415,11 @@ write semantics.
 ### SkillUp Assessment History date range
 
 The iMocha `GET /v3/reports` contract returns only the most recent seven days when no range is
-provided. This service therefore always sends `startDate` from
-`SKILLUP_ASSESSMENT_START_DATE` (default `2000-01-01T00:00:00Z`) and sets `endDate` to the current
-UTC time. Pagination then retrieves every report in that configured range.
+provided. The first run sends `startDate` from `SKILLUP_ASSESSMENT_START_DATE` and `endDate` as the
+current UTC time to backfill history. Later daily runs omit both dates and use the rolling
+seven-day response. Every `SKILLUP_ASSESSMENT_WEEKLY_SYNC_INTERVAL_DAYS` (default 7), the service
+passes a range covering `SKILLUP_ASSESSMENT_LOOKBACK_DAYS` (default 90). A full reconciliation is
+repeated every
+`SKILLUP_ASSESSMENT_FULL_SYNC_INTERVAL_DAYS` (default 30) so changes older than seven days are
+eventually captured. Weekly and full-sync watermarks advance only after every report page succeeds;
+a full sync advances both because it already covers the weekly window.

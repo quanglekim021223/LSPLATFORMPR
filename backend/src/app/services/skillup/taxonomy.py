@@ -13,6 +13,7 @@ from app.repositories import BronzeWriter, CheckpointStore
 from app.schemas.skillup import extra_field_paths, validate_skill_taxonomy
 
 DOMAIN = "skill_taxonomy"
+VENDOR = "skillup"
 logger = logging.getLogger(__name__)
 
 
@@ -25,9 +26,18 @@ async def ingest_skill_taxonomy(
     ingestion_date: str,
     optional_params: Mapping[str, Any] | None = None,
 ) -> None:
+    managed_incremental = not optional_params
+    sync_watermark = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    previous_watermark = (
+        await checkpoints.get_watermark(VENDOR, DOMAIN)
+        if managed_incremental
+        else None
+    )
     page_number = await checkpoints.next_page_number(run_id, DOMAIN)
     while True:
         params = dict(optional_params or {})
+        if previous_watermark is not None:
+            params["LastModifiedOn"] = previous_watermark
         params.update(
             {"PageNumber": page_number, "PageSize": settings.skillup_page_size}
         )
@@ -75,4 +85,11 @@ async def ingest_skill_taxonomy(
         if not contract.has_next_page:
             break
         page_number += 1
+    if managed_incremental:
+        await checkpoints.set_watermark(
+            VENDOR,
+            DOMAIN,
+            sync_watermark,
+            run_id,
+        )
     await checkpoints.mark_domain(run_id, DOMAIN, "completed")

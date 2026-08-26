@@ -52,6 +52,9 @@ class Settings(BaseSettings):
     skillup_api_key: SecretStr = Field(default=SecretStr(""))
     skillup_page_size: int = Field(default=100, ge=1, le=100)
     skillup_assessment_start_date: str = "2000-01-01T00:00:00Z"
+    skillup_assessment_weekly_sync_interval_days: int = Field(default=7, ge=1)
+    skillup_assessment_lookback_days: int = Field(default=90, ge=7)
+    skillup_assessment_full_sync_interval_days: int = Field(default=30, ge=1)
 
     datacamp_base_url: str = ""
     datacamp_token: SecretStr = Field(default=SecretStr(""))
