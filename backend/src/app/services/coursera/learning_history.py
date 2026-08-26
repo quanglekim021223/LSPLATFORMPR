@@ -14,6 +14,10 @@ from app.schemas.coursera import extra_field_paths, validate_learning_history
 from app.services.coursera.pagination import next_start
 
 DOMAIN = "learning_history"
+VENDOR = "coursera"
+DAILY_SYNC_SCOPE = "daily_sync"
+WEEKLY_SYNC_SCOPE = "weekly_sync"
+FULL_SYNC_SCOPE = "full_sync"
 logger = logging.getLogger(__name__)
 
 
@@ -24,6 +28,11 @@ async def ingest_learning_history(
     writer: BronzeWriter,
     run_id: str,
     ingestion_date: str,
+    *,
+    last_activity_after: int | None = None,
+    daily_sync_watermark: str | None = None,
+    weekly_sync_watermark: str | None = None,
+    full_sync_watermark: str | None = None,
 ) -> None:
     start = 0
     path = f"/{quote(settings.coursera_org_id, safe='')}/enrollmentReports"
@@ -32,7 +41,11 @@ async def ingest_learning_history(
             "start": start,
             "limit": settings.coursera_page_size,
             "includeS12n": True,
+            "includeDeletedMembers": True,
+            "includeExpiredContracts": True,
         }
+        if last_activity_after is not None:
+            params["lastActivityAfter"] = last_activity_after
         try:
             payload, raw_payload = await client.get_json(path, params)
             contract = validate_learning_history(payload)
@@ -76,4 +89,28 @@ async def ingest_learning_history(
         if following_start is None:
             break
         start = following_start
+    if daily_sync_watermark is not None:
+        await checkpoints.set_watermark(
+            VENDOR,
+            DOMAIN,
+            daily_sync_watermark,
+            run_id,
+            DAILY_SYNC_SCOPE,
+        )
+    if weekly_sync_watermark is not None:
+        await checkpoints.set_watermark(
+            VENDOR,
+            DOMAIN,
+            weekly_sync_watermark,
+            run_id,
+            WEEKLY_SYNC_SCOPE,
+        )
+    if full_sync_watermark is not None:
+        await checkpoints.set_watermark(
+            VENDOR,
+            DOMAIN,
+            full_sync_watermark,
+            run_id,
+            FULL_SYNC_SCOPE,
+        )
     await checkpoints.mark_domain(run_id, DOMAIN, "completed")

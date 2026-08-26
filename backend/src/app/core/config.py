@@ -70,6 +70,7 @@ class Settings(BaseSettings):
     coursera_content_detail_path_template: str = ""
     coursera_page_size: int = Field(default=100, ge=1, le=1000)
     coursera_max_concurrency: int = Field(default=5, ge=1, le=5)
+    coursera_history_lookback_days: int = Field(default=90, ge=7)
     coursera_lock_ttl_seconds: int = Field(default=3600, ge=30)
 
     linkedin_token_url: str = ""

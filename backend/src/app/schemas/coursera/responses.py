@@ -102,6 +102,11 @@ class CourseraExtraMetadata(CourseraContractModel):
     definition: CourseraMetadataDefinition
 
 
+class CourseraContentChange(CourseraContractModel):
+    change_type: Literal["ADDED", "REMOVED", "MODIFIED"]
+    program_ids: list[StrictStr]
+
+
 class CourseraContent(CourseraContractModel):
     subtitle_language_codes: list[StrictStr]
     last_updated_at: NonNegativeInt
@@ -117,6 +122,7 @@ class CourseraContent(CourseraContractModel):
     extra_metadata: CourseraExtraMetadata
     content_type: StrictStr
     slug: StrictStr
+    changes: list[CourseraContentChange] | None = None
 
 
 class CourseraPaging(CourseraContractModel):

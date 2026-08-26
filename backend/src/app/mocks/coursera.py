@@ -167,11 +167,21 @@ async def contents(
     org_id: str,
     start: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1)] = 100,
+    modified_since_timestamp: Annotated[
+        int | None, Query(alias="modifiedSinceTimestamp", ge=0)
+    ] = None,
     authorization: Annotated[str | None, Header()] = None,
 ) -> dict[str, Any]:
     _validate_org(org_id)
     _validate_bearer(authorization)
-    return _page(_CONTENTS, start, limit)
+    records = _CONTENTS
+    if modified_since_timestamp is not None:
+        records = [
+            {**item, "changes": [{"changeType": "MODIFIED", "programIds": []}]}
+            for item in records
+            if item["lastUpdatedAt"] > modified_since_timestamp
+        ]
+    return _page(records, start, limit)
 
 
 @router.get("/{org_id}/contents/{content_id}/detail")
@@ -194,9 +204,25 @@ async def enrollment_reports(
     start: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1)] = 100,
     include_s12n: Annotated[bool, Query(alias="includeS12n")] = True,
+    include_deleted_members: Annotated[
+        bool, Query(alias="includeDeletedMembers")
+    ] = False,
+    include_expired_contracts: Annotated[
+        bool, Query(alias="includeExpiredContracts")
+    ] = False,
+    last_activity_after: Annotated[
+        int | None, Query(alias="lastActivityAfter", ge=0)
+    ] = None,
     authorization: Annotated[str | None, Header()] = None,
 ) -> dict[str, Any]:
-    del include_s12n
+    del include_s12n, include_deleted_members, include_expired_contracts
     _validate_org(org_id)
     _validate_bearer(authorization)
-    return _page(_ENROLLMENTS, start, limit)
+    records = _ENROLLMENTS
+    if last_activity_after is not None:
+        records = [
+            item
+            for item in records
+            if item["lastActivityAt"] > last_activity_after
+        ]
+    return _page(records, start, limit)

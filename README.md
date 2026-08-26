@@ -370,9 +370,14 @@ write semantics.
   length of the contract-valid response `data` list. Events require the documented `data` and
   `meta` objects and are validated, written, and checkpointed one page at a time.
 - Coursera authenticates once per run, then runs its catalog pipeline and Learning History in
-  parallel. Course Details run with at most `COURSERA_MAX_CONCURRENCY` requests. Every list,
-  detail, and history response is contract-validated before its exact bytes are stored;
-  `records_count` is the length of validated `elements`.
+  parallel. Catalog is loaded fully once; later runs send the successful Catalog watermark as
+  `modifiedSinceTimestamp` so Coursera returns only added, removed, or modified content. Course
+  Details run only for active changed content, with at most `COURSERA_MAX_CONCURRENCY` requests.
+  Learning History is loaded fully on the first run and once per calendar month, uses
+  `lastActivityAfter` for daily deltas, and re-reads `COURSERA_HISTORY_LOOKBACK_DAYS` every seven
+  days. Catalog and History keep separate successful watermarks because their timestamps use
+  seconds and milliseconds respectively. Every response is contract-validated before its exact
+  bytes are stored; `records_count` is the length of validated `elements`.
 - LinkedIn follows the same one-token and parallel pipeline pattern. Asset Details use at most
   `LINKEDIN_MAX_CONCURRENCY` requests; history pages are written immediately and use globally
   increasing Bronze offsets so pages from separate 14-day windows cannot overwrite one another.
