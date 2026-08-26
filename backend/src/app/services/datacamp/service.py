@@ -4,7 +4,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -18,8 +18,13 @@ from app.models import RunStatus, RunSummary
 from app.repositories import BronzeWriter, CheckpointStore, LocalBronzeWriter
 from app.services.datacamp.archived_courses import DOMAIN as ARCHIVED_COURSES
 from app.services.datacamp.archived_courses import ingest_archived_courses
+from app.services.datacamp.learning_history import (
+    DAILY_SYNC_SCOPE,
+    FULL_SYNC_SCOPE,
+    WEEKLY_SYNC_SCOPE,
+    ingest_learning_history,
+)
 from app.services.datacamp.learning_history import DOMAIN as LEARNING_HISTORY
-from app.services.datacamp.learning_history import ingest_learning_history
 from app.services.datacamp.live_courses import DOMAIN as LIVE_COURSES
 from app.services.datacamp.live_courses import ingest_live_courses
 
@@ -28,6 +33,7 @@ logger = logging.getLogger(__name__)
 VENDOR = "datacamp"
 DOMAINS = (LIVE_COURSES, ARCHIVED_COURSES, LEARNING_HISTORY)
 LOCK_TTL_SECONDS = 3600
+WEEKLY_SYNC_INTERVAL_DAYS = 7
 
 
 class DataCampJob:
@@ -67,6 +73,13 @@ class DataCampJob:
             ingestion_date = datetime.now(
                 ZoneInfo(self.settings.ingestion_timezone)
             ).date().isoformat()
+            (
+                history_from,
+                history_to,
+                daily_sync_watermark,
+                weekly_sync_watermark,
+                full_sync_watermark,
+            ) = await self._history_range(from_value, to)
             tasks: list[Awaitable[None]] = [
                 ingest_live_courses(
                     self.client,
@@ -91,8 +104,11 @@ class DataCampJob:
                     ingestion_date,
                     content_type=content_type,
                     event_type=event_type,
-                    from_value=from_value,
-                    to=to,
+                    from_value=history_from,
+                    to=history_to,
+                    daily_sync_watermark=daily_sync_watermark,
+                    weekly_sync_watermark=weekly_sync_watermark,
+                    full_sync_watermark=full_sync_watermark,
                 ),
             ]
             results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -139,6 +155,58 @@ class DataCampJob:
             with suppress(asyncio.CancelledError):
                 await heartbeat_task
             await self.checkpoints.release_lock(VENDOR, current_run_id)
+
+    async def _history_range(
+        self,
+        from_value: str | None,
+        to: str | None,
+    ) -> tuple[
+        str | None,
+        str | None,
+        str | None,
+        str | None,
+        str | None,
+    ]:
+        if from_value is not None or to is not None:
+            return from_value, to, None, None, None
+
+        now = datetime.now(UTC)
+        run_end = _utc_text(now)
+        last_full_sync = await self.checkpoints.get_watermark(
+            VENDOR,
+            LEARNING_HISTORY,
+            FULL_SYNC_SCOPE,
+        )
+        if _monthly_sync_due(
+            last_full_sync,
+            now,
+            self.settings.ingestion_timezone,
+        ):
+            return (
+                self.settings.datacamp_events_start_time,
+                run_end,
+                run_end,
+                run_end,
+                run_end,
+            )
+
+        last_weekly_sync = await self.checkpoints.get_watermark(
+            VENDOR,
+            LEARNING_HISTORY,
+            WEEKLY_SYNC_SCOPE,
+        )
+        if _sync_due(last_weekly_sync, now, WEEKLY_SYNC_INTERVAL_DAYS):
+            lookback_start = now - timedelta(
+                days=self.settings.datacamp_events_lookback_days
+            )
+            return _utc_text(lookback_start), run_end, run_end, run_end, None
+
+        last_daily_sync = await self.checkpoints.get_watermark(
+            VENDOR,
+            LEARNING_HISTORY,
+            DAILY_SYNC_SCOPE,
+        )
+        return last_daily_sync or last_full_sync, run_end, run_end, None, None
 
     async def _heartbeat_loop(
         self,
@@ -195,3 +263,42 @@ async def run_datacamp_ingestion(
             from_value=from_value,
             to=to,
         )
+
+
+def _sync_due(
+    last_sync: str | None,
+    now: datetime,
+    interval_days: int,
+) -> bool:
+    if last_sync is None:
+        return True
+    try:
+        completed_at = datetime.fromisoformat(last_sync.replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    if completed_at.tzinfo is None:
+        completed_at = completed_at.replace(tzinfo=UTC)
+    return now - completed_at >= timedelta(days=interval_days)
+
+
+def _monthly_sync_due(
+    last_sync: str | None,
+    now: datetime,
+    timezone: str,
+) -> bool:
+    if last_sync is None:
+        return True
+    try:
+        completed_at = datetime.fromisoformat(last_sync.replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    if completed_at.tzinfo is None:
+        completed_at = completed_at.replace(tzinfo=UTC)
+    zone = ZoneInfo(timezone)
+    completed_month = completed_at.astimezone(zone).strftime("%Y-%m")
+    current_month = now.astimezone(zone).strftime("%Y-%m")
+    return completed_month != current_month
+
+
+def _utc_text(value: datetime) -> str:
+    return value.astimezone(UTC).isoformat().replace("+00:00", "Z")

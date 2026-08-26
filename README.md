@@ -107,13 +107,23 @@ additive fields are retained and logged by field path without logging employee o
 
 DataCamp sends `Authorization: Bearer <DATACAMP_TOKEN>` and `Accept: application/json` on every
 request. Live and archived catalogs are fetched once per run because their pagination contract is
-not present in the supplied response envelope. Events use `DATACAMP_EVENTS_PAGE_SIZE` (maximum
-1000) and continue until the current page reaches `meta.numberOfPages`.
+not present in the supplied response envelope. Catalog items expose `updatedAt`, but the
+catalog endpoints do not expose a server-side modified-since filter, so each run still stores the
+complete contract-valid raw response. Events use `DATACAMP_EVENTS_PAGE_SIZE` (maximum 1000) and
+continue until the current page reaches `meta.numberOfPages`.
 Both catalogs and Learning History Events are validated against DataCamp-specific Pydantic
 contracts before Bronze writes. Live catalog rows must have `live=true`, archived rows must have
 `live=false`, and Events must use the exact `data` plus `meta` envelope with matching page metadata.
 Contract-invalid responses fail only their domain and do not enter Bronze. Valid responses keep
 their original bytes, while additive fields produce path-only schema-drift warnings.
+
+DataCamp Learning History uses explicit `from`/`to` event windows. The first run and the first
+scheduled run in each new calendar month (using `INGESTION_TIMEZONE`) read from
+`DATACAMP_EVENTS_START_TIME` through the run start time. Normal daily runs start from the last
+successfully stored daily watermark, while every seven days a reconciliation run re-reads
+`DATACAMP_EVENTS_LOOKBACK_DAYS` (default 90). The daily, weekly, and full-sync watermarks advance
+only after every `/v1/events` page has entered Bronze successfully. Explicit `from`/`to` arguments
+remain manual overrides and do not alter scheduled watermarks.
 
 Coursera exchanges HTTP Basic credentials for one run-scoped access token at
 `COURSERA_TOKEN_URL`, then sends `Authorization: Bearer <token>`. A `401` refreshes the token and

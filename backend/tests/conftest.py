@@ -71,6 +71,8 @@ def settings_factory(tmp_path: Path) -> Callable[..., Settings]:
             "datacamp_base_url": "https://datacamp.test",
             "datacamp_token": "test-datacamp-token",
             "datacamp_events_page_size": 2,
+            "datacamp_events_start_time": "2000-01-01T00:00:00Z",
+            "datacamp_events_lookback_days": 90,
             "coursera_token_url": "https://coursera-auth.test/oauth2/client_credentials/token",
             "coursera_base_url": "https://coursera.test",
             "coursera_username": "test-coursera-user",

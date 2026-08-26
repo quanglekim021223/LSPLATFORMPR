@@ -59,6 +59,8 @@ class Settings(BaseSettings):
     datacamp_base_url: str = ""
     datacamp_token: SecretStr = Field(default=SecretStr(""))
     datacamp_events_page_size: int = Field(default=1000, ge=1, le=1000)
+    datacamp_events_start_time: str = "2000-01-01T00:00:00Z"
+    datacamp_events_lookback_days: int = Field(default=90, ge=7)
 
     coursera_token_url: str = ""
     coursera_base_url: str = ""
