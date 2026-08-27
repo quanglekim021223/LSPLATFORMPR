@@ -8,7 +8,12 @@ from datetime import UTC, date, datetime, time, timedelta
 from app.core.config import Settings
 from app.core.security import sanitize_text
 from app.models import BinaryFileWrite
-from app.models.harvard import HarvardVendorConfig, RemoteFile, SFTPTransport
+from app.models.harvard import (
+    HarvardVendorConfig,
+    RemoteFile,
+    RemoteFileMetadata,
+    SFTPTransport,
+)
 from app.repositories import BronzeWriter, CheckpointStore
 from app.schemas.harvard import HarvardResponseContractError, validate_history_csv
 
@@ -67,78 +72,22 @@ async def ingest_learning_history(
     failures: list[tuple[str, bool]] = []
     report_date = first_report_date
     while report_date <= last_report_date:
-        file_name = f"{vendor.report_filename_prefix}{report_date:%Y%m%d}.csv"
-        remote_path = posixpath.join(settings.harvard_sftp_remote_dir, file_name)
-        source_key = remote_path
-        offset = int(report_date.strftime("%Y%m%d"))
-        metadata = metadata_by_path.get(remote_path)
-        if metadata is None:
-            if await checkpoints.source_file_completed(
-                vendor.vendor, DOMAIN, source_key
-            ):
-                report_date += timedelta(days=1)
-                continue
-        elif await checkpoints.source_file_unchanged(
-            vendor.vendor,
-            DOMAIN,
-            source_key,
-            metadata.size,
-            metadata.modified_at,
-        ):
-            report_date += timedelta(days=1)
-            continue
-        try:
-            remote_file = await _fetch_report(
-                settings,
-                transport,
-                remote_path,
-                file_name,
-                poll=report_date == last_report_date,
-                now=now,
-                sleep=sleep,
-            )
-            records_count = validate_history_csv(remote_file.content, vendor.vendor)
-            await writer.write_file(
-                BinaryFileWrite(
-                    vendor=vendor.vendor,
-                    data_domain=DOMAIN,
-                    ingestion_date=ingestion_date,
-                    run_id=run_id,
-                    raw_payload=remote_file.content,
-                    file_name=file_name,
-                    remote_path=remote_file.remote_path,
-                    file_size=remote_file.size,
-                    remote_modified_time=remote_file.modified_at,
-                    downloaded_at=datetime.now(UTC),
-                    records_count=records_count,
-                )
-            )
-            await checkpoints.record_completed_page(
-                run_id, DOMAIN, offset, records_count
-            )
-            await checkpoints.record_completed_source_file(
-                vendor.vendor,
-                DOMAIN,
-                source_key,
-                run_id,
-                remote_file.size,
-                remote_file.modified_at,
-            )
-        except Exception as exc:
-            message = sanitize_text(exc, settings.harvard_secrets(vendor.vendor))
-            retryable = not isinstance(
-                exc,
-                (
-                    FileNotFoundError,
-                    HarvardResponseContractError,
-                    TypeError,
-                    ValueError,
-                ),
-            )
-            await checkpoints.record_failed_page(
-                run_id, DOMAIN, offset, message, retryable=retryable
-            )
-            failures.append((message, retryable))
+        failure = await _ingest_report_date(
+            settings,
+            vendor,
+            transport,
+            checkpoints,
+            writer,
+            run_id,
+            ingestion_date,
+            report_date,
+            last_report_date,
+            metadata_by_path,
+            now=now,
+            sleep=sleep,
+        )
+        if failure is not None:
+            failures.append(failure)
         report_date += timedelta(days=1)
 
     if failures:
@@ -152,6 +101,94 @@ async def ingest_learning_history(
         )
         raise HarvardHistoryIngestionError(message)
     await checkpoints.mark_domain(run_id, DOMAIN, "completed")
+
+
+async def _ingest_report_date(
+    settings: Settings,
+    vendor: HarvardVendorConfig,
+    transport: SFTPTransport,
+    checkpoints: CheckpointStore,
+    writer: BronzeWriter,
+    run_id: str,
+    ingestion_date: str,
+    report_date: date,
+    last_report_date: date,
+    metadata_by_path: dict[str, RemoteFileMetadata],
+    *,
+    now: Callable[[], datetime],
+    sleep: Callable[[float], Awaitable[None]],
+) -> tuple[str, bool] | None:
+    file_name = f"{vendor.report_filename_prefix}{report_date:%Y%m%d}.csv"
+    remote_path = posixpath.join(settings.harvard_sftp_remote_dir, file_name)
+    metadata = metadata_by_path.get(remote_path)
+    if await _source_file_is_current(checkpoints, vendor, remote_path, metadata):
+        return None
+    offset = int(report_date.strftime("%Y%m%d"))
+    try:
+        remote_file = await _fetch_report(
+            settings,
+            transport,
+            remote_path,
+            file_name,
+            poll=report_date == last_report_date,
+            now=now,
+            sleep=sleep,
+        )
+        records_count = validate_history_csv(remote_file.content, vendor.vendor)
+        await writer.write_file(
+            BinaryFileWrite(
+                vendor=vendor.vendor,
+                data_domain=DOMAIN,
+                ingestion_date=ingestion_date,
+                run_id=run_id,
+                raw_payload=remote_file.content,
+                file_name=file_name,
+                remote_path=remote_file.remote_path,
+                file_size=remote_file.size,
+                remote_modified_time=remote_file.modified_at,
+                downloaded_at=datetime.now(UTC),
+                records_count=records_count,
+            )
+        )
+        await checkpoints.record_completed_page(run_id, DOMAIN, offset, records_count)
+        await checkpoints.record_completed_source_file(
+            vendor.vendor,
+            DOMAIN,
+            remote_path,
+            run_id,
+            remote_file.size,
+            remote_file.modified_at,
+        )
+        return None
+    except Exception as exc:
+        message = sanitize_text(exc, settings.harvard_secrets(vendor.vendor))
+        retryable = not isinstance(
+            exc,
+            (FileNotFoundError, HarvardResponseContractError, TypeError, ValueError),
+        )
+        await checkpoints.record_failed_page(
+            run_id, DOMAIN, offset, message, retryable=retryable
+        )
+        return message, retryable
+
+
+async def _source_file_is_current(
+    checkpoints: CheckpointStore,
+    vendor: HarvardVendorConfig,
+    remote_path: str,
+    metadata: RemoteFileMetadata | None,
+) -> bool:
+    if metadata is None:
+        return await checkpoints.source_file_completed(
+            vendor.vendor, DOMAIN, remote_path
+        )
+    return await checkpoints.source_file_unchanged(
+        vendor.vendor,
+        DOMAIN,
+        remote_path,
+        metadata.size,
+        metadata.modified_at,
+    )
 
 
 def _history_start_date(

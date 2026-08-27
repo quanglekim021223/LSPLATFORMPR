@@ -72,123 +72,11 @@ class HarvardJob:
             await self.checkpoints.add_domains(current_run_id, list(DOMAINS))
             run_now = self.now()
             ingestion_date = run_now.date().isoformat()
-
-            async def catalog_branch() -> None:
-                try:
-                    self.settings.validate_harvard_catalog_runtime(self.vendor.vendor)
-                    await self.catalog_client.authenticate()
-                except Exception as exc:
-                    message = sanitize_text(exc, self.sensitive_values())
-                    retryable = is_retryable_error(exc)
-                    await self.checkpoints.record_failed_page(
-                        current_run_id,
-                        CATALOG_DOMAIN,
-                        0,
-                        message,
-                        retryable=retryable,
-                    )
-                    await self.checkpoints.mark_domain(
-                        current_run_id,
-                        CATALOG_DOMAIN,
-                        "retryable_failed" if retryable else "terminal_failed",
-                        message,
-                    )
-                    raise
-                catalog_start_date = start_date
-                if catalog_start_date is None:
-                    previous_watermark = await self.checkpoints.get_watermark(
-                        self.vendor.vendor,
-                        CATALOG_DOMAIN,
-                    )
-                    catalog_start_date = _catalog_start_date(previous_watermark)
-                await ingest_catalog(
-                    self.settings,
-                    self.vendor,
-                    self.catalog_client,
-                    self.checkpoints,
-                    self.writer,
-                    current_run_id,
-                    ingestion_date,
-                    start_date=catalog_start_date,
-                )
-                await self.checkpoints.set_watermark(
-                    self.vendor.vendor,
-                    CATALOG_DOMAIN,
-                    ingestion_date,
-                    current_run_id,
-                )
-
-            async def history_branch() -> None:
-                try:
-                    self.settings.validate_harvard_sftp_runtime()
-                    if self.sftp_transport is not None:
-                        sftp = self.sftp_transport
-                    elif self.settings.harvard_sftp_mock_enabled:
-                        from app.mocks.harvard import GeneratedMockHarvardSFTPTransport
-
-                        sftp = GeneratedMockHarvardSFTPTransport(
-                            self.settings,
-                            now=self.now,
-                        )
-                    else:
-                        sftp = AsyncSSHSFTPTransport(
-                            self.settings,
-                            sleep=self.sleep,
-                        )
-                except Exception as exc:
-                    message = sanitize_text(exc, self.sensitive_values())
-                    await self.checkpoints.record_failed_page(
-                        current_run_id,
-                        LEARNING_HISTORY,
-                        1,
-                        message,
-                        retryable=False,
-                    )
-                    await self.checkpoints.mark_domain(
-                        current_run_id,
-                        LEARNING_HISTORY,
-                        "terminal_failed",
-                        message,
-                    )
-                    raise
-                entered = False
-                try:
-                    async with sftp:
-                        entered = True
-                        await ingest_learning_history(
-                            self.settings,
-                            self.vendor,
-                            sftp,
-                            self.checkpoints,
-                            self.writer,
-                            current_run_id,
-                            ingestion_date,
-                            now=self.now,
-                            sleep=self.sleep,
-                        )
-                except Exception as exc:
-                    if entered:
-                        raise
-                    message = sanitize_text(exc, self.sensitive_values())
-                    retryable = is_retryable_sftp_error(exc)
-                    await self.checkpoints.record_failed_page(
-                        current_run_id,
-                        LEARNING_HISTORY,
-                        0,
-                        message,
-                        retryable=retryable,
-                    )
-                    await self.checkpoints.mark_domain(
-                        current_run_id,
-                        LEARNING_HISTORY,
-                        "retryable_failed" if retryable else "terminal_failed",
-                        message,
-                    )
-                    raise
-
             tasks = [
-                catalog_branch(),
-                history_branch(),
+                self._run_catalog_branch(
+                    current_run_id, ingestion_date, start_date
+                ),
+                self._run_history_branch(current_run_id, ingestion_date),
             ]
             results = await asyncio.gather(*tasks, return_exceptions=True)
             errors = [result for result in results if isinstance(result, BaseException)]
@@ -235,6 +123,103 @@ class HarvardJob:
             with suppress(asyncio.CancelledError):
                 await heartbeat_task
             await self.checkpoints.release_lock(self.vendor.vendor, current_run_id)
+
+    async def _run_catalog_branch(
+        self,
+        run_id: str,
+        ingestion_date: str,
+        start_date: str | None,
+    ) -> None:
+        try:
+            self.settings.validate_harvard_catalog_runtime(self.vendor.vendor)
+            await self.catalog_client.authenticate()
+        except Exception as exc:
+            message = sanitize_text(exc, self.sensitive_values())
+            retryable = is_retryable_error(exc)
+            await self.checkpoints.record_failed_page(
+                run_id, CATALOG_DOMAIN, 0, message, retryable=retryable
+            )
+            await self.checkpoints.mark_domain(
+                run_id,
+                CATALOG_DOMAIN,
+                "retryable_failed" if retryable else "terminal_failed",
+                message,
+            )
+            raise
+        catalog_start_date = start_date
+        if catalog_start_date is None:
+            previous_watermark = await self.checkpoints.get_watermark(
+                self.vendor.vendor, CATALOG_DOMAIN
+            )
+            catalog_start_date = _catalog_start_date(previous_watermark)
+        await ingest_catalog(
+            self.settings,
+            self.vendor,
+            self.catalog_client,
+            self.checkpoints,
+            self.writer,
+            run_id,
+            ingestion_date,
+            start_date=catalog_start_date,
+        )
+        await self.checkpoints.set_watermark(
+            self.vendor.vendor, CATALOG_DOMAIN, ingestion_date, run_id
+        )
+
+    async def _run_history_branch(
+        self, run_id: str, ingestion_date: str
+    ) -> None:
+        try:
+            sftp = self._build_sftp_transport()
+        except Exception as exc:
+            message = sanitize_text(exc, self.sensitive_values())
+            await self.checkpoints.record_failed_page(
+                run_id, LEARNING_HISTORY, 1, message, retryable=False
+            )
+            await self.checkpoints.mark_domain(
+                run_id, LEARNING_HISTORY, "terminal_failed", message
+            )
+            raise
+        entered = False
+        try:
+            async with sftp:
+                entered = True
+                await ingest_learning_history(
+                    self.settings,
+                    self.vendor,
+                    sftp,
+                    self.checkpoints,
+                    self.writer,
+                    run_id,
+                    ingestion_date,
+                    now=self.now,
+                    sleep=self.sleep,
+                )
+        except Exception as exc:
+            if entered:
+                raise
+            message = sanitize_text(exc, self.sensitive_values())
+            retryable = is_retryable_sftp_error(exc)
+            await self.checkpoints.record_failed_page(
+                run_id, LEARNING_HISTORY, 0, message, retryable=retryable
+            )
+            await self.checkpoints.mark_domain(
+                run_id,
+                LEARNING_HISTORY,
+                "retryable_failed" if retryable else "terminal_failed",
+                message,
+            )
+            raise
+
+    def _build_sftp_transport(self) -> SFTPTransport:
+        self.settings.validate_harvard_sftp_runtime()
+        if self.sftp_transport is not None:
+            return self.sftp_transport
+        if self.settings.harvard_sftp_mock_enabled:
+            from app.mocks.harvard import GeneratedMockHarvardSFTPTransport
+
+            return GeneratedMockHarvardSFTPTransport(self.settings, now=self.now)
+        return AsyncSSHSFTPTransport(self.settings, sleep=self.sleep)
 
     def sensitive_values(self) -> tuple[str, ...]:
         return tuple(

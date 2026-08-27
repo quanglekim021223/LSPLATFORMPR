@@ -56,20 +56,19 @@ async def test_local_bronze_writer_preserves_bytes_and_sanitizes_manifest(
 @pytest.mark.asyncio
 async def test_writer_rejects_empty_payload(tmp_path: Path) -> None:
     writer = LocalBronzeWriter(tmp_path)
+    write = PageWrite(
+        vendor="levelup",
+        data_domain="course_catalog",
+        ingestion_date="2026-08-21",
+        run_id="11111111-1111-4111-8111-111111111111",
+        offset=0,
+        raw_payload=b"",
+        records_count=0,
+        request_parameters={},
+        fetched_at=datetime.now(UTC),
+    )
     with pytest.raises(ValueError, match="empty"):
-        await writer.write_page(
-            PageWrite(
-                vendor="levelup",
-                data_domain="course_catalog",
-                ingestion_date="2026-08-21",
-                run_id="11111111-1111-4111-8111-111111111111",
-                offset=0,
-                raw_payload=b"",
-                records_count=0,
-                request_parameters={},
-                fetched_at=datetime.now(UTC),
-            )
-        )
+        await writer.write_page(write)
     json_files = await asyncio.to_thread(lambda: list(tmp_path.rglob("*.json")))
     assert json_files == []
 

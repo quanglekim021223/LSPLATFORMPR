@@ -12,6 +12,7 @@ from app.mocks.settings import get_mock_settings
 
 router = APIRouter(tags=["LevelUP"])
 _DATE_EDITED_FILTER = re.compile(r"dateEdited gt '([^']+)'")
+MOCK_EDITED_AT = "2026-08-24T04:00:00"
 
 
 def course_payload(
@@ -46,7 +47,7 @@ def course_payload(
         "learnerCost": None,
         "companyTime": None,
         "learnerTime": None,
-        "dateEdited": "2026-08-24T04:00:00",
+        "dateEdited": MOCK_EDITED_AT,
         "dateAdded": "2026-08-20T04:00:00",
     }
 
@@ -69,14 +70,14 @@ def enrollment_payload(
         "userId": user_id,
         "acceptedTermsAndConditions": False,
         "timeSpent": "00:30:00",
-        "dateStarted": "2026-08-24T04:00:00",
+        "dateStarted": MOCK_EDITED_AT,
         "enrollmentKeyId": None,
         "certificateId": None,
         "credits": None,
         "isActive": True,
         "dateDue": None,
         "dateEdited": "2026-08-24T04:30:00",
-        "dateAdded": "2026-08-24T04:00:00",
+        "dateAdded": MOCK_EDITED_AT,
     }
 
 

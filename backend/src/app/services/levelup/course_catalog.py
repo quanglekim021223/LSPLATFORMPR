@@ -40,15 +40,7 @@ async def ingest_course_catalog(
     discovered_course_ids: list[str] = []
     received_timestamps: list[str] = []
     while True:
-        filter_value = "vendor ne 'LinkedIn Learning'"
-        if watermark is not None:
-            filter_value = f"{filter_value} and {incremental_filter(watermark)}"
-        params = {
-            "_limit": page_size,
-            "_offset": offset,
-            "_filter": filter_value,
-            "_sort": "dateEdited",
-        }
+        params = _catalog_params(page_size, offset, watermark)
         try:
             payload, raw_payload = await client.get_json(settings.levelup_courses_path, params)
         except Exception as exc:
@@ -155,6 +147,20 @@ def include_course(course: object) -> bool:
         isinstance(vendor, str)
         and vendor.strip().casefold() == "linkedin learning".casefold()
     )
+
+
+def _catalog_params(
+    page_size: int, offset: int, watermark: str | None
+) -> dict[str, int | str]:
+    filter_value = "vendor ne 'LinkedIn Learning'"
+    if watermark is not None:
+        filter_value = f"{filter_value} and {incremental_filter(watermark)}"
+    return {
+        "_limit": page_size,
+        "_offset": offset,
+        "_filter": filter_value,
+        "_sort": "dateEdited",
+    }
 
 
 def extract_course_id(course: dict[str, Any]) -> str | None:

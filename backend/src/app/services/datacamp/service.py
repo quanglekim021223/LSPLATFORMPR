@@ -34,6 +34,7 @@ VENDOR = "datacamp"
 DOMAINS = (LIVE_COURSES, ARCHIVED_COURSES, LEARNING_HISTORY)
 LOCK_TTL_SECONDS = 3600
 WEEKLY_SYNC_INTERVAL_DAYS = 7
+UTC_OFFSET = "+00:00"
 
 
 class DataCampJob:
@@ -291,7 +292,7 @@ def _sync_due(
     if last_sync is None:
         return True
     try:
-        completed_at = datetime.fromisoformat(last_sync.replace("Z", "+00:00"))
+        completed_at = datetime.fromisoformat(last_sync.replace("Z", UTC_OFFSET))
     except ValueError:
         return True
     if completed_at.tzinfo is None:
@@ -307,7 +308,7 @@ def _monthly_sync_due(
     if last_sync is None:
         return True
     try:
-        completed_at = datetime.fromisoformat(last_sync.replace("Z", "+00:00"))
+        completed_at = datetime.fromisoformat(last_sync.replace("Z", UTC_OFFSET))
     except ValueError:
         return True
     if completed_at.tzinfo is None:
@@ -319,14 +320,14 @@ def _monthly_sync_due(
 
 
 def _utc_text(value: datetime) -> str:
-    return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
+    return value.astimezone(UTC).isoformat().replace(UTC_OFFSET, "Z")
 
 
 def _parse_utc(value: str | None) -> datetime:
     if value is None:
         raise ValueError("DataCamp Learning History watermark is missing")
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value.replace("Z", UTC_OFFSET))
     except ValueError as exc:
         raise ValueError("DataCamp Learning History watermark must be ISO-8601") from exc
     if parsed.tzinfo is None:

@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 VENDOR = "skillup"
 DOMAINS = (SKILL_TAXONOMY, SKILL_INVENTORY, ASSESSMENT_HISTORY)
 LOCK_TTL_SECONDS = 3600
+UTC_OFFSET = "+00:00"
 
 
 class SkillUpJob:
@@ -196,7 +197,7 @@ class SkillUpJob:
             return start_date, end_date, None, None, None
 
         now = datetime.now(UTC)
-        watermark = now.isoformat().replace("+00:00", "Z")
+        watermark = now.isoformat().replace(UTC_OFFSET, "Z")
         last_full_sync = await self.checkpoints.get_watermark(
             VENDOR,
             ASSESSMENT_HISTORY,
@@ -230,7 +231,7 @@ class SkillUpJob:
                 now - timedelta(days=self.settings.skillup_assessment_lookback_days),
             )
             return (
-                lookback_start.isoformat().replace("+00:00", "Z"),
+                lookback_start.isoformat().replace(UTC_OFFSET, "Z"),
                 watermark,
                 watermark,
                 watermark,
@@ -248,7 +249,7 @@ class SkillUpJob:
             - timedelta(days=self.settings.skillup_assessment_daily_overlap_days),
         )
         return (
-            daily_start.isoformat().replace("+00:00", "Z"),
+            daily_start.isoformat().replace(UTC_OFFSET, "Z"),
             watermark,
             watermark,
             None,
@@ -324,7 +325,7 @@ def _sync_due(
     if last_sync is None:
         return True
     try:
-        completed_at = datetime.fromisoformat(last_sync.replace("Z", "+00:00"))
+        completed_at = datetime.fromisoformat(last_sync.replace("Z", UTC_OFFSET))
     except ValueError:
         return True
     if completed_at.tzinfo is None:
@@ -353,7 +354,7 @@ def _parse_utc(value: str | None) -> datetime:
     if value is None:
         raise ValueError("SkillUp Assessment History watermark is missing")
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value.replace("Z", UTC_OFFSET))
     except ValueError as exc:
         raise ValueError("SkillUp Assessment History watermark must be ISO-8601") from exc
     if parsed.tzinfo is None:

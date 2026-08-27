@@ -10,12 +10,14 @@ from app.mocks.generated_data import generated_vendor_data
 from app.mocks.settings import get_mock_settings
 
 router = APIRouter(tags=["SkillUp"])
+INFORMATION_TECHNOLOGY = "Information Technology"
+DATA_ENGINEERING = "Data Engineering"
 _TAXONOMY: list[dict[str, Any]] = [
     {
         "taxonomySkillId": 97915,
         "externalId": None,
-        "domain": {"id": 429, "name": "Information Technology"},
-        "subdomain": {"id": 2155, "name": "Information Technology"},
+        "domain": {"id": 429, "name": INFORMATION_TECHNOLOGY},
+        "subdomain": {"id": 2155, "name": INFORMATION_TECHNOLOGY},
         "skillCluster": {"id": 17191, "name": "Programming"},
         "skillClassification": {
             "classificationId": 507,
@@ -35,8 +37,8 @@ _TAXONOMY: list[dict[str, Any]] = [
     {
         "taxonomySkillId": 97916,
         "externalId": None,
-        "domain": {"id": 429, "name": "Information Technology"},
-        "subdomain": {"id": 2155, "name": "Information Technology"},
+        "domain": {"id": 429, "name": INFORMATION_TECHNOLOGY},
+        "subdomain": {"id": 2155, "name": INFORMATION_TECHNOLOGY},
         "skillCluster": {"id": 17192, "name": "Databases"},
         "skillClassification": {
             "classificationId": 507,
@@ -52,19 +54,19 @@ _TAXONOMY: list[dict[str, Any]] = [
     {
         "taxonomySkillId": 97917,
         "externalId": None,
-        "domain": {"id": 429, "name": "Information Technology"},
-        "subdomain": {"id": 2155, "name": "Information Technology"},
-        "skillCluster": {"id": 17193, "name": "Data Engineering"},
+        "domain": {"id": 429, "name": INFORMATION_TECHNOLOGY},
+        "subdomain": {"id": 2155, "name": INFORMATION_TECHNOLOGY},
+        "skillCluster": {"id": 17193, "name": DATA_ENGINEERING},
         "skillClassification": {
             "classificationId": 504,
             "classificationName": "Technical Skill",
         },
         "skill": {
             "id": 93287,
-            "name": "Data Engineering",
+            "name": DATA_ENGINEERING,
             "description": "Data engineering practices",
         },
-        "displayName": "Data Engineering",
+        "displayName": DATA_ENGINEERING,
         "description": "Data engineering practices",
         "isCritical": True,
         "taxonomySkillTags": [],

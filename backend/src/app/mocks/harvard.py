@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import asyncio
 import base64
-import binascii
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, time, timedelta
 from pathlib import PurePosixPath
@@ -16,6 +16,7 @@ from app.mocks.settings import MockSettings, get_mock_settings
 from app.models.harvard import RemoteFile, RemoteFileMetadata
 
 router = APIRouter(tags=["Harvard Catalog"])
+INVALID_MOCK_CREDENTIALS = "Invalid mock credentials"
 
 def token_payload(token_value: str) -> dict[str, str | int]:
     return {"access_token": token_value, "expires_in": 3600}
@@ -130,12 +131,14 @@ class MockHarvardSFTPTransport:
         return None
 
     async def fetch(self, remote_path: str) -> RemoteFile | None:
+        await asyncio.sleep(0)
         self.calls.append(remote_path)
         if len(self.calls) <= self.available_after:
             return None
         return self.files.get(remote_path)
 
     async def list_files(self, remote_dir: str) -> list[RemoteFileMetadata]:
+        await asyncio.sleep(0)
         prefix = f"{remote_dir.rstrip('/')}/"
         return [
             RemoteFileMetadata(
@@ -175,10 +178,12 @@ class GeneratedMockHarvardSFTPTransport:
         return None
 
     async def fetch(self, remote_path: str) -> RemoteFile | None:
+        await asyncio.sleep(0)
         self.calls.append(remote_path)
         return self._file(remote_path)
 
     async def list_files(self, remote_dir: str) -> list[RemoteFileMetadata]:
+        await asyncio.sleep(0)
         last_report_date = self.now().date() - timedelta(
             days=self.settings.harvard_report_date_offset_days
         )
@@ -282,13 +287,13 @@ async def token(
 ) -> dict[str, str | int]:
     settings = get_mock_settings()
     if not authorization or not authorization.startswith("Basic "):
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid mock credentials")
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, INVALID_MOCK_CREDENTIALS)
     try:
         credentials = base64.b64decode(authorization.removeprefix("Basic ")).decode()
         client_id, client_secret = credentials.split(":", 1)
-    except (ValueError, UnicodeDecodeError, binascii.Error):
+    except ValueError:
         raise HTTPException(
-            status.HTTP_401_UNAUTHORIZED, "Invalid mock credentials"
+            status.HTTP_401_UNAUTHORIZED, INVALID_MOCK_CREDENTIALS
         ) from None
     clients = {
         settings.mock_harvard_hmm_client_id.get_secret_value(): (
@@ -308,7 +313,7 @@ async def token(
         or form.get("grant_type") != ["client_credentials"]
         or form.get("scope") != ["hbp.org.api/catalog.read"]
     ):
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid mock credentials")
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, INVALID_MOCK_CREDENTIALS)
     return token_payload(expected[1])
 
 

@@ -38,15 +38,12 @@ async def ingest_skill_inventory(
     )
     page_number = await checkpoints.next_page_number(run_id, DOMAIN)
     while True:
-        params: dict[str, Any] = {
-            "pageNumber": page_number,
-            "pageSize": settings.skillup_page_size,
-        }
-        modified_since = skill_profile_modified_since or previous_watermark
-        if modified_since is not None:
-            params["SkillProfileModifiedSince"] = modified_since
-        if search_text is not None:
-            params["searchText"] = search_text
+        params = _inventory_params(
+            page_number,
+            settings.skillup_page_size,
+            skill_profile_modified_since or previous_watermark,
+            search_text,
+        )
         try:
             payload, raw_payload = await client.get_json(
                 settings.skillup_intelligence_base_url,
@@ -101,3 +98,17 @@ async def ingest_skill_inventory(
             run_id,
         )
     await checkpoints.mark_domain(run_id, DOMAIN, "completed")
+
+
+def _inventory_params(
+    page_number: int,
+    page_size: int,
+    modified_since: str | None,
+    search_text: str | None,
+) -> dict[str, Any]:
+    params: dict[str, Any] = {"pageNumber": page_number, "pageSize": page_size}
+    if modified_since is not None:
+        params["SkillProfileModifiedSince"] = modified_since
+    if search_text is not None:
+        params["searchText"] = search_text
+    return params

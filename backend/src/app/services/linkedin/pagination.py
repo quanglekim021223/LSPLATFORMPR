@@ -13,14 +13,18 @@ def next_start(payload: dict[str, Any], current_start: int) -> int | None:
         raise ValueError("LinkedIn paging.links must be a list")
     for link in links:
         if isinstance(link, dict) and link.get("rel") == "next":
-            href = link.get("href")
-            if not isinstance(href, str):
-                raise ValueError("LinkedIn next paging link must contain href")
-            starts = parse_qs(urlsplit(href).query).get("start", [])
-            if len(starts) != 1 or not starts[0].isdigit():
-                raise ValueError("LinkedIn next paging link must contain start")
-            value = int(starts[0])
-            if value <= current_start:
-                raise ValueError("LinkedIn next paging start must advance")
-            return value
+            return _start_from_link(link, current_start)
     return None
+
+
+def _start_from_link(link: dict[str, Any], current_start: int) -> int:
+    href = link.get("href")
+    if not isinstance(href, str):
+        raise ValueError("LinkedIn next paging link must contain href")
+    starts = parse_qs(urlsplit(href).query).get("start", [])
+    if len(starts) != 1 or not starts[0].isdigit():
+        raise ValueError("LinkedIn next paging link must contain start")
+    value = int(starts[0])
+    if value <= current_start:
+        raise ValueError("LinkedIn next paging start must advance")
+    return value

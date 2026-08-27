@@ -76,9 +76,10 @@ def test_missing_required_course_field_fails_contract() -> None:
 
 
 def test_course_detail_content_id_must_match_request() -> None:
+    payload = content_response("different-course")
     with pytest.raises(CourseraResponseContractError, match="contentId:mismatch"):
         validate_course_detail(
-            content_response("different-course"),
+            payload,
             expected_content_id="requested-course",
         )
 

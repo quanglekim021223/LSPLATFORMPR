@@ -93,13 +93,7 @@ async def ingest_course(
     received_timestamps: list[str] = []
     try:
         while True:
-            params = {
-                "_limit": page_size,
-                "_offset": offset,
-                "_sort": "dateEdited",
-            }
-            if watermark is not None:
-                params["_filter"] = incremental_filter(watermark)
+            params = _enrollment_params(page_size, offset, watermark)
             safe_course_id = quote(course_id, safe="-_.")
             path = (
                 f"{settings.levelup_courses_path.rstrip('/')}"
@@ -144,28 +138,12 @@ async def ingest_course(
             if is_last_page(payload, records_count, offset, page_size):
                 break
             offset += page_size
-        await checkpoints.mark_course(run_id, course_id, "completed")
-        next_watermark = latest_timestamp(received_timestamps)
-        if next_watermark is not None:
-            await checkpoints.set_watermark(
-                VENDOR,
-                DOMAIN,
-                next_watermark,
-                run_id,
-                course_id,
-            )
+        await _complete_course(
+            checkpoints, run_id, course_id, received_timestamps
+        )
         return result
     except Exception as exc:
-        if (
-            isinstance(exc, httpx.HTTPStatusError)
-            and exc.response.status_code == httpx.codes.NOT_FOUND
-            and await checkpoints.deactivate_entity_key_if_stale(
-                VENDOR,
-                CATALOG_DOMAIN,
-                course_id,
-                run_id,
-            )
-        ):
+        if await _deactivate_missing_course(checkpoints, run_id, course_id, exc):
             await checkpoints.mark_course(run_id, course_id, "completed")
             logger.warning(
                 "LevelUP course no longer exists; deactivated course_id=%s",
@@ -196,3 +174,45 @@ async def ingest_course(
             result.error_message,
         )
         return result
+
+
+async def _complete_course(
+    checkpoints: CheckpointStore,
+    run_id: str,
+    course_id: str,
+    received_timestamps: list[str],
+) -> None:
+    await checkpoints.mark_course(run_id, course_id, "completed")
+    next_watermark = latest_timestamp(received_timestamps)
+    if next_watermark is not None:
+        await checkpoints.set_watermark(
+            VENDOR, DOMAIN, next_watermark, run_id, course_id
+        )
+
+
+def _enrollment_params(
+    page_size: int, offset: int, watermark: str | None
+) -> dict[str, int | str]:
+    params: dict[str, int | str] = {
+        "_limit": page_size,
+        "_offset": offset,
+        "_sort": "dateEdited",
+    }
+    if watermark is not None:
+        params["_filter"] = incremental_filter(watermark)
+    return params
+
+
+async def _deactivate_missing_course(
+    checkpoints: CheckpointStore,
+    run_id: str,
+    course_id: str,
+    exc: Exception,
+) -> bool:
+    if not isinstance(exc, httpx.HTTPStatusError):
+        return False
+    if exc.response.status_code != httpx.codes.NOT_FOUND:
+        return False
+    return await checkpoints.deactivate_entity_key_if_stale(
+        VENDOR, CATALOG_DOMAIN, course_id, run_id
+    )
