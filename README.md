@@ -204,8 +204,13 @@ the session and retry up to `HARVARD_SFTP_MAX_RETRIES` times, default `3`, with 
 files continue to use the polling deadline. Authentication and SSH host-key failures are not
 retried.
 
-FAMS calls one internal endpoint with `Fsa-Report-Api-Key: <FAMS_API_KEY>` and stores the complete
-response as one raw `training_data` page. `FAMS_LOAD_MODE=full` sends no query parameters.
+FAMS calls one internal endpoint with `Fsa-Report-Api-Key: <FAMS_API_KEY>`. The scheduled Full mode
+still downloads the complete JSON response because the API has no update-time filter. After the
+response passes its contract, the job compares an order-independent fingerprint of `classList`
+and `studentList` with the previous successful Full run. Changed data is stored as one exact raw
+`training_data` page; unchanged data completes successfully with zero new Bronze records and no
+duplicate file. Full and each Filtered parameter set keep separate fingerprints.
+`FAMS_LOAD_MODE=full` sends no query parameters.
 Full mode ignores filter values completely, including their validation. `FAMS_LOAD_MODE=filtered`
 sends only non-empty `FAMS_STATUS`, `FAMS_SITE`,
 `FAMS_ACTUAL_START_DATE_FROM`, and `FAMS_ACTUAL_START_DATE_TO` values. Dates use `YYYYMMDD`.
@@ -215,6 +220,7 @@ FAMS enum, while site values remain free-form comma-separated strings.
 There is deliberately no `both` mode, OAuth flow, or separate raw file for `classList` and
 `studentList`. A run succeeds only when `success=true`, `data` is an object, and both lists are
 arrays. The record count is the combined size of those two lists.
+Invalid contract responses are marked failed and are not written to Bronze.
 
 Run checks with:
 
