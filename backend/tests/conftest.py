@@ -44,6 +44,7 @@ _MOCK_ENV = {
 }
 for _name, _value in _MOCK_ENV.items():
     os.environ.setdefault(_name, _value)
+os.environ.setdefault("MOCK_DISABLE_PERFORMANCE_DATA", "1")
 
 
 @pytest.fixture

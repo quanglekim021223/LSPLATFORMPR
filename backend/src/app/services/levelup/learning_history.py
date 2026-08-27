@@ -5,6 +5,8 @@ import logging
 from datetime import UTC, datetime
 from urllib.parse import quote
 
+import httpx
+
 from app.clients.levelup_client import LevelUpClient, is_retryable_error
 from app.core.config import Settings
 from app.core.security import sanitize_text
@@ -20,6 +22,7 @@ from app.services.levelup.pagination import (
 logger = logging.getLogger(__name__)
 VENDOR = "levelup"
 DOMAIN = "learning_history"
+CATALOG_DOMAIN = "course_catalog"
 
 
 async def ingest_learning_history(
@@ -148,6 +151,22 @@ async def ingest_course(
             )
         return result
     except Exception as exc:
+        if (
+            isinstance(exc, httpx.HTTPStatusError)
+            and exc.response.status_code == httpx.codes.NOT_FOUND
+            and await checkpoints.deactivate_entity_key_if_stale(
+                VENDOR,
+                CATALOG_DOMAIN,
+                course_id,
+                run_id,
+            )
+        ):
+            await checkpoints.mark_course(run_id, course_id, "completed")
+            logger.warning(
+                "LevelUP course no longer exists; deactivated course_id=%s",
+                course_id,
+            )
+            return result
         result.succeeded = False
         result.retryable = is_retryable_error(exc)
         result.error_message = sanitize_text(exc, client.sensitive_values())

@@ -6,6 +6,7 @@ from urllib.parse import parse_qs
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 
+from app.mocks.generated_data import generated_vendor_data
 from app.mocks.settings import get_mock_settings
 
 router = APIRouter(tags=["Coursera"])
@@ -122,6 +123,11 @@ _ENROLLMENTS = [
     enrollment_payload("enrollment-2", "course-2", completed=False),
     enrollment_payload("enrollment-3", "course-3", completed=True),
 ]
+
+_GENERATED = generated_vendor_data("coursera")
+if _GENERATED is not None:
+    _CONTENTS = _GENERATED["contents"]
+    _ENROLLMENTS = _GENERATED["enrollments"]
 
 
 def _validate_bearer(authorization: str | None) -> None:

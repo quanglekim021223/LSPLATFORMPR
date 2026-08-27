@@ -278,6 +278,79 @@ async def test_watermarks_and_entity_keys_survive_run_retention(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
+async def test_entity_keys_can_be_deactivated_and_reactivated(tmp_path: Path) -> None:
+    store = CheckpointStore(tmp_path / "state.db")
+    await store.initialize()
+    await store.remember_entity_keys(
+        "levelup",
+        "course_catalog",
+        ["active-course", "removed-course"],
+        "run-1",
+    )
+
+    assert await store.deactivate_entity_key_if_stale(
+        "levelup",
+        "course_catalog",
+        "removed-course",
+        "run-2",
+    ) is True
+    assert await store.entity_keys("levelup", "course_catalog") == [
+        "active-course"
+    ]
+
+    await store.remember_entity_keys(
+        "levelup",
+        "course_catalog",
+        ["removed-course"],
+        "run-2",
+    )
+    assert await store.deactivate_entity_key_if_stale(
+        "levelup",
+        "course_catalog",
+        "removed-course",
+        "run-2",
+    ) is False
+    assert await store.entity_keys("levelup", "course_catalog") == [
+        "active-course",
+        "removed-course",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_initialize_migrates_legacy_entity_keys_as_active(tmp_path: Path) -> None:
+    database_path = tmp_path / "legacy.db"
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE vendor_entity_keys (
+                vendor TEXT NOT NULL,
+                data_domain TEXT NOT NULL,
+                entity_key TEXT NOT NULL,
+                first_seen_run_id TEXT NOT NULL,
+                last_seen_run_id TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (vendor, data_domain, entity_key)
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO vendor_entity_keys VALUES (
+                'levelup', 'course_catalog', 'legacy-course',
+                'run-1', 'run-1', '2026-08-27T00:00:00+00:00'
+            )
+            """
+        )
+
+    store = CheckpointStore(database_path)
+    await store.initialize()
+
+    assert await store.entity_keys("levelup", "course_catalog") == [
+        "legacy-course"
+    ]
+
+
+@pytest.mark.asyncio
 async def test_source_file_metadata_detects_remote_changes(tmp_path: Path) -> None:
     store = CheckpointStore(tmp_path / "state.db")
     await store.initialize()

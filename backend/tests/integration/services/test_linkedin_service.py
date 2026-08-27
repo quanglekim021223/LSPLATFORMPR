@@ -18,7 +18,11 @@ from app.services.linkedin.learning_history import (
     FULL_SYNC_SCOPE,
     WEEKLY_SYNC_SCOPE,
 )
-from app.services.linkedin.service import LinkedInJob, run_linkedin_ingestion
+from app.services.linkedin.service import (
+    CATALOG_OVERLAP_MILLISECONDS,
+    LinkedInJob,
+    run_linkedin_ingestion,
+)
 from tests.conftest import no_sleep, response
 
 
@@ -250,8 +254,8 @@ async def test_second_run_uses_successful_catalog_watermark(
     )
 
     assert second.status == RunStatus.SUCCEEDED
-    assert catalog_requests[0]["assetFilteringCriteria.lastModifiedAfter"] == (
-        catalog_watermark
+    assert catalog_requests[0]["assetFilteringCriteria.lastModifiedAfter"] == str(
+        max(0, int(catalog_watermark) - CATALOG_OVERLAP_MILLISECONDS)
     )
     assert catalog_requests[0]["assetFilteringCriteria.assetTypes[0]"] == "COURSE"
     assert catalog_requests[0]["assetRetrievalCriteria.includeRetired"] == "true"

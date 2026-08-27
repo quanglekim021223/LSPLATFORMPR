@@ -105,6 +105,7 @@ class CheckpointStore:
                     first_seen_run_id TEXT NOT NULL,
                     last_seen_run_id TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
+                    is_active INTEGER NOT NULL DEFAULT 1,
                     PRIMARY KEY (vendor, data_domain, entity_key)
                 );
                 CREATE INDEX IF NOT EXISTS idx_runs_vendor_started
@@ -137,6 +138,15 @@ class CheckpointStore:
                 connection.execute(
                     "ALTER TABLE ingested_source_files "
                     "ADD COLUMN remote_modified_at TEXT"
+                )
+            entity_columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(vendor_entity_keys)")
+            }
+            if "is_active" not in entity_columns:
+                connection.execute(
+                    "ALTER TABLE vendor_entity_keys "
+                    "ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1"
                 )
 
     async def is_ready(self) -> bool:
@@ -639,11 +649,12 @@ class CheckpointStore:
                 """
                 INSERT INTO vendor_entity_keys(
                     vendor, data_domain, entity_key,
-                    first_seen_run_id, last_seen_run_id, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                    first_seen_run_id, last_seen_run_id, updated_at, is_active
+                ) VALUES (?, ?, ?, ?, ?, ?, 1)
                 ON CONFLICT(vendor, data_domain, entity_key) DO UPDATE SET
                     last_seen_run_id = excluded.last_seen_run_id,
-                    updated_at = excluded.updated_at
+                    updated_at = excluded.updated_at,
+                    is_active = 1
                 """,
                 (
                     (vendor, data_domain, entity_key, run_id, run_id, now)
@@ -659,12 +670,45 @@ class CheckpointStore:
             rows = connection.execute(
                 """
                 SELECT entity_key FROM vendor_entity_keys
-                WHERE vendor = ? AND data_domain = ?
+                WHERE vendor = ? AND data_domain = ? AND is_active = 1
                 ORDER BY entity_key
                 """,
                 (vendor, data_domain),
             ).fetchall()
             return [str(row["entity_key"]) for row in rows]
+
+    async def deactivate_entity_key_if_stale(
+        self,
+        vendor: str,
+        data_domain: str,
+        entity_key: str,
+        current_run_id: str,
+    ) -> bool:
+        return await asyncio.to_thread(
+            self._deactivate_entity_key_if_stale,
+            vendor,
+            data_domain,
+            entity_key,
+            current_run_id,
+        )
+
+    def _deactivate_entity_key_if_stale(
+        self,
+        vendor: str,
+        data_domain: str,
+        entity_key: str,
+        current_run_id: str,
+    ) -> bool:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE vendor_entity_keys SET is_active = 0, updated_at = ?
+                WHERE vendor = ? AND data_domain = ? AND entity_key = ?
+                    AND last_seen_run_id != ?
+                """,
+                (_now(), vendor, data_domain, entity_key, current_run_id),
+            )
+            return cursor.rowcount > 0
 
     async def record_failed_page(
         self,

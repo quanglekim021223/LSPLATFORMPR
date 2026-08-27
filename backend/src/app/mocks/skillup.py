@@ -6,6 +6,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Header, HTTPException, Query, status
 
+from app.mocks.generated_data import generated_vendor_data
 from app.mocks.settings import get_mock_settings
 
 router = APIRouter(tags=["SkillUp"])
@@ -203,6 +204,20 @@ _SKILL_PROFILE_MODIFIED_ON = {
     123457: "2026-08-20T02:00:00Z",
     123458: "2026-08-20T03:00:00Z",
 }
+
+_GENERATED = generated_vendor_data("skillup")
+if _GENERATED is not None:
+    _TAXONOMY = _GENERATED["taxonomy"]
+    _SKILL_PROFILES = _GENERATED["skill_profiles"]
+    _REPORTS = _GENERATED["reports"]
+    _TAXONOMY_MODIFIED_ON = {
+        int(key): value
+        for key, value in _GENERATED["taxonomy_modified_on"].items()
+    }
+    _SKILL_PROFILE_MODIFIED_ON = {
+        int(key): value
+        for key, value in _GENERATED["skill_profile_modified_on"].items()
+    }
 
 
 def taxonomy_item(index: int = 0) -> dict[str, Any]:

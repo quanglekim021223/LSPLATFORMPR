@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 VENDOR = "linkedin"
 DOMAINS = (CATALOG_DOMAIN, DETAIL_DOMAIN, LEARNING_HISTORY)
 WEEKLY_SYNC_INTERVAL_DAYS = 7
+CATALOG_OVERLAP_MILLISECONDS = int(timedelta(hours=48).total_seconds() * 1000)
 
 
 class LinkedInJob:
@@ -288,7 +289,7 @@ def _parse_catalog_watermark(value: str | None) -> int | None:
         parsed = int(value)
     except ValueError:
         return None
-    return parsed if parsed >= 0 else None
+    return max(0, parsed - CATALOG_OVERLAP_MILLISECONDS) if parsed >= 0 else None
 
 
 def _sync_due(last_sync: str | None, now: datetime, interval_days: int) -> bool:

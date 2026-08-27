@@ -319,7 +319,7 @@ async def test_one_course_failure_does_not_stop_other_courses(
             )
         called.append(request.url.path)
         if "/bad/" in request.url.path:
-            return response(request, 404, {"error": "missing"})
+            return response(request, 400, {"error": "invalid"})
         return response(
             request,
             200,
@@ -335,6 +335,59 @@ async def test_one_course_failure_does_not_stop_other_courses(
     assert summary.courses_succeeded == 1
     assert summary.courses_failed == 1
     assert sorted(called) == ["/courses/bad/enrollments", "/courses/good/enrollments"]
+
+
+@pytest.mark.asyncio
+async def test_removed_course_is_deactivated_and_not_retried(
+    settings_factory: Callable[..., object],
+) -> None:
+    settings = settings_factory()
+    store = CheckpointStore(settings.checkpoint_db_path)  # type: ignore[attr-defined]
+    await store.initialize()
+    await store.remember_entity_keys(
+        "levelup",
+        "course_catalog",
+        ["removed-course"],
+        "previous-run",
+    )
+    catalog_calls = 0
+    history_calls: Counter[str] = Counter()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal catalog_calls
+        if request.url.path == "/authenticate":
+            return response(request, 200, "token")
+        if request.url.path == "/courses":
+            catalog_calls += 1
+            courses = [course("active-course")] if catalog_calls == 1 else []
+            return response(request, 200, course_page(courses))
+        history_calls[request.url.path] += 1
+        if request.url.path == "/courses/removed-course/enrollments":
+            return response(request, 404, {"error": "missing"})
+        if request.url.path == "/courses/active-course/enrollments":
+            return response(request, 200, enrollment_page([]))
+        raise AssertionError(request.url)
+
+    first = await run_levelup_ingestion(
+        settings,  # type: ignore[arg-type]
+        checkpoint_store=store,
+        transport=httpx.MockTransport(handler),
+        sleep=no_sleep,
+    )
+    second = await run_levelup_ingestion(
+        settings,  # type: ignore[arg-type]
+        checkpoint_store=store,
+        transport=httpx.MockTransport(handler),
+        sleep=no_sleep,
+    )
+
+    assert first.status == RunStatus.SUCCEEDED
+    assert second.status == RunStatus.SUCCEEDED
+    assert history_calls["/courses/removed-course/enrollments"] == 1
+    assert history_calls["/courses/active-course/enrollments"] == 2
+    assert await store.entity_keys("levelup", "course_catalog") == [
+        "active-course"
+    ]
 
 
 @pytest.mark.asyncio

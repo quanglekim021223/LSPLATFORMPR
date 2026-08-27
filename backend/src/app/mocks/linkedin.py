@@ -5,6 +5,7 @@ from urllib.parse import parse_qs
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 
+from app.mocks.generated_data import generated_vendor_data
 from app.mocks.settings import get_mock_settings
 
 router = APIRouter(tags=["LinkedIn Learning"])
@@ -96,6 +97,12 @@ _ASSETS = [
     asset_payload("urn:li:lyndaCourse:2", "SQL"),
     asset_payload("urn:li:lyndaCourse:3", "Data Engineering"),
 ]
+
+_GENERATED = generated_vendor_data("linkedin")
+_ACTIVITY_REPORTS: list[dict[str, Any]] | None = None
+if _GENERATED is not None:
+    _ASSETS = _GENERATED["assets"]
+    _ACTIVITY_REPORTS = _GENERATED["activity_reports"]
 
 
 def _validate_bearer(authorization: str | None) -> None:
@@ -213,5 +220,9 @@ async def activity_reports(
         or unit != "DAY"
     ):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid criteria")
-    records = [activity_report_payload(duration, started_at)]
+    records = (
+        _ACTIVITY_REPORTS
+        if _ACTIVITY_REPORTS is not None
+        else [activity_report_payload(duration, started_at)]
+    )
     return _page(records, start, count, "learningActivityReports")

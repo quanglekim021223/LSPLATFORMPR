@@ -11,6 +11,7 @@ from urllib.parse import parse_qs
 from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 
 from app.core.config import Settings
+from app.mocks.generated_data import generated_vendor_data
 from app.mocks.settings import MockSettings, get_mock_settings
 from app.models.harvard import RemoteFile, RemoteFileMetadata
 
@@ -44,6 +45,32 @@ def catalog_item(product_id: str, title: str) -> dict[str, str]:
 
 
 def history_csv(vendor: str, report_date: str = "2026-08-22") -> bytes:
+    generated = generated_vendor_data(vendor)
+    if generated is not None:
+        rows = generated["history_rows"]
+        if vendor == "harvard_hmm":
+            compact_date = report_date.replace("-", "")
+            body = "".join(
+                f"{compact_date},{row['username']},Mock,Learner,{row['username']},"
+                f"Completed,{row['title']},{row['product_id']}\n"
+                for row in rows
+            )
+            return (
+                "EventDate,Username,FirstName,LastName,Email,EventName,Title,Product\n"
+                + body
+            ).encode()
+        if vendor == "harvard_spark":
+            body = "".join(
+                f"{report_date},{row['username']},Mock,Learner,{row['username']},"
+                f"Learner,Views,{row['title']},Videos,{row['product_id']},"
+                "Leadership,4,2026-01-21\n"
+                for row in rows
+            )
+            return (
+                "Event Date,Username,First Name,Last Name,Email,Role,Event Name,"
+                "Title,Asset Type,Product ID,Skills,Duration,Registration Date\n"
+                + body
+            ).encode()
     if vendor == "harvard_hmm":
         compact_date = report_date.replace("-", "")
         return (
@@ -71,6 +98,13 @@ _SPARK_CATALOG = [
     catalog_item("spark-1", "Spark Course 1"),
     catalog_item("spark-2", "Spark Course 2"),
 ]
+
+_GENERATED_HMM = generated_vendor_data("harvard_hmm")
+_GENERATED_SPARK = generated_vendor_data("harvard_spark")
+if _GENERATED_HMM is not None:
+    _HMM_CATALOG = _GENERATED_HMM["catalog"]
+if _GENERATED_SPARK is not None:
+    _SPARK_CATALOG = _GENERATED_SPARK["catalog"]
 
 
 class MockHarvardSFTPTransport:

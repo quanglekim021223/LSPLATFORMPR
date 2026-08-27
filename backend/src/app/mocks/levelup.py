@@ -7,6 +7,7 @@ from typing import Annotated
 from fastapi import APIRouter, Header, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
+from app.mocks.generated_data import generated_vendor_data
 from app.mocks.settings import get_mock_settings
 
 router = APIRouter(tags=["LevelUP"])
@@ -95,6 +96,11 @@ _ENROLLMENTS = {
     ],
     "data-engineering": [],
 }
+
+_GENERATED = generated_vendor_data("levelup")
+if _GENERATED is not None:
+    _COURSES = _GENERATED["courses"]
+    _ENROLLMENTS = _GENERATED["enrollments"]
 
 
 class AuthenticationRequest(BaseModel):
