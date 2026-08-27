@@ -46,7 +46,7 @@ class LinkedInTokenResponse(LinkedInContractModel):
 
 
 class LinkedInLocale(LinkedInContractModel):
-    country: StrictStr
+    country: StrictStr | None = None
     language: StrictStr
 
 
@@ -180,35 +180,35 @@ class LinkedInLearnerEntity(LinkedInContractModel):
 
 
 class LinkedInLearnerDetails(LinkedInContractModel):
-    name: StrictStr
-    enterprise_groups: list[StrictStr]
+    name: StrictStr | None = None
+    enterprise_groups: list[StrictStr] = Field(default_factory=list)
     entity: LinkedInLearnerEntity
-    email: StrictStr
-    custom_attributes: dict[str, Any]
-    unique_user_id: StrictStr
+    email: StrictStr | None = None
+    custom_attributes: dict[str, Any] = Field(default_factory=dict)
+    unique_user_id: StrictStr | None = None
 
 
 class LinkedInActivity(LinkedInContractModel):
     engagement_type: StrictStr
-    last_engaged_at: NonNegativeInt
-    first_engaged_at: NonNegativeInt
-    asset_type: StrictStr
-    engagement_metric_qualifier: StrictStr
-    engagement_value: StrictInt
+    last_engaged_at: NonNegativeInt | None = None
+    first_engaged_at: NonNegativeInt | None = None
+    asset_type: StrictStr | None = None
+    engagement_metric_qualifier: StrictStr | None = None
+    engagement_value: StrictInt | None = None
 
 
 class LinkedInContentDetails(LinkedInContractModel):
     name: StrictStr
-    content_provider_name: StrictStr
+    content_provider_name: StrictStr | None = None
     content_urn: StrictStr
     locale: LinkedInLocale
 
 
 class LinkedInActivityReport(LinkedInContractModel):
-    latest_data_at: NonNegativeInt
-    learner_details: LinkedInLearnerDetails
+    latest_data_at: NonNegativeInt | None = None
+    learner_details: LinkedInLearnerDetails | None = None
     activities: list[LinkedInActivity]
-    content_details: LinkedInContentDetails
+    content_details: LinkedInContentDetails | None = None
 
 
 class LinkedInActivityReportsResponse(LinkedInContractModel):

@@ -54,6 +54,10 @@ async def ingest_learning_history(
         while True:
             params: dict[str, Any] = {
                 "q": "criteria",
+                "aggregationCriteria.primary": "INDIVIDUAL",
+                "aggregationCriteria.secondary": "CONTENT",
+                "assetType": "COURSE",
+                "contentSource": "LINKEDIN_LEARNING",
                 "startedAt": int(window_start.timestamp() * 1000),
                 "timeOffset.unit": "DAY",
                 "timeOffset.duration": duration_days,

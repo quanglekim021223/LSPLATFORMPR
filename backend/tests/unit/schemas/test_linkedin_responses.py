@@ -83,6 +83,48 @@ def test_learning_activity_report_contract() -> None:
     assert contract.elements[0].activities[0].engagement_value == 1
 
 
+def test_learning_activity_report_accepts_optional_null_and_missing_fields() -> None:
+    payload = {
+        "paging": _paging(0, 100, 2),
+        "elements": [
+            {
+                "latestDataAt": None,
+                "learnerDetails": {
+                    "name": None,
+                    "entity": {"profileUrn": "urn:li:enterpriseProfile:1"},
+                    "email": None,
+                    "uniqueUserId": None,
+                },
+                "activities": [
+                    {
+                        "engagementType": "PROGRESS_PERCENTAGE",
+                        "lastEngagedAt": None,
+                        "engagementValue": None,
+                    }
+                ],
+                "contentDetails": {
+                    "name": "Course",
+                    "contentProviderName": None,
+                    "contentUrn": "urn:li:lyndaCourse:1",
+                    "locale": {"country": None, "language": "en"},
+                },
+            },
+            {
+                "activities": [{"engagementType": "COMPLETIONS"}],
+                "learnerDetails": None,
+                "contentDetails": None,
+            },
+        ],
+    }
+
+    contract = validate_activity_reports(
+        payload, expected_start=0, expected_count=100
+    )
+
+    assert contract.elements[0].activities[0].engagement_value is None
+    assert contract.elements[1].learner_details is None
+
+
 def test_missing_required_field_fails_contract() -> None:
     asset = asset_payload("urn:li:lyndaCourse:1", "Python")
     del asset["details"]

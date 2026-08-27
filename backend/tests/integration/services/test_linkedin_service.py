@@ -132,6 +132,10 @@ async def test_full_pipeline_windows_pagination_raw_and_concurrency(
             )
         if path == "/v2/learningActivityReports":
             assert request.url.params["q"] == "criteria"
+            assert request.url.params["aggregationCriteria.primary"] == "INDIVIDUAL"
+            assert request.url.params["aggregationCriteria.secondary"] == "CONTENT"
+            assert request.url.params["assetType"] == "COURSE"
+            assert request.url.params["contentSource"] == "LINKEDIN_LEARNING"
             assert request.url.params["timeOffset.unit"] == "DAY"
             duration = int(request.url.params["timeOffset.duration"])
             assert 1 <= duration <= 14

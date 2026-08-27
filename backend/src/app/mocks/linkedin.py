@@ -188,6 +188,14 @@ async def learning_assets(
 @router.get("/learningActivityReports")
 async def activity_reports(
     q: Annotated[str, Query()],
+    primary_aggregation: Annotated[
+        str, Query(alias="aggregationCriteria.primary")
+    ],
+    secondary_aggregation: Annotated[
+        str, Query(alias="aggregationCriteria.secondary")
+    ],
+    asset_type: Annotated[str, Query(alias="assetType")],
+    content_source: Annotated[str, Query(alias="contentSource")],
     started_at: Annotated[int, Query(alias="startedAt")],
     duration: Annotated[int, Query(alias="timeOffset.duration", ge=1, le=14)],
     unit: Annotated[str, Query(alias="timeOffset.unit")],
@@ -196,7 +204,14 @@ async def activity_reports(
     authorization: Annotated[str | None, Header()] = None,
 ) -> dict[str, Any]:
     _validate_bearer(authorization)
-    if q != "criteria" or unit != "DAY":
+    if (
+        q != "criteria"
+        or primary_aggregation != "INDIVIDUAL"
+        or secondary_aggregation != "CONTENT"
+        or asset_type != "COURSE"
+        or content_source != "LINKEDIN_LEARNING"
+        or unit != "DAY"
+    ):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid criteria")
     records = [activity_report_payload(duration, started_at)]
     return _page(records, start, count, "learningActivityReports")
