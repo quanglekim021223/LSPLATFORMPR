@@ -4,7 +4,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -70,7 +70,8 @@ class HarvardJob:
         try:
             await self.checkpoints.start_run(current_run_id, self.vendor.vendor)
             await self.checkpoints.add_domains(current_run_id, list(DOMAINS))
-            ingestion_date = self.now().date().isoformat()
+            run_now = self.now()
+            ingestion_date = run_now.date().isoformat()
 
             async def catalog_branch() -> None:
                 try:
@@ -93,6 +94,13 @@ class HarvardJob:
                         message,
                     )
                     raise
+                catalog_start_date = start_date
+                if catalog_start_date is None:
+                    previous_watermark = await self.checkpoints.get_watermark(
+                        self.vendor.vendor,
+                        CATALOG_DOMAIN,
+                    )
+                    catalog_start_date = _catalog_start_date(previous_watermark)
                 await ingest_catalog(
                     self.settings,
                     self.vendor,
@@ -101,7 +109,13 @@ class HarvardJob:
                     self.writer,
                     current_run_id,
                     ingestion_date,
-                    start_date=start_date,
+                    start_date=catalog_start_date,
+                )
+                await self.checkpoints.set_watermark(
+                    self.vendor.vendor,
+                    CATALOG_DOMAIN,
+                    ingestion_date,
+                    current_run_id,
                 )
 
             async def history_branch() -> None:
@@ -112,7 +126,10 @@ class HarvardJob:
                     elif self.settings.harvard_sftp_mock_enabled:
                         from app.mocks.harvard import GeneratedMockHarvardSFTPTransport
 
-                        sftp = GeneratedMockHarvardSFTPTransport(self.settings)
+                        sftp = GeneratedMockHarvardSFTPTransport(
+                            self.settings,
+                            now=self.now,
+                        )
                     else:
                         sftp = AsyncSSHSFTPTransport(
                             self.settings,
@@ -295,3 +312,13 @@ async def run_harvard_ingestion(
             sleep=sleep,
         )
         return await job.run(start_date=start_date)
+
+
+def _catalog_start_date(watermark: str | None) -> str | None:
+    if watermark is None:
+        return None
+    try:
+        value = date.fromisoformat(watermark) - timedelta(days=1)
+    except ValueError:
+        return None
+    return value.strftime("%Y%m%d")

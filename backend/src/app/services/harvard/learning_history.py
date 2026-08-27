@@ -47,6 +47,23 @@ async def ingest_learning_history(
         await checkpoints.mark_domain(run_id, DOMAIN, "terminal_failed", message)
         raise
 
+    try:
+        listed_files = await transport.list_files(settings.harvard_sftp_remote_dir)
+    except Exception as exc:
+        message = sanitize_text(exc, settings.harvard_secrets(vendor.vendor))
+        retryable = not isinstance(exc, (PermissionError, TypeError, ValueError))
+        await checkpoints.record_failed_page(
+            run_id, DOMAIN, 0, message, retryable=retryable
+        )
+        await checkpoints.mark_domain(
+            run_id,
+            DOMAIN,
+            "retryable_failed" if retryable else "terminal_failed",
+            message,
+        )
+        raise
+    metadata_by_path = {item.remote_path: item for item in listed_files}
+
     failures: list[tuple[str, bool]] = []
     report_date = first_report_date
     while report_date <= last_report_date:
@@ -54,7 +71,20 @@ async def ingest_learning_history(
         remote_path = posixpath.join(settings.harvard_sftp_remote_dir, file_name)
         source_key = remote_path
         offset = int(report_date.strftime("%Y%m%d"))
-        if await checkpoints.source_file_completed(vendor.vendor, DOMAIN, source_key):
+        metadata = metadata_by_path.get(remote_path)
+        if metadata is None:
+            if await checkpoints.source_file_completed(
+                vendor.vendor, DOMAIN, source_key
+            ):
+                report_date += timedelta(days=1)
+                continue
+        elif await checkpoints.source_file_unchanged(
+            vendor.vendor,
+            DOMAIN,
+            source_key,
+            metadata.size,
+            metadata.modified_at,
+        ):
             report_date += timedelta(days=1)
             continue
         try:
@@ -87,7 +117,12 @@ async def ingest_learning_history(
                 run_id, DOMAIN, offset, records_count
             )
             await checkpoints.record_completed_source_file(
-                vendor.vendor, DOMAIN, source_key, run_id
+                vendor.vendor,
+                DOMAIN,
+                source_key,
+                run_id,
+                remote_file.size,
+                remote_file.modified_at,
             )
         except Exception as exc:
             message = sanitize_text(exc, settings.harvard_secrets(vendor.vendor))

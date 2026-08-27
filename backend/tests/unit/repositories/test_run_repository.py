@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -274,3 +275,63 @@ async def test_watermarks_and_entity_keys_survive_run_retention(tmp_path: Path) 
         )
         == "2026-08-25T06:00:00Z"
     )
+
+
+@pytest.mark.asyncio
+async def test_source_file_metadata_detects_remote_changes(tmp_path: Path) -> None:
+    store = CheckpointStore(tmp_path / "state.db")
+    await store.initialize()
+    modified_at = datetime(2026, 8, 25, tzinfo=UTC)
+    await store.record_completed_source_file(
+        "harvard_hmm",
+        "learning_history",
+        "/reports/history.csv",
+        "run-1",
+        100,
+        modified_at,
+    )
+
+    assert await store.source_file_unchanged(
+        "harvard_hmm",
+        "learning_history",
+        "/reports/history.csv",
+        100,
+        modified_at,
+    )
+    assert not await store.source_file_unchanged(
+        "harvard_hmm",
+        "learning_history",
+        "/reports/history.csv",
+        101,
+        modified_at,
+    )
+
+
+@pytest.mark.asyncio
+async def test_initialize_adds_metadata_columns_to_legacy_source_table(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "state.db"
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE ingested_source_files (
+                vendor TEXT NOT NULL,
+                data_domain TEXT NOT NULL,
+                source_key TEXT NOT NULL,
+                run_id TEXT NOT NULL,
+                completed_at TEXT NOT NULL,
+                PRIMARY KEY (vendor, data_domain, source_key)
+            )
+            """
+        )
+
+    store = CheckpointStore(database_path)
+    await store.initialize()
+
+    with sqlite3.connect(database_path) as connection:
+        columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(ingested_source_files)")
+        }
+    assert {"remote_size", "remote_modified_at"} <= columns

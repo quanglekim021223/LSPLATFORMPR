@@ -172,7 +172,9 @@ Harvard HMM and Harvard Spark share the same implementation but use separate ven
 credentials, Catalog codes, locks, run summaries, and Bronze directories. Each branch obtains one
 Catalog token with HTTP Basic credentials and form scope `hbp.org.api/catalog.read`; a `401`
 refreshes the token and retries exactly once. Daily scheduling performs a full Catalog load from
-`start=0`; `startDate=YYYYMMDD` is available only to explicit callers for a future delta flow.
+`start=0` only when no successful Catalog watermark exists. Later runs send the previous successful
+watermark minus one day as `startDate=YYYYMMDD`, preserving a one-day boundary overlap. HMM and
+Spark keep separate watermarks, and a watermark advances only after every Catalog page succeeds.
 Token and Catalog responses use shared Harvard Pydantic contracts. HMM and Spark CSV reports use
 separate header/row contracts because their column names and shapes differ. Contract-invalid JSON
 or CSV fails the affected domain and is not written to Bronze; valid payload bytes are preserved
@@ -185,13 +187,15 @@ network connection with deterministic generated CSV files and therefore does not
 credentials or a known-hosts file. Keep this setting `false` in production. The report date is the local run date minus
 `HARVARD_REPORT_DATE_OFFSET_DAYS`. Set `HARVARD_HMM_HISTORY_START_DATE` and
 `HARVARD_SPARK_HISTORY_START_DATE` in `YYYY-MM-DD` format to enable historical backfill. The
-first run downloads each dated CSV from that start date through the report cutoff. SQLite
-permanently records each completed remote path, so later scheduled runs skip old completed files
-and normally download only the new date. A missing historical file is attempted once per run and
+first run downloads each dated CSV from that start date through the report cutoff. Every run lists
+the remote directory metadata once and compares each expected file's size and modified time with
+SQLite. New or changed files are downloaded into a new Bronze run; unchanged files are skipped.
+Existing databases gain the metadata columns automatically, and legacy rows are downloaded once to
+establish their initial metadata. A missing historical file is attempted once per run and
 retried by the next daily run; only the newest expected file is polled at the configured interval
 until the earlier of `HARVARD_SFTP_MAX_WAIT_SECONDS` or 07:00. Leaving a start date blank retains
-daily-only behavior. One SFTP session is reused for the entire backfill run. CSV bytes are written
-without parsing; the manifest contains one `files`
+daily-only behavior. One SFTP session is reused for the entire backfill run. CSV rows are validated,
+then the original bytes are written unchanged; the manifest contains one `files`
 entry per download with remote path/name, size, remote modified time, download time, SHA-256, run
 ID, and ingestion date.
 
@@ -395,10 +399,10 @@ write semantics.
   catalog page or detail request fails. History pages are written immediately and use globally
   increasing Bronze offsets so pages from separate 14-day windows cannot overwrite one another.
 - Each Harvard job runs Catalog and SFTP History independently in parallel. Contract-valid Catalog
-  pages are written immediately and counted from the validated `list`; an invalid response does
-  not enter Bronze. History backfills all configured dates sequentially, writes each
-  exact CSV plus checksum metadata, and skips remote paths already recorded in
-  `ingested_source_files`. Missing dates do not discard files that succeeded. One failed branch
+  pages are written immediately and counted from the validated `list`; the first run is full and
+  later runs use `startDate` with a one-day overlap. An invalid response does not enter Bronze.
+  History lists all remote metadata once, backfills configured dates, and downloads only new or
+  metadata-changed CSV files. Missing dates do not discard files that succeeded. One failed branch
   produces `PARTIAL_FAILURE` while preserving the successful branch.
 - FAMS makes one request per run and writes the exact response bytes once. It logs only separate
   class/student counts and stores their sum in the run summary. Contract-invalid JSON responses

@@ -25,7 +25,8 @@ from app.mocks.harvard import (
 )
 from app.mocks.settings import get_mock_settings
 from app.models import RunStatus
-from app.models.harvard import RemoteFile
+from app.models.harvard import RemoteFile, RemoteFileMetadata
+from app.repositories import CheckpointStore
 from app.services.harvard.hmm_service import run_harvard_hmm_ingestion
 from app.services.harvard.spark_service import run_harvard_spark_ingestion
 from tests.conftest import no_sleep, response
@@ -434,6 +435,133 @@ async def test_start_date_is_only_sent_when_explicitly_requested(
 
 
 @pytest.mark.asyncio
+async def test_catalog_uses_successful_watermark_with_one_day_overlap(
+    settings_factory: Callable[..., Settings],
+) -> None:
+    settings = settings_factory()
+    store = CheckpointStore(settings.checkpoint_db_path)
+    catalog_params: list[dict[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return response(request, 200, token_payload("token"))
+        catalog_params.append(dict(request.url.params))
+        return response(request, 200, _empty_catalog())
+
+    def sftp(report_date: str) -> MockHarvardSFTPTransport:
+        name = f"harvard_hmm_reporting_{report_date}.csv"
+        path = f"/reports/{name}"
+        content = history_csv(
+            "harvard_hmm",
+            datetime.strptime(report_date, "%Y%m%d").date().isoformat(),
+        )
+        return MockHarvardSFTPTransport(
+            {
+                path: RemoteFile(
+                    remote_path=path,
+                    file_name=name,
+                    content=content,
+                    size=len(content),
+                    modified_at=datetime.now(UTC),
+                )
+            }
+        )
+
+    first = await run_harvard_hmm_ingestion(
+        settings,
+        checkpoint_store=store,
+        transport=httpx.MockTransport(handler),
+        sftp_transport=sftp("20260822"),
+        sleep=no_sleep,
+        now=lambda: NOW,
+    )
+    second = await run_harvard_hmm_ingestion(
+        settings,
+        checkpoint_store=store,
+        transport=httpx.MockTransport(handler),
+        sftp_transport=sftp("20260823"),
+        sleep=no_sleep,
+        now=lambda: NOW + timedelta(days=1),
+    )
+
+    assert first.status == RunStatus.SUCCEEDED
+    assert second.status == RunStatus.SUCCEEDED
+    assert "startDate" not in catalog_params[0]
+    assert catalog_params[1]["startDate"] == "20260822"
+    assert await store.get_watermark("harvard_hmm", "course_catalog") == (
+        "2026-08-24"
+    )
+
+
+@pytest.mark.asyncio
+async def test_history_redownloads_changed_metadata_and_skips_unchanged_file(
+    settings_factory: Callable[..., Settings],
+) -> None:
+    settings = settings_factory()
+    store = CheckpointStore(settings.checkpoint_db_path)
+    file_name = "harvard_hmm_reporting_20260822.csv"
+    remote_path = f"/reports/{file_name}"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return response(request, 200, token_payload("token"))
+        return response(request, 200, _empty_catalog())
+
+    def remote(content: bytes, modified_at: datetime) -> RemoteFile:
+        return RemoteFile(
+            remote_path=remote_path,
+            file_name=file_name,
+            content=content,
+            size=len(content),
+            modified_at=modified_at,
+        )
+
+    original = history_csv("harvard_hmm")
+    changed = original.replace(b"Decision Making", b"Updated Course")
+    first_remote = remote(original, datetime(2026, 8, 22, tzinfo=UTC))
+    changed_remote = remote(changed, datetime(2026, 8, 25, tzinfo=UTC))
+
+    first = await run_harvard_hmm_ingestion(
+        settings,
+        checkpoint_store=store,
+        transport=httpx.MockTransport(handler),
+        sftp_transport=MockHarvardSFTPTransport({remote_path: first_remote}),
+        sleep=no_sleep,
+        now=lambda: NOW,
+    )
+    changed_sftp = MockHarvardSFTPTransport({remote_path: changed_remote})
+    second = await run_harvard_hmm_ingestion(
+        settings,
+        checkpoint_store=store,
+        transport=httpx.MockTransport(handler),
+        sftp_transport=changed_sftp,
+        sleep=no_sleep,
+        now=lambda: NOW,
+    )
+    unchanged_sftp = MockHarvardSFTPTransport({remote_path: changed_remote})
+    third = await run_harvard_hmm_ingestion(
+        settings,
+        checkpoint_store=store,
+        transport=httpx.MockTransport(handler),
+        sftp_transport=unchanged_sftp,
+        sleep=no_sleep,
+        now=lambda: NOW,
+    )
+
+    assert first.status == RunStatus.SUCCEEDED
+    assert second.status == RunStatus.SUCCEEDED
+    assert third.status == RunStatus.SUCCEEDED
+    assert changed_sftp.calls == [remote_path]
+    assert unchanged_sftp.calls == []
+    changed_path = next(
+        settings.bronze_local_path.glob(
+            f"harvard_hmm/learning_history/**/run_id={second.run_id}/{file_name}"
+        )
+    )
+    assert changed_path.read_bytes() == changed
+
+
+@pytest.mark.asyncio
 async def test_invalid_catalog_contract_is_not_written_and_causes_partial_failure(
     settings_factory: Callable[..., Settings],
 ) -> None:
@@ -544,6 +672,9 @@ async def test_missing_sftp_file_causes_partial_failure_and_redacts_secrets(
         ) -> None:
             return None
 
+        async def list_files(self, _remote_dir: str) -> list[RemoteFileMetadata]:
+            return []
+
         async def fetch(self, _remote_path: str) -> RemoteFile | None:
             raise RuntimeError(
                 "failed with test-sftp-user test-sftp-password test-hmm-secret"
@@ -644,6 +775,14 @@ async def test_asyncssh_receives_the_configured_known_hosts_file(
         async def stat(self, _path: str) -> SimpleNamespace:
             return SimpleNamespace(size=7, mtime=1_777_000_000)
 
+        async def readdir(self, _path: str) -> list[SimpleNamespace]:
+            return [
+                SimpleNamespace(
+                    filename="report.csv",
+                    attrs=SimpleNamespace(size=7, mtime=1_777_000_000),
+                )
+            ]
+
         def open(self, _path: str, _mode: str) -> FakeRemoteHandle:
             return FakeRemoteHandle()
 
@@ -671,9 +810,12 @@ async def test_asyncssh_receives_the_configured_known_hosts_file(
 
     transport = AsyncSSHSFTPTransport(settings)
     async with transport:
+        files = await transport.list_files("/reports")
         result = await transport.fetch("/reports/report.csv")
         second = await transport.fetch("/reports/second.csv")
 
+    assert files[0].remote_path == "/reports/report.csv"
+    assert files[0].size == 7
     assert result is not None
     assert result.content == b"raw-csv"
     assert second is not None

@@ -30,6 +30,14 @@ class RemoteFile:
     modified_at: datetime
 
 
+@dataclass(frozen=True, slots=True)
+class RemoteFileMetadata:
+    remote_path: str
+    file_name: str
+    size: int
+    modified_at: datetime
+
+
 class SFTPTransport(Protocol):
     async def __aenter__(self) -> Self: ...
 
@@ -39,6 +47,8 @@ class SFTPTransport(Protocol):
         exc: BaseException | None,
         traceback: object | None,
     ) -> None: ...
+
+    async def list_files(self, remote_dir: str) -> list[RemoteFileMetadata]: ...
 
     async def fetch(self, remote_path: str) -> RemoteFile | None: ...
 

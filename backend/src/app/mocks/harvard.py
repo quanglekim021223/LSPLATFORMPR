@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import base64
 import binascii
-from collections.abc import Mapping
-from datetime import UTC, datetime, time
+from collections.abc import Callable, Mapping
+from datetime import UTC, datetime, time, timedelta
 from pathlib import PurePosixPath
 from typing import Annotated, Any, Self
 from urllib.parse import parse_qs
@@ -12,7 +12,7 @@ from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 
 from app.core.config import Settings
 from app.mocks.settings import MockSettings, get_mock_settings
-from app.models.harvard import RemoteFile
+from app.models.harvard import RemoteFile, RemoteFileMetadata
 
 router = APIRouter(tags=["Harvard Catalog"])
 
@@ -101,13 +101,32 @@ class MockHarvardSFTPTransport:
             return None
         return self.files.get(remote_path)
 
+    async def list_files(self, remote_dir: str) -> list[RemoteFileMetadata]:
+        prefix = f"{remote_dir.rstrip('/')}/"
+        return [
+            RemoteFileMetadata(
+                remote_path=file.remote_path,
+                file_name=file.file_name,
+                size=file.size,
+                modified_at=file.modified_at,
+            )
+            for file in self.files.values()
+            if file.remote_path.startswith(prefix)
+        ]
+
 
 class GeneratedMockHarvardSFTPTransport:
     """Generate deterministic Harvard CSV files for local scheduled runs."""
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        now: Callable[[], datetime] | None = None,
+    ) -> None:
         self.settings = settings
         self.calls: list[str] = []
+        self.now = now or (lambda: datetime.now(UTC))
 
     async def __aenter__(self) -> Self:
         self._validate_connection(get_mock_settings())
@@ -123,6 +142,50 @@ class GeneratedMockHarvardSFTPTransport:
 
     async def fetch(self, remote_path: str) -> RemoteFile | None:
         self.calls.append(remote_path)
+        return self._file(remote_path)
+
+    async def list_files(self, remote_dir: str) -> list[RemoteFileMetadata]:
+        last_report_date = self.now().date() - timedelta(
+            days=self.settings.harvard_report_date_offset_days
+        )
+        configs = (
+            (
+                "harvard_hmm_reporting_",
+                self.settings.harvard_hmm_history_start_date,
+            ),
+            (
+                "harvard_Spark_reporting_",
+                self.settings.harvard_spark_history_start_date,
+            ),
+        )
+        files: list[RemoteFileMetadata] = []
+        for prefix, raw_start in configs:
+            first_report_date = (
+                datetime.strptime(raw_start, "%Y-%m-%d").date()
+                if raw_start.strip()
+                else last_report_date
+            )
+            report_date = first_report_date
+            while report_date <= last_report_date:
+                remote_path = str(
+                    PurePosixPath(remote_dir)
+                    / f"{prefix}{report_date:%Y%m%d}.csv"
+                )
+                remote_file = self._file(remote_path)
+                if remote_file is not None:
+                    files.append(
+                        RemoteFileMetadata(
+                            remote_path=remote_file.remote_path,
+                            file_name=remote_file.file_name,
+                            size=remote_file.size,
+                            modified_at=remote_file.modified_at,
+                        )
+                    )
+                report_date += timedelta(days=1)
+        return files
+
+    @staticmethod
+    def _file(remote_path: str) -> RemoteFile | None:
         file_name = PurePosixPath(remote_path).name
         prefixes = {
             "harvard_hmm_reporting_": "hmm",
@@ -224,7 +287,6 @@ async def catalog(
     start_date: Annotated[str | None, Query(alias="startDate")] = None,
     authorization: Annotated[str | None, Header()] = None,
 ) -> dict[str, Any]:
-    del start_date
     settings = get_mock_settings()
     orgs = {
         settings.mock_harvard_hmm_org_key: ("HMM", _HMM_CATALOG),
@@ -241,6 +303,20 @@ async def catalog(
     if authorization != f"Bearer {expected_token}":
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid mock token")
     records = config[1]
+    if start_date is not None:
+        try:
+            cutoff = datetime.strptime(start_date, "%Y%m%d").date()
+        except ValueError:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "startDate must use YYYYMMDD",
+            ) from None
+        records = [
+            item
+            for item in records
+            if datetime.strptime(item["LastModifiedDate"], "%Y-%m-%d").date()
+            > cutoff
+        ]
     return {
         "count": len(records),
         "limit": limit,

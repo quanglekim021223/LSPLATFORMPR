@@ -85,6 +85,8 @@ class CheckpointStore:
                     source_key TEXT NOT NULL,
                     run_id TEXT NOT NULL,
                     completed_at TEXT NOT NULL,
+                    remote_size INTEGER,
+                    remote_modified_at TEXT,
                     PRIMARY KEY (vendor, data_domain, source_key)
                 );
                 CREATE TABLE IF NOT EXISTS ingestion_watermarks (
@@ -121,6 +123,21 @@ class CheckpointStore:
                 WHERE heartbeat_at IS NULL
                 """
             )
+            source_columns = {
+                str(row["name"])
+                for row in connection.execute(
+                    "PRAGMA table_info(ingested_source_files)"
+                )
+            }
+            if "remote_size" not in source_columns:
+                connection.execute(
+                    "ALTER TABLE ingested_source_files ADD COLUMN remote_size INTEGER"
+                )
+            if "remote_modified_at" not in source_columns:
+                connection.execute(
+                    "ALTER TABLE ingested_source_files "
+                    "ADD COLUMN remote_modified_at TEXT"
+                )
 
     async def is_ready(self) -> bool:
         try:
@@ -431,12 +448,56 @@ class CheckpointStore:
                 return False
             return True
 
+    async def source_file_unchanged(
+        self,
+        vendor: str,
+        data_domain: str,
+        source_key: str,
+        remote_size: int,
+        remote_modified_at: datetime,
+    ) -> bool:
+        return await asyncio.to_thread(
+            self._source_file_unchanged,
+            vendor,
+            data_domain,
+            source_key,
+            remote_size,
+            remote_modified_at.isoformat(),
+        )
+
+    def _source_file_unchanged(
+        self,
+        vendor: str,
+        data_domain: str,
+        source_key: str,
+        remote_size: int,
+        remote_modified_at: str,
+    ) -> bool:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT 1 FROM ingested_source_files
+                WHERE vendor = ? AND data_domain = ? AND source_key = ?
+                  AND remote_size = ? AND remote_modified_at = ?
+                """,
+                (
+                    vendor,
+                    data_domain,
+                    source_key,
+                    remote_size,
+                    remote_modified_at,
+                ),
+            ).fetchone()
+            return row is not None
+
     async def record_completed_source_file(
         self,
         vendor: str,
         data_domain: str,
         source_key: str,
         run_id: str,
+        remote_size: int,
+        remote_modified_at: datetime,
     ) -> None:
         await asyncio.to_thread(
             self._record_completed_source_file,
@@ -444,6 +505,8 @@ class CheckpointStore:
             data_domain,
             source_key,
             run_id,
+            remote_size,
+            remote_modified_at.isoformat(),
         )
 
     def _record_completed_source_file(
@@ -452,18 +515,31 @@ class CheckpointStore:
         data_domain: str,
         source_key: str,
         run_id: str,
+        remote_size: int,
+        remote_modified_at: str,
     ) -> None:
         with self._connect() as connection:
             connection.execute(
                 """
                 INSERT INTO ingested_source_files(
-                    vendor, data_domain, source_key, run_id, completed_at
-                ) VALUES (?, ?, ?, ?, ?)
+                    vendor, data_domain, source_key, run_id, completed_at,
+                    remote_size, remote_modified_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(vendor, data_domain, source_key) DO UPDATE SET
                     run_id = excluded.run_id,
-                    completed_at = excluded.completed_at
+                    completed_at = excluded.completed_at,
+                    remote_size = excluded.remote_size,
+                    remote_modified_at = excluded.remote_modified_at
                 """,
-                (vendor, data_domain, source_key, run_id, _now()),
+                (
+                    vendor,
+                    data_domain,
+                    source_key,
+                    run_id,
+                    _now(),
+                    remote_size,
+                    remote_modified_at,
+                ),
             )
 
     async def get_watermark(
