@@ -7,7 +7,11 @@ from urllib.parse import quote
 
 import httpx
 
-from app.clients.levelup_client import LevelUpClient, is_retryable_error
+from app.clients.levelup_client import (
+    LevelUpClient,
+    ResponseContractError,
+    is_retryable_error,
+)
 from app.core.config import Settings
 from app.core.security import sanitize_text
 from app.models import CourseResult, PageWrite
@@ -102,10 +106,12 @@ async def ingest_course(
                 f"/{safe_course_id}/enrollments"
             )
             payload, raw_payload = await client.get_json(path, params)
+            if not isinstance(payload, dict):
+                raise ResponseContractError(
+                    "LevelUP Enrollments response must be a JSON object"
+                )
             contract = validate_enrollments(payload)
-            enrollments = (
-                payload.get("enrollments") if isinstance(payload, dict) else None
-            )
+            enrollments = payload.get("enrollments")
             records_count = len(enrollments) if isinstance(enrollments, list) else 0
             fetched_at = datetime.now(UTC)
             await writer.write_page(
@@ -122,7 +128,6 @@ async def ingest_course(
                     fetched_at=fetched_at,
                 )
             )
-            assert isinstance(payload, dict)
             extras = extra_field_paths(contract)
             if extras:
                 logger.warning(
