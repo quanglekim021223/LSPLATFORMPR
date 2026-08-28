@@ -6,6 +6,7 @@ import json
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 import pytest
 
@@ -21,7 +22,7 @@ async def test_local_bronze_writer_preserves_bytes_and_sanitizes_manifest(
     raw = b'{"enrollments":[{"id":"e1"}],"spacing": true}\n'
     writer = LocalBronzeWriter(tmp_path / "bronze")
     caplog.set_level(logging.DEBUG, logger="app.repositories.local_writer")
-    path = await writer.write_page(
+    result = await writer.write_page(
         PageWrite(
             vendor="levelup",
             data_domain="learning_history",
@@ -35,7 +36,10 @@ async def test_local_bronze_writer_preserves_bytes_and_sanitizes_manifest(
             fetched_at=datetime.now(UTC),
         )
     )
-    assert path.read_bytes() == raw
+    path = Path(unquote(urlparse(result.uri).path))
+    assert await asyncio.to_thread(path.read_bytes) == raw
+    assert result.size_bytes == len(raw)
+    assert result.sha256 == hashlib.sha256(raw).hexdigest()
     assert "course%2Funsafe" in str(path)
     manifest = json.loads((path.parent / "manifest.json").read_text())
     assert manifest["records_count"] == 1
@@ -83,7 +87,7 @@ async def test_binary_writer_preserves_csv_and_sftp_manifest(
     modified_at = datetime(2026, 8, 22, 3, 0, tzinfo=UTC)
     writer = LocalBronzeWriter(tmp_path / "bronze")
     caplog.set_level(logging.DEBUG, logger="app.repositories.local_writer")
-    path = await writer.write_file(
+    result = await writer.write_file(
         BinaryFileWrite(
             vendor="harvard_hmm",
             data_domain="learning_history",
@@ -98,7 +102,10 @@ async def test_binary_writer_preserves_csv_and_sftp_manifest(
             records_count=1,
         )
     )
-    assert path.read_bytes() == raw
+    path = Path(unquote(urlparse(result.uri).path))
+    assert await asyncio.to_thread(path.read_bytes) == raw
+    assert result.size_bytes == len(raw)
+    assert result.sha256 == hashlib.sha256(raw).hexdigest()
     manifest = json.loads((path.parent / "manifest.json").read_text())
     assert manifest["remote_filename"] == path.name
     assert manifest["remote_path"].endswith(path.name)

@@ -7,7 +7,7 @@ Harvard Spark, and FAMS ingestion domains.
 ## Runtime flow
 
 ```text
-FastAPI lifespan / APScheduler (05:00 Asia/Ho_Chi_Minh)
+FastAPI lifespan / APScheduler, or Azure Functions Timer Trigger
 ├→ run_levelup_ingestion
 │  ├→ POST /authenticate (one in-memory token)
 │  ├→ GET /courses page-by-page
@@ -49,6 +49,7 @@ credentials or raw personal data.
 
 ```text
 backend/src/app/main.py                  application composition and lifespan
+backend/function_app.py                 Azure Functions ASGI and Timer entrypoint
 backend/src/app/api/v1/                 versioned health, readiness, and job-status APIs
 backend/src/app/core/                    runtime config, security, retry, and logging
 backend/src/app/config/scheduler.py      APScheduler construction
@@ -285,6 +286,106 @@ working directory). Swagger on port `8000` is status-only. The shared mock Swagg
 `http://127.0.0.1:9000/docs` exposes all mock vendors and can grow to include future vendor routers
 without adding more processes.
 
+## Azure Functions local entrypoint
+
+`backend/function_app.py` exposes the existing FastAPI application through an ASGI Function and
+registers one Python v2 Timer Trigger. The Timer only composes existing ingestion runners; vendor
+logic remains in `src/app/services/`.
+
+```text
+Azure Functions Timer Trigger
+→ app.main.build_ingestion_jobs()
+→ existing run_*_ingestion()
+→ service → client → contract → repository/writer
+```
+
+Install the backend dependencies, create the local Functions settings file, then start Azure
+Functions Core Tools from `backend/`:
+
+```bash
+python -m pip install -e '.[dev]'
+cp local.settings.example.json local.settings.json
+func start
+```
+
+The example schedule `0 0 22 * * *` is an Azure Functions NCRONTAB expression for 22:00 UTC,
+equivalent to 05:00 in `Asia/Ho_Chi_Minh`. Keep `SCHEDULER_ENABLED=false` when the Timer Trigger is
+active so APScheduler does not launch the same ingestion a second time. The Azure Functions
+entrypoint also forces the in-process scheduler off as a deployment safety guard. Before starting
+vendor jobs, the Timer initializes the checkpoint repository because a Timer invocation can occur
+without an earlier HTTP request having started the FastAPI lifespan. The HTTP route prefix is
+empty, so `/health`, `/ready`, and `/jobs/{vendor}/latest` retain their existing paths. HTTP
+Functions use Function-level authorization when deployed; local Functions Core Tools development
+does not require committing a key. A delayed invocation logs `past_due` before ingestion starts.
+Never commit `local.settings.json`.
+
+The writer is selected by `BRONZE_STORAGE_TYPE`: local development uses `LocalBronzeWriter`, while
+Azure deployment uses `ADLSGen2BronzeWriter`. The SQLite checkpoint repository remains local to the
+Function instance in this phase; a durable shared run repository is still a later deployment step.
+
+### Azure Functions runtime storage
+
+The Timer Trigger requires host storage even when the Function App is limited to one instance. It
+uses this storage for timer monitoring, singleton leases, host coordination, and Functions host
+state. This storage is separate from the ADLS Gen2 account selected by `BRONZE_STORAGE_TYPE=adls`.
+
+Local development uses Azurite through `local.settings.json`:
+
+```ini
+AzureWebJobsStorage=UseDevelopmentStorage=true
+```
+
+For Azure deployment, prefer a separate general-purpose v2 storage account in the same region as
+the Function App. Enable the Function App system-assigned managed identity, grant it `Storage Blob
+Data Owner` on the runtime storage account, remove the connection-string form of
+`AzureWebJobsStorage`, and configure the identity-based setting:
+
+```ini
+AzureWebJobsStorage__accountName=<function-runtime-storage-account>
+AzureWebJobsStorage__credential=managedidentity
+```
+
+Do not deploy `UseDevelopmentStorage=true`, a storage account key, or a runtime storage connection
+string. When no `__clientId` or `__managedIdentityResourceId` is configured, `managedidentity`
+uses the system-assigned identity. A custom DNS endpoint or sovereign cloud instead requires the
+service-specific `__blobServiceUri`, `__queueServiceUri`, and `__tableServiceUri` settings.
+
+The Functions host owns the containers and host artifacts it creates in this account; the setting
+does not select a custom runtime container. A dedicated runtime storage account therefore provides
+the clearest isolation from the Bronze filesystem:
+
+```text
+AzureWebJobsStorage__accountName  -> Functions runtime storage
+ADLS_ACCOUNT_NAME                -> Bronze data lake storage
+ADLS_FILE_SYSTEM=bronze          -> Bronze filesystem
+```
+
+### Phase 1 SQLite checkpoint limitation
+
+For the single-instance Azure Functions demo, configure the checkpoint database on writable
+temporary storage:
+
+```ini
+CHECKPOINT_DB_PATH=/tmp/fsa_ingestion.db
+```
+
+Keep the Function App maximum instance count at `1` using the scale setting supported by the
+selected hosting plan. This preserves the existing vendor locks, watermarks, source-file metadata,
+and run summaries only while that Function instance and its temporary filesystem survive.
+
+The accepted Phase 1 limitations are:
+
+- Restarting, redeploying, recycling, or moving the Function to another instance can delete the
+  SQLite checkpoint database.
+- `/jobs/{vendor}/latest` can lose its run history after that state is deleted.
+- A run after state loss can perform a full pull again because watermarks and processed-file
+  metadata are no longer available.
+- This design is for a single-instance demo only and is not suitable as long-term production
+  persistence.
+
+Do not place the SQLite database in ADLS. ADLS stores immutable Bronze payloads and manifests; a
+shared transactional repository such as Azure SQL replaces SQLite in the later phase.
+
 ## Scheduler
 
 The scheduler is disabled by default. To enable the daily 05:00 jobs locally:
@@ -362,16 +463,42 @@ data/bronze/fams/
     └── manifest.json
 ```
 
-Each page is atomically replaced only after the response succeeds. Manifests are separate from
+Each page is atomically promoted only after the response succeeds. Manifests are separate from
 raw JSON and include offset, record count, sanitized request parameters, fetch time, and SHA-256.
 Every response body is stored byte-for-byte as received. If a Course Catalog page still contains
 LinkedIn Learning rows, those raw rows remain in Bronze; the client-side filter only prevents their
 course IDs from feeding Learning History. A curated catalog belongs in Silver or a separate output.
 
-`BRONZE_STORAGE_TYPE=local` explicitly selects local filesystem storage. This implementation is
-not OneLake. `BronzeWriter` is the boundary for a future `OneLakeBronzeWriter` once the team
-provides the actual OneLake authentication, workspace/lakehouse identifiers, path contract, and
-write semantics.
+Both implementations return a storage-neutral `StorageWriteResult` containing `uri`, `size_bytes`,
+and `sha256`. Select the backend with these settings:
+
+```ini
+# Local development
+BRONZE_STORAGE_TYPE=local
+BRONZE_LOCAL_PATH=./data/bronze
+
+# Azure deployment
+BRONZE_STORAGE_TYPE=adls
+ADLS_ACCOUNT_NAME=<storage-account-name>
+ADLS_FILE_SYSTEM=bronze
+ADLS_BASE_PATH=
+```
+
+`ADLSGen2BronzeWriter` authenticates with `DefaultAzureCredential`; it does not accept or read a
+storage account key. It uploads raw bytes to a temporary path, renames that path to the final
+Bronze path, and writes the manifest only after promotion succeeds. The ADLS account must have
+Hierarchical Namespace enabled so path rename semantics are available. The Function App's
+system-assigned managed identity needs `Storage Blob Data Contributor` scoped to the Bronze
+storage account or container/file system. Create the `bronze` file system before the first run.
+
+The ADLS path contract remains identical to local storage:
+
+```text
+{ADLS_BASE_PATH/}{vendor}/{domain}/ingestion_date=YYYY-MM-DD/run_id=<uuid>/...
+```
+
+Do not deploy `local.settings.json` or `.env`. Azure Function App Settings provide non-secret ADLS
+names, and Key Vault references provide vendor credentials.
 
 ## Retry, concurrency, and checkpoints
 
