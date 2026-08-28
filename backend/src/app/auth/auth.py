@@ -3,7 +3,8 @@
 from datetime import datetime, timedelta, timezone
 import jwt
 from jwt.exceptions import ExpiredSignatureError, InvalidTokenError
-
+import bcrypt
+from azure.keyvault.secrets import SecretClient
 
 SECRET_KEY = "your-secret-key"
 ALGORITHM = "HS256"
@@ -42,9 +43,6 @@ def verify_token(token: str) -> dict:
     except InvalidTokenError:
         raise Exception("Invalid token")
     
-    
-import bcrypt
-
 
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(
@@ -61,4 +59,33 @@ def verify_password(
     return bcrypt.checkpw(
         password.encode("utf-8"),
         password_hash.encode("utf-8"),
+    )    
+    
+    
+
+async def get_user_password_hash(
+    client: SecretClient,
+    userid: str,
+) -> str | None:
+
+    try:
+        secret = client.get_secret(
+            f"user-{userid}"
+        )
+
+        return secret.value
+
+    except Exception:
+        return None
+
+
+async def save_user_password_hash(
+    client: SecretClient,
+    userid: str,
+    password_hash: str,
+) -> None:
+
+    client.set_secret(
+        f"user-{userid}",
+        password_hash,
     )    
