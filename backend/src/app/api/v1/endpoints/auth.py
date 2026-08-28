@@ -1,7 +1,16 @@
 from fastapi import APIRouter
+from app.auth.auth import create_access_token, get_user_password_hash, verify_password, hash_password, save_user_password_hash
+from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException, status
 
-from app.auth.auth import create_access_token
+class RegisterRequest(BaseModel):
+    userid: str
+    password: str
 
+
+class LoginRequest(BaseModel):
+    userid: str
+    password: str
 
 @router.post("/login")
 async def login(
@@ -38,17 +47,7 @@ async def login(
         "access_token": token,
         "token_type": "Bearer",
     }
-
-
-
-
-
-from fastapi import APIRouter, HTTPException, status
-
-from app.auth.models import RegisterRequest
-from app.auth.password import hash_password
-
-
+    
 def build_auth_router(
     keyvault_client,
 ) -> APIRouter:
