@@ -44,6 +44,7 @@ _MOCK_ENV = {
 }
 for _name, _value in _MOCK_ENV.items():
     os.environ.setdefault(_name, _value)
+os.environ.setdefault("MOCK_DISABLE_PERFORMANCE_DATA", "1")
 
 
 @pytest.fixture
@@ -65,9 +66,15 @@ def settings_factory(tmp_path: Path) -> Callable[..., Settings]:
             "skillup_api_key": "test-skillup-key",
             "skillup_page_size": 2,
             "skillup_assessment_start_date": "2000-01-01T00:00:00Z",
+            "skillup_assessment_daily_overlap_days": 3,
+            "skillup_assessment_weekly_sync_interval_days": 7,
+            "skillup_assessment_lookback_days": 90,
             "datacamp_base_url": "https://datacamp.test",
             "datacamp_token": "test-datacamp-token",
             "datacamp_events_page_size": 2,
+            "datacamp_events_start_time": "2000-01-01T00:00:00Z",
+            "datacamp_events_daily_overlap_days": 3,
+            "datacamp_events_lookback_days": 90,
             "coursera_token_url": "https://coursera-auth.test/oauth2/client_credentials/token",
             "coursera_base_url": "https://coursera.test",
             "coursera_username": "test-coursera-user",
@@ -78,12 +85,16 @@ def settings_factory(tmp_path: Path) -> Callable[..., Settings]:
             ),
             "coursera_page_size": 2,
             "coursera_max_concurrency": 2,
+            "coursera_history_daily_overlap_days": 3,
+            "coursera_history_lookback_days": 90,
             "linkedin_token_url": "https://linkedin.test/oauth/v2/accessToken",
             "linkedin_base_url": "https://linkedin.test/v2",
             "linkedin_client_id": "test-linkedin-client",
             "linkedin_client_secret": "test-linkedin-secret",
             "linkedin_page_size": 2,
             "linkedin_history_start_time": "2026-08-01T00:00:00Z",
+            "linkedin_history_daily_lookback_days": 3,
+            "linkedin_history_lookback_days": 90,
             "linkedin_max_concurrency": 2,
             "linkedin_asset_detail_query_template": (
                 "q=criteria&assetFilteringCriteria.urn={urn}"

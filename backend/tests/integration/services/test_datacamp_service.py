@@ -3,13 +3,20 @@ from __future__ import annotations
 import json
 from collections import Counter
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
 
 from app.mocks.datacamp import course_payload, event_payload
 from app.models import RunStatus
-from app.services.datacamp.service import run_datacamp_ingestion
+from app.repositories import CheckpointStore
+from app.services.datacamp.learning_history import (
+    DAILY_SYNC_SCOPE,
+    FULL_SYNC_SCOPE,
+    WEEKLY_SYNC_SCOPE,
+)
+from app.services.datacamp.service import _monthly_sync_due, run_datacamp_ingestion
 from tests.conftest import no_sleep, response
 
 
@@ -80,8 +87,8 @@ async def test_three_domains_event_pagination_and_raw_bronze(
         if path == "/v1/events":
             assert "contentType" not in request.url.params
             assert "eventType" not in request.url.params
-            assert "from" not in request.url.params
-            assert "to" not in request.url.params
+            assert request.url.params["from"] == "2000-01-01T00:00:00Z"
+            assert "to" in request.url.params
             page = int(request.url.params["page"])
             pages.append(page)
             events = (
@@ -122,6 +129,170 @@ async def test_three_domains_event_pagination_and_raw_bronze(
     )
     assert live_page.read_bytes() == live_raw
     assert json.loads(live_page.read_text()) == first_live_page
+
+
+@pytest.mark.asyncio
+async def test_events_backfill_then_use_daily_watermark(
+    settings_factory: Callable[..., object],
+) -> None:
+    settings = settings_factory()
+    store = CheckpointStore(settings.checkpoint_db_path)  # type: ignore[attr-defined]
+    event_requests: list[dict[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/events":
+            event_requests.append(dict(request.url.params))
+        return response(request, 200, valid_response(request.url.path))
+
+    first = await run_datacamp_ingestion(
+        settings,  # type: ignore[arg-type]
+        checkpoint_store=store,
+        transport=httpx.MockTransport(handler),
+        sleep=no_sleep,
+    )
+    assert first.status == RunStatus.SUCCEEDED
+    daily_watermark = await store.get_watermark(
+        "datacamp", "learning_history", DAILY_SYNC_SCOPE
+    )
+    assert daily_watermark is not None
+    assert event_requests[0]["from"] == "2000-01-01T00:00:00Z"
+    assert event_requests[0]["to"] == daily_watermark
+    assert await store.get_watermark(
+        "datacamp", "learning_history", WEEKLY_SYNC_SCOPE
+    ) == daily_watermark
+    assert await store.get_watermark(
+        "datacamp", "learning_history", FULL_SYNC_SCOPE
+    ) == daily_watermark
+
+    event_requests.clear()
+    second = await run_datacamp_ingestion(
+        settings,  # type: ignore[arg-type]
+        checkpoint_store=store,
+        transport=httpx.MockTransport(handler),
+        sleep=no_sleep,
+    )
+    assert second.status == RunStatus.SUCCEEDED
+    daily_start = datetime.fromisoformat(
+        event_requests[0]["from"].replace("Z", "+00:00")
+    )
+    assert daily_start == datetime.fromisoformat(
+        daily_watermark.replace("Z", "+00:00")
+    ) - timedelta(days=3)
+    assert event_requests[0]["to"] != ""
+
+
+@pytest.mark.asyncio
+async def test_events_weekly_sync_reads_ninety_days(
+    settings_factory: Callable[..., object],
+) -> None:
+    settings = settings_factory(datacamp_events_lookback_days=90)
+    store = CheckpointStore(settings.checkpoint_db_path)  # type: ignore[attr-defined]
+    await store.initialize()
+    recent_sync = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    await store.set_watermark(
+        "datacamp", "learning_history", recent_sync, "run", FULL_SYNC_SCOPE
+    )
+    await store.set_watermark(
+        "datacamp", "learning_history", "2000-01-01T00:00:00Z", "run", WEEKLY_SYNC_SCOPE
+    )
+    event_params: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/events":
+            event_params.update(request.url.params)
+        return response(request, 200, valid_response(request.url.path))
+
+    summary = await run_datacamp_ingestion(
+        settings,  # type: ignore[arg-type]
+        checkpoint_store=store,
+        transport=httpx.MockTransport(handler),
+        sleep=no_sleep,
+    )
+
+    assert summary.status == RunStatus.SUCCEEDED
+    start = datetime.fromisoformat(event_params["from"].replace("Z", "+00:00"))
+    end = datetime.fromisoformat(event_params["to"].replace("Z", "+00:00"))
+    assert (end - start).days == 90
+
+
+@pytest.mark.asyncio
+async def test_events_monthly_sync_reads_full_history(
+    settings_factory: Callable[..., object],
+) -> None:
+    settings = settings_factory(datacamp_events_start_time="2019-01-01T00:00:00Z")
+    store = CheckpointStore(settings.checkpoint_db_path)  # type: ignore[attr-defined]
+    await store.initialize()
+    await store.set_watermark(
+        "datacamp", "learning_history", "2000-01-01T00:00:00Z", "run", FULL_SYNC_SCOPE
+    )
+    event_params: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/events":
+            event_params.update(request.url.params)
+        return response(request, 200, valid_response(request.url.path))
+
+    summary = await run_datacamp_ingestion(
+        settings,  # type: ignore[arg-type]
+        checkpoint_store=store,
+        transport=httpx.MockTransport(handler),
+        sleep=no_sleep,
+    )
+
+    assert summary.status == RunStatus.SUCCEEDED
+    assert event_params["from"] == "2019-01-01T00:00:00Z"
+
+
+def test_monthly_sync_uses_ingestion_timezone_calendar_month() -> None:
+    last_sync = "2025-12-31T17:00:00Z"  # 2026-01-01 00:00 in Ho Chi Minh City
+
+    assert not _monthly_sync_due(
+        last_sync,
+        datetime(2026, 1, 31, 16, 59, 59, tzinfo=UTC),
+        "Asia/Ho_Chi_Minh",
+    )
+    assert _monthly_sync_due(
+        last_sync,
+        datetime(2026, 1, 31, 17, 0, 0, tzinfo=UTC),
+        "Asia/Ho_Chi_Minh",
+    )
+
+
+@pytest.mark.asyncio
+async def test_failed_events_do_not_advance_daily_watermark(
+    settings_factory: Callable[..., object],
+) -> None:
+    settings = settings_factory()
+    store = CheckpointStore(settings.checkpoint_db_path)  # type: ignore[attr-defined]
+    await store.initialize()
+    old_daily = "2026-08-20T00:00:00Z"
+    recent_sync = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    await store.set_watermark(
+        "datacamp", "learning_history", old_daily, "run", DAILY_SYNC_SCOPE
+    )
+    await store.set_watermark(
+        "datacamp", "learning_history", recent_sync, "run", WEEKLY_SYNC_SCOPE
+    )
+    await store.set_watermark(
+        "datacamp", "learning_history", recent_sync, "run", FULL_SYNC_SCOPE
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/events":
+            return response(request, 500, {"error": "unavailable"})
+        return response(request, 200, valid_response(request.url.path))
+
+    summary = await run_datacamp_ingestion(
+        settings,  # type: ignore[arg-type]
+        checkpoint_store=store,
+        transport=httpx.MockTransport(handler),
+        sleep=no_sleep,
+    )
+
+    assert summary.status == RunStatus.PARTIAL_FAILURE
+    assert await store.get_watermark(
+        "datacamp", "learning_history", DAILY_SYNC_SCOPE
+    ) == old_daily
 
 
 @pytest.mark.asyncio

@@ -4,6 +4,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Header, HTTPException, Query, status
 
+from app.mocks.generated_data import generated_vendor_data
 from app.mocks.settings import get_mock_settings
 
 router = APIRouter(tags=["FAMS"])
@@ -26,6 +27,11 @@ _STUDENTS = [
     {"studentId": "student-002", "classId": "class-001"},
     {"studentId": "student-003", "classId": "class-002"},
 ]
+
+_GENERATED = generated_vendor_data("fams")
+if _GENERATED is not None:
+    _CLASSES = _GENERATED["classes"]
+    _STUDENTS = _GENERATED["students"]
 
 
 @router.get("/api/fsa-reports/training-data")

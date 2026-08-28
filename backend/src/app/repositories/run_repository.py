@@ -85,7 +85,28 @@ class CheckpointStore:
                     source_key TEXT NOT NULL,
                     run_id TEXT NOT NULL,
                     completed_at TEXT NOT NULL,
+                    remote_size INTEGER,
+                    remote_modified_at TEXT,
                     PRIMARY KEY (vendor, data_domain, source_key)
+                );
+                CREATE TABLE IF NOT EXISTS ingestion_watermarks (
+                    vendor TEXT NOT NULL,
+                    data_domain TEXT NOT NULL,
+                    scope_key TEXT NOT NULL DEFAULT '',
+                    value TEXT NOT NULL,
+                    run_id TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (vendor, data_domain, scope_key)
+                );
+                CREATE TABLE IF NOT EXISTS vendor_entity_keys (
+                    vendor TEXT NOT NULL,
+                    data_domain TEXT NOT NULL,
+                    entity_key TEXT NOT NULL,
+                    first_seen_run_id TEXT NOT NULL,
+                    last_seen_run_id TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    PRIMARY KEY (vendor, data_domain, entity_key)
                 );
                 CREATE INDEX IF NOT EXISTS idx_runs_vendor_started
                     ON runs(vendor, started_at DESC);
@@ -103,6 +124,30 @@ class CheckpointStore:
                 WHERE heartbeat_at IS NULL
                 """
             )
+            source_columns = {
+                str(row["name"])
+                for row in connection.execute(
+                    "PRAGMA table_info(ingested_source_files)"
+                )
+            }
+            if "remote_size" not in source_columns:
+                connection.execute(
+                    "ALTER TABLE ingested_source_files ADD COLUMN remote_size INTEGER"
+                )
+            if "remote_modified_at" not in source_columns:
+                connection.execute(
+                    "ALTER TABLE ingested_source_files "
+                    "ADD COLUMN remote_modified_at TEXT"
+                )
+            entity_columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(vendor_entity_keys)")
+            }
+            if "is_active" not in entity_columns:
+                connection.execute(
+                    "ALTER TABLE vendor_entity_keys "
+                    "ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1"
+                )
 
     async def is_ready(self) -> bool:
         try:
@@ -413,12 +458,56 @@ class CheckpointStore:
                 return False
             return True
 
+    async def source_file_unchanged(
+        self,
+        vendor: str,
+        data_domain: str,
+        source_key: str,
+        remote_size: int,
+        remote_modified_at: datetime,
+    ) -> bool:
+        return await asyncio.to_thread(
+            self._source_file_unchanged,
+            vendor,
+            data_domain,
+            source_key,
+            remote_size,
+            remote_modified_at.isoformat(),
+        )
+
+    def _source_file_unchanged(
+        self,
+        vendor: str,
+        data_domain: str,
+        source_key: str,
+        remote_size: int,
+        remote_modified_at: str,
+    ) -> bool:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT 1 FROM ingested_source_files
+                WHERE vendor = ? AND data_domain = ? AND source_key = ?
+                  AND remote_size = ? AND remote_modified_at = ?
+                """,
+                (
+                    vendor,
+                    data_domain,
+                    source_key,
+                    remote_size,
+                    remote_modified_at,
+                ),
+            ).fetchone()
+            return row is not None
+
     async def record_completed_source_file(
         self,
         vendor: str,
         data_domain: str,
         source_key: str,
         run_id: str,
+        remote_size: int,
+        remote_modified_at: datetime,
     ) -> None:
         await asyncio.to_thread(
             self._record_completed_source_file,
@@ -426,6 +515,8 @@ class CheckpointStore:
             data_domain,
             source_key,
             run_id,
+            remote_size,
+            remote_modified_at.isoformat(),
         )
 
     def _record_completed_source_file(
@@ -434,19 +525,190 @@ class CheckpointStore:
         data_domain: str,
         source_key: str,
         run_id: str,
+        remote_size: int,
+        remote_modified_at: str,
     ) -> None:
         with self._connect() as connection:
             connection.execute(
                 """
                 INSERT INTO ingested_source_files(
-                    vendor, data_domain, source_key, run_id, completed_at
-                ) VALUES (?, ?, ?, ?, ?)
+                    vendor, data_domain, source_key, run_id, completed_at,
+                    remote_size, remote_modified_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(vendor, data_domain, source_key) DO UPDATE SET
                     run_id = excluded.run_id,
-                    completed_at = excluded.completed_at
+                    completed_at = excluded.completed_at,
+                    remote_size = excluded.remote_size,
+                    remote_modified_at = excluded.remote_modified_at
                 """,
-                (vendor, data_domain, source_key, run_id, _now()),
+                (
+                    vendor,
+                    data_domain,
+                    source_key,
+                    run_id,
+                    _now(),
+                    remote_size,
+                    remote_modified_at,
+                ),
             )
+
+    async def get_watermark(
+        self,
+        vendor: str,
+        data_domain: str,
+        scope_key: str = "",
+    ) -> str | None:
+        return await asyncio.to_thread(
+            self._get_watermark,
+            vendor,
+            data_domain,
+            scope_key,
+        )
+
+    def _get_watermark(
+        self,
+        vendor: str,
+        data_domain: str,
+        scope_key: str,
+    ) -> str | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT value FROM ingestion_watermarks
+                WHERE vendor = ? AND data_domain = ? AND scope_key = ?
+                """,
+                (vendor, data_domain, scope_key),
+            ).fetchone()
+            return str(row["value"]) if row is not None else None
+
+    async def set_watermark(
+        self,
+        vendor: str,
+        data_domain: str,
+        value: str,
+        run_id: str,
+        scope_key: str = "",
+    ) -> None:
+        await asyncio.to_thread(
+            self._set_watermark,
+            vendor,
+            data_domain,
+            value,
+            run_id,
+            scope_key,
+        )
+
+    def _set_watermark(
+        self,
+        vendor: str,
+        data_domain: str,
+        value: str,
+        run_id: str,
+        scope_key: str,
+    ) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO ingestion_watermarks(
+                    vendor, data_domain, scope_key, value, run_id, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(vendor, data_domain, scope_key) DO UPDATE SET
+                    value = excluded.value,
+                    run_id = excluded.run_id,
+                    updated_at = excluded.updated_at
+                """,
+                (vendor, data_domain, scope_key, value, run_id, _now()),
+            )
+
+    async def remember_entity_keys(
+        self,
+        vendor: str,
+        data_domain: str,
+        entity_keys: list[str],
+        run_id: str,
+    ) -> None:
+        if entity_keys:
+            await asyncio.to_thread(
+                self._remember_entity_keys,
+                vendor,
+                data_domain,
+                entity_keys,
+                run_id,
+            )
+
+    def _remember_entity_keys(
+        self,
+        vendor: str,
+        data_domain: str,
+        entity_keys: list[str],
+        run_id: str,
+    ) -> None:
+        now = _now()
+        with self._connect() as connection:
+            connection.executemany(
+                """
+                INSERT INTO vendor_entity_keys(
+                    vendor, data_domain, entity_key,
+                    first_seen_run_id, last_seen_run_id, updated_at, is_active
+                ) VALUES (?, ?, ?, ?, ?, ?, 1)
+                ON CONFLICT(vendor, data_domain, entity_key) DO UPDATE SET
+                    last_seen_run_id = excluded.last_seen_run_id,
+                    updated_at = excluded.updated_at,
+                    is_active = 1
+                """,
+                (
+                    (vendor, data_domain, entity_key, run_id, run_id, now)
+                    for entity_key in entity_keys
+                ),
+            )
+
+    async def entity_keys(self, vendor: str, data_domain: str) -> list[str]:
+        return await asyncio.to_thread(self._entity_keys, vendor, data_domain)
+
+    def _entity_keys(self, vendor: str, data_domain: str) -> list[str]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT entity_key FROM vendor_entity_keys
+                WHERE vendor = ? AND data_domain = ? AND is_active = 1
+                ORDER BY entity_key
+                """,
+                (vendor, data_domain),
+            ).fetchall()
+            return [str(row["entity_key"]) for row in rows]
+
+    async def deactivate_entity_key_if_stale(
+        self,
+        vendor: str,
+        data_domain: str,
+        entity_key: str,
+        current_run_id: str,
+    ) -> bool:
+        return await asyncio.to_thread(
+            self._deactivate_entity_key_if_stale,
+            vendor,
+            data_domain,
+            entity_key,
+            current_run_id,
+        )
+
+    def _deactivate_entity_key_if_stale(
+        self,
+        vendor: str,
+        data_domain: str,
+        entity_key: str,
+        current_run_id: str,
+    ) -> bool:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE vendor_entity_keys SET is_active = 0, updated_at = ?
+                WHERE vendor = ? AND data_domain = ? AND entity_key = ?
+                    AND last_seen_run_id != ?
+                """,
+                (_now(), vendor, data_domain, entity_key, current_run_id),
+            )
+            return cursor.rowcount > 0
 
     async def record_failed_page(
         self,

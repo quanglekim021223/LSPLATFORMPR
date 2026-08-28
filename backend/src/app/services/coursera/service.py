@@ -4,7 +4,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -21,13 +21,19 @@ from app.services.coursera.course_catalog import (
     DETAIL_DOMAIN,
     ingest_catalog_pipeline,
 )
+from app.services.coursera.learning_history import (
+    DAILY_SYNC_SCOPE,
+    FULL_SYNC_SCOPE,
+    WEEKLY_SYNC_SCOPE,
+    ingest_learning_history,
+)
 from app.services.coursera.learning_history import DOMAIN as LEARNING_HISTORY
-from app.services.coursera.learning_history import ingest_learning_history
 
 logger = logging.getLogger(__name__)
 
 VENDOR = "coursera"
 DOMAINS = (CATALOG_DOMAIN, DETAIL_DOMAIN, LEARNING_HISTORY)
+WEEKLY_SYNC_INTERVAL_DAYS = 7
 
 
 class CourseraJob:
@@ -62,9 +68,21 @@ class CourseraJob:
             self.settings.validate_coursera_runtime()
             self.client.content_detail_path("configuration-check")
             await self.client.authenticate()
-            ingestion_date = datetime.now(
+            now = datetime.now(UTC)
+            ingestion_date = now.astimezone(
                 ZoneInfo(self.settings.ingestion_timezone)
             ).date().isoformat()
+            catalog_watermark = str(int(now.timestamp()))
+            previous_catalog_watermark = await self.checkpoints.get_watermark(
+                VENDOR,
+                CATALOG_DOMAIN,
+            )
+            (
+                last_activity_after,
+                daily_sync_watermark,
+                weekly_sync_watermark,
+                full_sync_watermark,
+            ) = await self._history_sync_plan(now)
             tasks: list[Awaitable[object]] = [
                 ingest_catalog_pipeline(
                     self.settings,
@@ -73,6 +91,10 @@ class CourseraJob:
                     self.writer,
                     current_run_id,
                     ingestion_date,
+                    modified_since_timestamp=_parse_epoch(
+                        previous_catalog_watermark
+                    ),
+                    sync_watermark=catalog_watermark,
                 ),
                 ingest_learning_history(
                     self.settings,
@@ -81,6 +103,10 @@ class CourseraJob:
                     self.writer,
                     current_run_id,
                     ingestion_date,
+                    last_activity_after=last_activity_after,
+                    daily_sync_watermark=daily_sync_watermark,
+                    weekly_sync_watermark=weekly_sync_watermark,
+                    full_sync_watermark=full_sync_watermark,
                 ),
             ]
             catalog_result, history_result = await asyncio.gather(
@@ -108,17 +134,21 @@ class CourseraJob:
                 )
             return await self.checkpoints.finish_run(current_run_id, RunStatus.SUCCEEDED)
         except asyncio.CancelledError:
-            if self._heartbeat_error is None:
-                raise
-            message = sanitize_text(self._heartbeat_error, self.client.sensitive_values())
-            logger.error(
-                "Coursera lock heartbeat failed run_id=%s error=%s",
-                current_run_id,
-                message,
-            )
-            return await self.checkpoints.finish_run(
-                current_run_id, RunStatus.FAILED, message
-            )
+            if self._heartbeat_error is not None:
+                message = sanitize_text(
+                    self._heartbeat_error, self.client.sensitive_values()
+                )
+                logger.error(
+                    "Coursera lock heartbeat failed run_id=%s error=%s",
+                    current_run_id,
+                    message,
+                )
+                await asyncio.shield(
+                    self.checkpoints.finish_run(
+                        current_run_id, RunStatus.FAILED, message
+                    )
+                )
+            raise
         except Exception as exc:
             message = sanitize_text(exc, self.client.sensitive_values())
             logger.error(
@@ -134,6 +164,57 @@ class CourseraJob:
             with suppress(asyncio.CancelledError):
                 await heartbeat_task
             await self.checkpoints.release_lock(VENDOR, current_run_id)
+
+    async def _history_sync_plan(
+        self,
+        now: datetime,
+    ) -> tuple[int | None, str, str | None, str | None]:
+        sync_watermark = str(int(now.timestamp() * 1000))
+        last_full_sync = await self.checkpoints.get_watermark(
+            VENDOR,
+            LEARNING_HISTORY,
+            FULL_SYNC_SCOPE,
+        )
+        if _monthly_sync_due(
+            last_full_sync,
+            now,
+            self.settings.ingestion_timezone,
+        ):
+            return None, sync_watermark, sync_watermark, sync_watermark
+
+        last_weekly_sync = await self.checkpoints.get_watermark(
+            VENDOR,
+            LEARNING_HISTORY,
+            WEEKLY_SYNC_SCOPE,
+        )
+        if _sync_due(last_weekly_sync, now, WEEKLY_SYNC_INTERVAL_DAYS):
+            lookback_start = now - timedelta(
+                days=self.settings.coursera_history_lookback_days
+            )
+            return (
+                int(lookback_start.timestamp() * 1000),
+                sync_watermark,
+                sync_watermark,
+                None,
+            )
+
+        last_daily_sync = await self.checkpoints.get_watermark(
+            VENDOR,
+            LEARNING_HISTORY,
+            DAILY_SYNC_SCOPE,
+        )
+        daily_anchor = _parse_epoch(last_daily_sync or last_full_sync)
+        if daily_anchor is None:
+            return None, sync_watermark, sync_watermark, sync_watermark
+        overlap_milliseconds = (
+            self.settings.coursera_history_daily_overlap_days * 24 * 60 * 60 * 1000
+        )
+        return (
+            max(0, daily_anchor - overlap_milliseconds),
+            sync_watermark,
+            None,
+            None,
+        )
 
     async def _heartbeat_loop(
         self,
@@ -181,3 +262,39 @@ async def run_coursera_ingestion(
     async with httpx.AsyncClient(timeout=timeout, transport=transport) as http_client:
         client = CourseraClient(settings, http_client, sleep=sleep)
         return await CourseraJob(settings, client, store, writer).run()
+
+
+def _parse_epoch(value: str | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        parsed = int(value)
+    except ValueError:
+        return None
+    return parsed if parsed >= 0 else None
+
+
+def _sync_due(last_sync: str | None, now: datetime, interval_days: int) -> bool:
+    completed_at = _epoch_milliseconds_datetime(last_sync)
+    return completed_at is None or now - completed_at >= timedelta(days=interval_days)
+
+
+def _monthly_sync_due(
+    last_sync: str | None,
+    now: datetime,
+    timezone: str,
+) -> bool:
+    completed_at = _epoch_milliseconds_datetime(last_sync)
+    if completed_at is None:
+        return True
+    zone = ZoneInfo(timezone)
+    return completed_at.astimezone(zone).strftime("%Y-%m") != now.astimezone(
+        zone
+    ).strftime("%Y-%m")
+
+
+def _epoch_milliseconds_datetime(value: str | None) -> datetime | None:
+    milliseconds = _parse_epoch(value)
+    if milliseconds is None:
+        return None
+    return datetime.fromtimestamp(milliseconds / 1000, UTC)

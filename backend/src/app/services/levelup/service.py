@@ -16,6 +16,7 @@ from app.core.config import Settings
 from app.core.security import sanitize_text
 from app.models import RunStatus, RunSummary
 from app.repositories import BronzeWriter, CheckpointStore, LocalBronzeWriter
+from app.services.levelup.course_catalog import DOMAIN as COURSE_CATALOG
 from app.services.levelup.course_catalog import ingest_course_catalog
 from app.services.levelup.learning_history import ingest_learning_history
 
@@ -69,6 +70,11 @@ class LevelUpJob:
                     ingestion_date,
                 )
 
+            known_course_ids = await self.checkpoints.entity_keys(
+                "levelup",
+                COURSE_CATALOG,
+            )
+            await self.checkpoints.add_courses(current_run_id, known_course_ids)
             course_ids = await self.checkpoints.courses_to_process(current_run_id)
             results = await ingest_learning_history(
                 self.settings,

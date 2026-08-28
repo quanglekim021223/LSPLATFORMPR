@@ -96,9 +96,9 @@ value type.
 
 SkillUp uses `x-api-key: <SKILLUP_API_KEY>` for every request. Its Intelligence and Reports APIs
 use separate base URLs configured by `SKILLUP_INTELLIGENCE_BASE_URL` and
-`SKILLUP_REPORTS_BASE_URL`. Assessment History always sends a range from
-`SKILLUP_ASSESSMENT_START_DATE` through the current UTC time, so scheduled runs retrieve the full
-configured history rather than iMocha's seven-day default.
+`SKILLUP_REPORTS_BASE_URL`. Assessment History performs a full initial/monthly sync, starts daily
+syncs from the last successful watermark minus `SKILLUP_ASSESSMENT_DAILY_OVERLAP_DAYS` (default
+3), and re-reads 90 days weekly.
 Skill Taxonomy, Skill Inventory, and Assessment History responses are validated against their
 vendor-specific Pydantic contracts before Bronze writes and completed checkpoints. Required field
 removal, incompatible types, invalid timestamps, or inconsistent pagination metadata fail only the
@@ -107,13 +107,23 @@ additive fields are retained and logged by field path without logging employee o
 
 DataCamp sends `Authorization: Bearer <DATACAMP_TOKEN>` and `Accept: application/json` on every
 request. Live and archived catalogs are fetched once per run because their pagination contract is
-not present in the supplied response envelope. Events use `DATACAMP_EVENTS_PAGE_SIZE` (maximum
-1000) and continue until the current page reaches `meta.numberOfPages`.
+not present in the supplied response envelope. Catalog items expose `updatedAt`, but the
+catalog endpoints do not expose a server-side modified-since filter, so each run still stores the
+complete contract-valid raw response. Events use `DATACAMP_EVENTS_PAGE_SIZE` (maximum 1000) and
+continue until the current page reaches `meta.numberOfPages`.
 Both catalogs and Learning History Events are validated against DataCamp-specific Pydantic
 contracts before Bronze writes. Live catalog rows must have `live=true`, archived rows must have
 `live=false`, and Events must use the exact `data` plus `meta` envelope with matching page metadata.
 Contract-invalid responses fail only their domain and do not enter Bronze. Valid responses keep
 their original bytes, while additive fields produce path-only schema-drift warnings.
+
+DataCamp Learning History uses explicit `from`/`to` event windows. The first run reads from
+`DATACAMP_EVENTS_START_TIME` through the run start time. Normal daily runs start from the last
+successfully stored daily watermark minus `DATACAMP_EVENTS_DAILY_OVERLAP_DAYS` (default 3), every
+seven days a reconciliation run re-reads `DATACAMP_EVENTS_LOOKBACK_DAYS` (default 90), and the
+first run in each new calendar month re-reads the full configured history. The three watermarks
+advance only after every `/v1/events` page has entered Bronze successfully. Explicit `from`/`to`
+arguments remain manual overrides and do not alter scheduled watermarks.
 
 Coursera exchanges HTTP Basic credentials for one run-scoped access token at
 `COURSERA_TOKEN_URL`, then sends `Authorization: Bearer <token>`. A `401` refreshes the token and
@@ -132,13 +142,25 @@ absent for incomplete enrollments.
 
 LinkedIn Learning exchanges form-encoded `client_id` and `client_secret` for one run-scoped token.
 Catalog and activity requests use `Authorization: Bearer <token>`; a `401` refreshes the token and
-retries once. Catalog pagination follows the official `paging.links` entry with `rel=next`.
-Activity History starts at `LINKEDIN_HISTORY_START_TIME` (ISO-8601 with timezone or epoch
-milliseconds), splits through the current UTC time into windows no longer than 14 days, and sends
-`q=criteria`, `startedAt`, `timeOffset.unit=DAY`, and `timeOffset.duration` for each window.
-`LINKEDIN_ASSET_DETAIL_QUERY_TEMPLATE` is deliberately blank in `backend/.env.example`; an administrator
-must provide the exact query string containing one `{urn}` placeholder. The production filter is
-never inferred by code. See the official [Learning Assets](https://learn.microsoft.com/en-us/linkedin/learning/integrations/criteria-api)
+retries once. Course Catalog runs a full load when no successful catalog watermark exists. Later
+runs send the previous successful epoch-millisecond watermark as
+`assetFilteringCriteria.lastModifiedAfter`. Catalog requests always use exactly one
+`assetFilteringCriteria.assetTypes[0]=COURSE` filter and
+`assetRetrievalCriteria.includeRetired=true`, then follow the official `paging.links` entry with
+`rel=next`. The catalog watermark advances only after every catalog page and changed-course detail
+request succeeds.
+Activity History starts with a full sync from `LINKEDIN_HISTORY_START_TIME` (ISO-8601 with timezone
+or epoch milliseconds). Daily runs resume from the successful watermark with
+`LINKEDIN_HISTORY_DAILY_LOOKBACK_DAYS` of overlap, weekly runs re-read
+`LINKEDIN_HISTORY_LOOKBACK_DAYS` (default 90), and the first run in each calendar month re-reads
+the full configured history. Every range is split into windows no longer
+than 14 days and sends `q=criteria`, `startedAt`, `timeOffset.unit=DAY`, and
+`timeOffset.duration` for each window. Daily, weekly, and monthly watermarks advance only after the
+complete activity range succeeds.
+`LINKEDIN_ASSET_DETAIL_QUERY_TEMPLATE` is deliberately blank in `backend/.env.example`; an
+administrator must provide the exact query string containing one `{urn}` placeholder. The
+production filter is never inferred by code. See the official
+[Learning Assets](https://learn.microsoft.com/en-us/linkedin/learning/reference/learningassets)
 and [Learning Activity Reports](https://learn.microsoft.com/en-us/linkedin/learning/reference/learning-activity-reports-reference)
 contracts. Token, Learning Assets, Asset Detail, and Learning Activity Reports are validated
 against LinkedIn-specific Pydantic contracts before Bronze is written. Contract-invalid responses
@@ -150,7 +172,9 @@ Harvard HMM and Harvard Spark share the same implementation but use separate ven
 credentials, Catalog codes, locks, run summaries, and Bronze directories. Each branch obtains one
 Catalog token with HTTP Basic credentials and form scope `hbp.org.api/catalog.read`; a `401`
 refreshes the token and retries exactly once. Daily scheduling performs a full Catalog load from
-`start=0`; `startDate=YYYYMMDD` is available only to explicit callers for a future delta flow.
+`start=0` only when no successful Catalog watermark exists. Later runs send the previous successful
+watermark minus one day as `startDate=YYYYMMDD`, preserving a one-day boundary overlap. HMM and
+Spark keep separate watermarks, and a watermark advances only after every Catalog page succeeds.
 Token and Catalog responses use shared Harvard Pydantic contracts. HMM and Spark CSV reports use
 separate header/row contracts because their column names and shapes differ. Contract-invalid JSON
 or CSV fails the affected domain and is not written to Bronze; valid payload bytes are preserved
@@ -163,13 +187,15 @@ network connection with deterministic generated CSV files and therefore does not
 credentials or a known-hosts file. Keep this setting `false` in production. The report date is the local run date minus
 `HARVARD_REPORT_DATE_OFFSET_DAYS`. Set `HARVARD_HMM_HISTORY_START_DATE` and
 `HARVARD_SPARK_HISTORY_START_DATE` in `YYYY-MM-DD` format to enable historical backfill. The
-first run downloads each dated CSV from that start date through the report cutoff. SQLite
-permanently records each completed remote path, so later scheduled runs skip old completed files
-and normally download only the new date. A missing historical file is attempted once per run and
+first run downloads each dated CSV from that start date through the report cutoff. Every run lists
+the remote directory metadata once and compares each expected file's size and modified time with
+SQLite. New or changed files are downloaded into a new Bronze run; unchanged files are skipped.
+Existing databases gain the metadata columns automatically, and legacy rows are downloaded once to
+establish their initial metadata. A missing historical file is attempted once per run and
 retried by the next daily run; only the newest expected file is polled at the configured interval
 until the earlier of `HARVARD_SFTP_MAX_WAIT_SECONDS` or 07:00. Leaving a start date blank retains
-daily-only behavior. One SFTP session is reused for the entire backfill run. CSV bytes are written
-without parsing; the manifest contains one `files`
+daily-only behavior. One SFTP session is reused for the entire backfill run. CSV rows are validated,
+then the original bytes are written unchanged; the manifest contains one `files`
 entry per download with remote path/name, size, remote modified time, download time, SHA-256, run
 ID, and ingestion date.
 
@@ -178,8 +204,13 @@ the session and retry up to `HARVARD_SFTP_MAX_RETRIES` times, default `3`, with 
 files continue to use the polling deadline. Authentication and SSH host-key failures are not
 retried.
 
-FAMS calls one internal endpoint with `Fsa-Report-Api-Key: <FAMS_API_KEY>` and stores the complete
-response as one raw `training_data` page. `FAMS_LOAD_MODE=full` sends no query parameters.
+FAMS calls one internal endpoint with `Fsa-Report-Api-Key: <FAMS_API_KEY>`. The scheduled Full mode
+still downloads the complete JSON response because the API has no update-time filter. After the
+response passes its contract, the job compares an order-independent fingerprint of `classList`
+and `studentList` with the previous successful Full run. Changed data is stored as one exact raw
+`training_data` page; unchanged data completes successfully with zero new Bronze records and no
+duplicate file. Full and each Filtered parameter set keep separate fingerprints.
+`FAMS_LOAD_MODE=full` sends no query parameters.
 Full mode ignores filter values completely, including their validation. `FAMS_LOAD_MODE=filtered`
 sends only non-empty `FAMS_STATUS`, `FAMS_SITE`,
 `FAMS_ACTUAL_START_DATE_FROM`, and `FAMS_ACTUAL_START_DATE_TO` values. Dates use `YYYYMMDD`.
@@ -189,6 +220,7 @@ FAMS enum, while site values remain free-form comma-separated strings.
 There is deliberately no `both` mode, OAuth flow, or separate raw file for `classList` and
 `studentList`. A run succeeds only when `success=true`, `data` is an object, and both lists are
 arrays. The record count is the combined size of those two lists.
+Invalid contract responses are marked failed and are not written to Bronze.
 
 Run checks with:
 
@@ -350,22 +382,33 @@ write semantics.
   refreshes the shared token and repeats the request once.
 - At most `LEVELUP_MAX_CONCURRENCY` courses run concurrently via `asyncio.Semaphore`.
 - SkillUp runs its three independent domains concurrently. Each domain writes and checkpoints one
-  page at a time, so the full dataset is never accumulated in memory.
+  page at a time, so the full dataset is never accumulated in memory. Taxonomy and Skill Inventory
+  persist successful sync watermarks and send `LastModifiedOn` and
+  `SkillProfileModifiedSince` on later scheduled runs. Assessment History performs an initial full
+  sync, re-reads from its daily watermark with a three-day overlap, re-reads the configured 90-day
+  window weekly, and repeats the full reconciliation in each new calendar month.
 - DataCamp also runs its three domains concurrently. Live and archived catalog counts use the
   length of the contract-valid response `data` list. Events require the documented `data` and
   `meta` objects and are validated, written, and checkpointed one page at a time.
 - Coursera authenticates once per run, then runs its catalog pipeline and Learning History in
-  parallel. Course Details run with at most `COURSERA_MAX_CONCURRENCY` requests. Every list,
-  detail, and history response is contract-validated before its exact bytes are stored;
-  `records_count` is the length of validated `elements`.
+  parallel. Catalog is loaded fully once; later runs send the successful Catalog watermark as
+  `modifiedSinceTimestamp` so Coursera returns only added, removed, or modified content. Course
+  Details run only for active changed content, with at most `COURSERA_MAX_CONCURRENCY` requests.
+  Learning History is loaded fully on the first run and once per calendar month, uses
+  `lastActivityAfter` with `COURSERA_HISTORY_DAILY_OVERLAP_DAYS` for daily deltas, and re-reads
+  `COURSERA_HISTORY_LOOKBACK_DAYS` every seven days. Catalog and History keep separate successful watermarks because their timestamps use
+  seconds and milliseconds respectively. Every response is contract-validated before its exact
+  bytes are stored; `records_count` is the length of validated `elements`.
 - LinkedIn follows the same one-token and parallel pipeline pattern. Asset Details use at most
-  `LINKEDIN_MAX_CONCURRENCY` requests; history pages are written immediately and use globally
+  `LINKEDIN_MAX_CONCURRENCY` requests. Catalog is full on its first successful run and incremental
+  afterward using `assetFilteringCriteria.lastModifiedAfter`; its watermark is not advanced when a
+  catalog page or detail request fails. History pages are written immediately and use globally
   increasing Bronze offsets so pages from separate 14-day windows cannot overwrite one another.
 - Each Harvard job runs Catalog and SFTP History independently in parallel. Contract-valid Catalog
-  pages are written immediately and counted from the validated `list`; an invalid response does
-  not enter Bronze. History backfills all configured dates sequentially, writes each
-  exact CSV plus checksum metadata, and skips remote paths already recorded in
-  `ingested_source_files`. Missing dates do not discard files that succeeded. One failed branch
+  pages are written immediately and counted from the validated `list`; the first run is full and
+  later runs use `startDate` with a one-day overlap. An invalid response does not enter Bronze.
+  History lists all remote metadata once, backfills configured dates, and downloads only new or
+  metadata-changed CSV files. Missing dates do not discard files that succeeded. One failed branch
   produces `PARTIAL_FAILURE` while preserving the successful branch.
 - FAMS makes one request per run and writes the exact response bytes once. It logs only separate
   class/student counts and stores their sum in the run summary. Contract-invalid JSON responses
@@ -410,6 +453,10 @@ write semantics.
 ### SkillUp Assessment History date range
 
 The iMocha `GET /v3/reports` contract returns only the most recent seven days when no range is
-provided. This service therefore always sends `startDate` from
-`SKILLUP_ASSESSMENT_START_DATE` (default `2000-01-01T00:00:00Z`) and sets `endDate` to the current
-UTC time. Pagination then retrieves every report in that configured range.
+provided. The first run sends `startDate` from `SKILLUP_ASSESSMENT_START_DATE` and `endDate` as the
+current UTC time to backfill history. Daily runs explicitly request from the last successful daily
+watermark minus `SKILLUP_ASSESSMENT_DAILY_OVERLAP_DAYS` (default 3) through the current run start.
+Every `SKILLUP_ASSESSMENT_WEEKLY_SYNC_INTERVAL_DAYS` (default 7), the service passes a range
+covering `SKILLUP_ASSESSMENT_LOOKBACK_DAYS` (default 90). The first run in each new calendar month
+repeats the full configured history. Daily, weekly, and full-sync watermarks advance only after
+every report page succeeds; broader runs also advance the narrower scopes they cover.

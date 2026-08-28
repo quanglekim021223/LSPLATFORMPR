@@ -10,7 +10,7 @@ from typing import Any, Self
 
 from app.core.config import Settings
 from app.core.retry import backoff_seconds
-from app.models.harvard import RemoteFile
+from app.models.harvard import RemoteFile, RemoteFileMetadata
 
 
 class AsyncSSHSFTPTransport:
@@ -105,6 +105,51 @@ class AsyncSSHSFTPTransport:
             if close_after_fetch:
                 await self._close_session()
         raise AssertionError("Harvard SFTP operation retry loop exhausted")
+
+    async def list_files(self, remote_dir: str) -> list[RemoteFileMetadata]:
+        close_after_list = self._sftp is None
+        try:
+            for retry_number in range(self.settings.harvard_sftp_max_retries + 1):
+                try:
+                    await self._open_session()
+                    return await self._list_from_open_session(remote_dir)
+                except Exception as exc:
+                    await self._close_session()
+                    if (
+                        retry_number >= self.settings.harvard_sftp_max_retries
+                        or not is_retryable_sftp_error(exc)
+                    ):
+                        raise
+                    await self._sleep(backoff_seconds(retry_number, self._jitter))
+        finally:
+            if close_after_list:
+                await self._close_session()
+        raise AssertionError("Harvard SFTP list retry loop exhausted")
+
+    async def _list_from_open_session(
+        self, remote_dir: str
+    ) -> list[RemoteFileMetadata]:
+        entries = await self._sftp.readdir(remote_dir)
+        files: list[RemoteFileMetadata] = []
+        for entry in entries:
+            file_name = str(entry.filename)
+            if file_name in {".", ".."}:
+                continue
+            remote_path = str(PurePosixPath(remote_dir) / file_name)
+            attributes = entry.attrs
+            if attributes.size is None or attributes.mtime is None:
+                attributes = await self._sftp.stat(remote_path)
+            if attributes.size is None or attributes.mtime is None:
+                raise ValueError("Harvard SFTP file metadata is incomplete")
+            files.append(
+                RemoteFileMetadata(
+                    remote_path=remote_path,
+                    file_name=file_name,
+                    size=int(attributes.size),
+                    modified_at=datetime.fromtimestamp(int(attributes.mtime), UTC),
+                )
+            )
+        return files
 
     async def _fetch_from_open_session(self, remote_path: str) -> RemoteFile | None:
         try:

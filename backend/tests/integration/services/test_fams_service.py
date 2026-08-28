@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Callable
+from typing import Any
 
 import httpx
 import pytest
@@ -14,7 +15,7 @@ from app.services.fams.service import run_fams_ingestion
 from tests.conftest import no_sleep, response
 
 
-def _valid_payload() -> dict[str, object]:
+def _valid_payload() -> dict[str, Any]:
     return {
         "success": True,
         "message": "ok",
@@ -241,7 +242,7 @@ async def test_filtered_configuration_errors_are_saved_in_latest_run(
         },
     ],
 )
-async def test_invalid_contract_fails_but_preserves_raw_response(
+async def test_invalid_contract_fails_without_writing_bronze(
     settings_factory: Callable[..., object],
     payload: dict[str, object],
 ) -> None:
@@ -264,12 +265,100 @@ async def test_invalid_contract_fails_but_preserves_raw_response(
 
     assert summary.status == RunStatus.FAILED
     assert summary.records_by_domain == {}
-    raw_file = next(
+    assert not list(
         settings.bronze_local_path.rglob("offset=000001.json")  # type: ignore[attr-defined]
     )
-    assert raw_file.read_bytes() == raw_payload
-    manifest = json.loads(raw_file.with_name("manifest.json").read_text())
-    assert manifest["records_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_unchanged_full_response_is_not_written_twice(
+    settings_factory: Callable[..., object],
+) -> None:
+    settings = settings_factory()
+    store = CheckpointStore(settings.checkpoint_db_path)  # type: ignore[attr-defined]
+    reordered_payload = _valid_payload()
+    reordered_payload["message"] = "same data, different envelope and order"
+    reordered_payload["error_code"] = None
+    reordered_payload["data"]["classList"].reverse()
+    reordered_payload["data"]["studentList"].reverse()
+    payloads = [
+        _valid_payload(),
+        reordered_payload,
+    ]
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        payload = payloads[calls]
+        calls += 1
+        return response(request, 200, payload)
+
+    first = await run_fams_ingestion(
+        settings,  # type: ignore[arg-type]
+        checkpoint_store=store,
+        transport=httpx.MockTransport(handler),
+        sleep=no_sleep,
+    )
+    second = await run_fams_ingestion(
+        settings,  # type: ignore[arg-type]
+        checkpoint_store=store,
+        transport=httpx.MockTransport(handler),
+        sleep=no_sleep,
+    )
+
+    assert first.status == RunStatus.SUCCEEDED
+    assert first.records_by_domain == {"training_data": 5}
+    assert second.status == RunStatus.SUCCEEDED
+    assert second.records_by_domain == {"training_data": 0}
+    assert calls == 2
+    assert len(
+        list(
+            settings.bronze_local_path.rglob(  # type: ignore[attr-defined]
+                "offset=000001.json"
+            )
+        )
+    ) == 1
+
+
+@pytest.mark.asyncio
+async def test_changed_full_response_creates_new_bronze_snapshot(
+    settings_factory: Callable[..., object],
+) -> None:
+    settings = settings_factory()
+    store = CheckpointStore(settings.checkpoint_db_path)  # type: ignore[attr-defined]
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        payload = _valid_payload()
+        if calls:
+            payload["data"]["classList"][0]["updateDate"] = "2026-08-27"
+        calls += 1
+        return response(request, 200, payload)
+
+    first = await run_fams_ingestion(
+        settings,  # type: ignore[arg-type]
+        checkpoint_store=store,
+        transport=httpx.MockTransport(handler),
+        sleep=no_sleep,
+    )
+    second = await run_fams_ingestion(
+        settings,  # type: ignore[arg-type]
+        checkpoint_store=store,
+        transport=httpx.MockTransport(handler),
+        sleep=no_sleep,
+    )
+
+    assert first.status == RunStatus.SUCCEEDED
+    assert second.status == RunStatus.SUCCEEDED
+    assert second.records_by_domain == {"training_data": 5}
+    assert len(
+        list(
+            settings.bronze_local_path.rglob(  # type: ignore[attr-defined]
+                "offset=000001.json"
+            )
+        )
+    ) == 2
 
 
 @pytest.mark.asyncio

@@ -10,8 +10,13 @@ from app.core.security import sanitize_text
 from app.models import PageWrite
 from app.repositories import BronzeWriter, CheckpointStore
 from app.schemas.skillup import extra_field_paths, validate_assessment_history
+from app.services.watermarks import store_optional_watermarks
 
 DOMAIN = "assessment_history"
+VENDOR = "skillup"
+DAILY_SYNC_SCOPE = "daily_sync"
+WEEKLY_SYNC_SCOPE = "weekly_sync"
+FULL_SYNC_SCOPE = "full_sync"
 logger = logging.getLogger(__name__)
 
 
@@ -26,19 +31,19 @@ async def ingest_assessment_history(
     include_sections: bool | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
+    daily_sync_watermark: str | None = None,
+    weekly_sync_watermark: str | None = None,
+    full_sync_watermark: str | None = None,
 ) -> None:
     page_number = await checkpoints.next_page_number(run_id, DOMAIN)
     while True:
-        params: dict[str, Any] = {
-            "PageNo": page_number,
-            "PageSize": settings.skillup_page_size,
-        }
-        if include_sections is not None:
-            params["includeSections"] = include_sections
-        if start_date is not None:
-            params["startDate"] = start_date
-        if end_date is not None:
-            params["endDate"] = end_date
+        params = _report_params(
+            page_number,
+            settings.skillup_page_size,
+            include_sections=include_sections,
+            start_date=start_date,
+            end_date=end_date,
+        )
         try:
             payload, raw_payload = await client.get_json(
                 settings.skillup_reports_base_url, "/v3/reports", params
@@ -85,4 +90,34 @@ async def ingest_assessment_history(
         if not contract.has_next_page:
             break
         page_number += 1
+    await store_optional_watermarks(
+        checkpoints,
+        VENDOR,
+        DOMAIN,
+        run_id,
+        (
+            (DAILY_SYNC_SCOPE, daily_sync_watermark),
+            (WEEKLY_SYNC_SCOPE, weekly_sync_watermark),
+            (FULL_SYNC_SCOPE, full_sync_watermark),
+        ),
+    )
     await checkpoints.mark_domain(run_id, DOMAIN, "completed")
+
+
+def _report_params(
+    page_number: int,
+    page_size: int,
+    *,
+    include_sections: bool | None,
+    start_date: str | None,
+    end_date: str | None,
+) -> dict[str, Any]:
+    params: dict[str, Any] = {"PageNo": page_number, "PageSize": page_size}
+    optional = {
+        "includeSections": include_sections,
+        "startDate": start_date,
+        "endDate": end_date,
+    }
+    params.update({key: value for key, value in optional.items() if value is not None})
+    return params
+

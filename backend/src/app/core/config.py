@@ -52,10 +52,16 @@ class Settings(BaseSettings):
     skillup_api_key: SecretStr = Field(default=SecretStr(""))
     skillup_page_size: int = Field(default=100, ge=1, le=100)
     skillup_assessment_start_date: str = "2000-01-01T00:00:00Z"
+    skillup_assessment_daily_overlap_days: int = Field(default=3, ge=0)
+    skillup_assessment_weekly_sync_interval_days: int = Field(default=7, ge=1)
+    skillup_assessment_lookback_days: int = Field(default=90, ge=7)
 
     datacamp_base_url: str = ""
     datacamp_token: SecretStr = Field(default=SecretStr(""))
     datacamp_events_page_size: int = Field(default=1000, ge=1, le=1000)
+    datacamp_events_start_time: str = "2000-01-01T00:00:00Z"
+    datacamp_events_daily_overlap_days: int = Field(default=3, ge=0)
+    datacamp_events_lookback_days: int = Field(default=90, ge=7)
 
     coursera_token_url: str = ""
     coursera_base_url: str = ""
@@ -65,6 +71,8 @@ class Settings(BaseSettings):
     coursera_content_detail_path_template: str = ""
     coursera_page_size: int = Field(default=100, ge=1, le=1000)
     coursera_max_concurrency: int = Field(default=5, ge=1, le=5)
+    coursera_history_daily_overlap_days: int = Field(default=3, ge=0)
+    coursera_history_lookback_days: int = Field(default=90, ge=7)
     coursera_lock_ttl_seconds: int = Field(default=3600, ge=30)
 
     linkedin_token_url: str = ""
@@ -73,6 +81,8 @@ class Settings(BaseSettings):
     linkedin_client_secret: SecretStr = Field(default=SecretStr(""))
     linkedin_page_size: int = Field(default=100, ge=1, le=100)
     linkedin_history_start_time: str = ""
+    linkedin_history_daily_lookback_days: int = Field(default=3, ge=0)
+    linkedin_history_lookback_days: int = Field(default=90, ge=7)
     linkedin_max_concurrency: int = Field(default=5, ge=1, le=5)
     linkedin_asset_detail_query_template: str = ""
     linkedin_lock_ttl_seconds: int = Field(default=3600, ge=30)

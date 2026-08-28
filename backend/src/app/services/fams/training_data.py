@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from collections.abc import Mapping
 from datetime import UTC, datetime
@@ -16,10 +18,11 @@ from app.repositories import BronzeWriter, CheckpointStore
 
 DOMAIN = "training_data"
 VENDOR = "fams"
+CONTENT_FINGERPRINT_SCOPE = "content_fingerprint"
 logger = logging.getLogger(__name__)
 
 
-def _record_counts(payload: Any) -> tuple[int, int]:
+def _validated_lists(payload: Any) -> tuple[list[Any], list[Any]]:
     if not isinstance(payload, dict):
         raise FAMSResponseContractError("FAMS response must be a JSON object")
     if payload.get("success") is not True:
@@ -37,7 +40,44 @@ def _record_counts(payload: Any) -> tuple[int, int]:
         raise FAMSResponseContractError(
             "FAMS response data.studentList must be an array"
         )
-    return len(class_list), len(student_list)
+    return class_list, student_list
+
+
+def _content_fingerprint(
+    class_list: list[Any], student_list: list[Any]
+) -> str:
+    def canonical_record(value: Any) -> str:
+        return json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+
+    canonical_payload = json.dumps(
+        {
+            "classList": sorted(class_list, key=canonical_record),
+            "studentList": sorted(student_list, key=canonical_record),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(canonical_payload).hexdigest()
+
+
+def _fingerprint_scope(filters: Mapping[str, str] | None) -> str:
+    if not filters:
+        return f"{CONTENT_FINGERPRINT_SCOPE}:full"
+    canonical_filters = json.dumps(
+        dict(sorted(filters.items())),
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    filter_hash = hashlib.sha256(canonical_filters).hexdigest()
+    return f"{CONTENT_FINGERPRINT_SCOPE}:filtered:{filter_hash}"
 
 
 async def ingest_training_data(
@@ -52,13 +92,26 @@ async def ingest_training_data(
     request_parameters = dict(filters or {})
     try:
         payload, raw_payload = await client.get_training_data(filters)
-        validation_error: FAMSResponseContractError | None = None
-        class_count = 0
-        student_count = 0
-        try:
-            class_count, student_count = _record_counts(payload)
-        except FAMSResponseContractError as exc:
-            validation_error = exc
+        class_list, student_list = _validated_lists(payload)
+        class_count = len(class_list)
+        student_count = len(student_list)
+        fingerprint = _content_fingerprint(class_list, student_list)
+        fingerprint_scope = _fingerprint_scope(filters)
+        previous_fingerprint = await checkpoints.get_watermark(
+            VENDOR,
+            DOMAIN,
+            fingerprint_scope,
+        )
+
+        if previous_fingerprint == fingerprint:
+            logger.info(
+                "FAMS training data unchanged class_count=%d student_count=%d",
+                class_count,
+                student_count,
+            )
+            await checkpoints.record_completed_page(run_id, DOMAIN, offset, 0)
+            await checkpoints.mark_domain(run_id, DOMAIN, "completed")
+            return
 
         await writer.write_page(
             PageWrite(
@@ -73,9 +126,6 @@ async def ingest_training_data(
                 fetched_at=datetime.now(UTC),
             )
         )
-        if validation_error is not None:
-            raise validation_error
-
         logger.debug(
             "FAMS training data received class_count=%d student_count=%d",
             class_count,
@@ -86,6 +136,13 @@ async def ingest_training_data(
             DOMAIN,
             offset,
             class_count + student_count,
+        )
+        await checkpoints.set_watermark(
+            VENDOR,
+            DOMAIN,
+            fingerprint,
+            run_id,
+            fingerprint_scope,
         )
         await checkpoints.mark_domain(run_id, DOMAIN, "completed")
     except Exception as exc:

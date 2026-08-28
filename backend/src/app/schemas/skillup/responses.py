@@ -233,23 +233,26 @@ def validate_assessment_history(
 
 def extra_field_paths(model: SkillUpContractModel) -> list[str]:
     paths: list[str] = []
-
-    def visit(value: object, prefix: str) -> None:
-        if isinstance(value, SkillUpContractModel):
-            paths.extend(
-                f"{prefix}.{name}" if prefix else name
-                for name in (value.model_extra or {})
-            )
-            for name, field_value in value:
-                field = type(value).model_fields[name]
-                alias = field.alias or name
-                visit(field_value, f"{prefix}.{alias}" if prefix else alias)
-        elif isinstance(value, list):
-            for index, item in enumerate(value):
-                visit(item, f"{prefix}.{index}")
-
-    visit(model, "")
+    _visit_extra_fields(model, "", paths)
     return sorted(paths)
+
+
+def _visit_extra_fields(value: object, prefix: str, paths: list[str]) -> None:
+    if isinstance(value, list):
+        for index, item in enumerate(value):
+            _visit_extra_fields(item, f"{prefix}.{index}", paths)
+        return
+    if not isinstance(value, SkillUpContractModel):
+        return
+    paths.extend(
+        f"{prefix}.{name}" if prefix else name
+        for name in (value.model_extra or {})
+    )
+    for name, field_value in value:
+        field = type(value).model_fields[name]
+        alias = field.alias or name
+        child_prefix = f"{prefix}.{alias}" if prefix else alias
+        _visit_extra_fields(field_value, child_prefix, paths)
 
 
 def _validate(

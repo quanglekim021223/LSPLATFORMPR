@@ -13,6 +13,7 @@ from app.clients.base_client import RetryingHttpClient
 from app.core.config import Settings
 
 logger = logging.getLogger(__name__)
+URN_PLACEHOLDER = "{urn}"
 
 
 class LinkedInResponseContractError(RuntimeError):
@@ -96,16 +97,16 @@ class LinkedInClient:
 
     def asset_detail_params(self, urn: str) -> dict[str, str]:
         template = self.settings.linkedin_asset_detail_query_template
-        if "{urn}" not in template or template.count("{urn}") != 1:
+        if URN_PLACEHOLDER not in template or template.count(URN_PLACEHOLDER) != 1:
             raise ValueError(
                 "LINKEDIN_ASSET_DETAIL_QUERY_TEMPLATE must contain {urn} exactly once"
             )
-        remaining = template.replace("{urn}", "")
+        remaining = template.replace(URN_PLACEHOLDER, "")
         if "{" in remaining or "}" in remaining:
             raise ValueError(
                 "LINKEDIN_ASSET_DETAIL_QUERY_TEMPLATE only supports {urn}"
             )
-        query = template.lstrip("?").replace("{urn}", quote_plus(urn))
+        query = template.lstrip("?").replace(URN_PLACEHOLDER, quote_plus(urn))
         pairs = parse_qsl(query, keep_blank_values=True)
         if not pairs or len({key for key, _ in pairs}) != len(pairs):
             raise ValueError(

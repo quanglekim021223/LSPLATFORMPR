@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import UTC, datetime
+from typing import Any
 from urllib.parse import quote
 
 from app.clients.coursera_client import CourseraClient, is_retryable_error
@@ -20,6 +21,7 @@ from app.services.coursera.pagination import next_start
 
 CATALOG_DOMAIN = "course_catalog"
 DETAIL_DOMAIN = "course_detail"
+VENDOR = "coursera"
 logger = logging.getLogger(__name__)
 
 
@@ -30,10 +32,19 @@ async def ingest_catalog_pipeline(
     writer: BronzeWriter,
     run_id: str,
     ingestion_date: str,
+    *,
+    modified_since_timestamp: int | None = None,
+    sync_watermark: str | None = None,
 ) -> list[CourseResult]:
     try:
         await ingest_course_list(
-            settings, client, checkpoints, writer, run_id, ingestion_date
+            settings,
+            client,
+            checkpoints,
+            writer,
+            run_id,
+            ingestion_date,
+            modified_since_timestamp=modified_since_timestamp,
         )
     except Exception as exc:
         message = sanitize_text(exc, client.sensitive_values())
@@ -42,7 +53,7 @@ async def ingest_catalog_pipeline(
         )
         raise
     course_ids = await checkpoints.courses_to_process(run_id)
-    return await ingest_course_details(
+    results = await ingest_course_details(
         settings,
         client,
         checkpoints,
@@ -51,6 +62,14 @@ async def ingest_catalog_pipeline(
         ingestion_date,
         course_ids,
     )
+    if sync_watermark is not None and all(result.succeeded for result in results):
+        await checkpoints.set_watermark(
+            VENDOR,
+            CATALOG_DOMAIN,
+            sync_watermark,
+            run_id,
+        )
+    return results
 
 
 async def ingest_course_list(
@@ -60,11 +79,18 @@ async def ingest_course_list(
     writer: BronzeWriter,
     run_id: str,
     ingestion_date: str,
+    *,
+    modified_since_timestamp: int | None = None,
 ) -> None:
     start = 0
     path = f"/{quote(settings.coursera_org_id, safe='')}/contents"
     while True:
-        params = {"start": start, "limit": settings.coursera_page_size}
+        params: dict[str, Any] = {
+            "start": start,
+            "limit": settings.coursera_page_size,
+        }
+        if modified_since_timestamp is not None:
+            params["modifiedSinceTimestamp"] = modified_since_timestamp
         try:
             payload, raw_payload = await client.get_json(path, params)
             contract = validate_course_list(payload)
@@ -226,4 +252,9 @@ async def ingest_course_detail(
 
 
 def _content_ids(elements: list[CourseraContent]) -> list[str]:
-    return [element.content_id for element in elements]
+    return [
+        element.content_id
+        for element in elements
+        if not element.changes
+        or any(change.change_type != "REMOVED" for change in element.changes)
+    ]

@@ -5,6 +5,7 @@ from urllib.parse import parse_qs
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 
+from app.mocks.generated_data import generated_vendor_data
 from app.mocks.settings import get_mock_settings
 
 router = APIRouter(tags=["LinkedIn Learning"])
@@ -97,6 +98,12 @@ _ASSETS = [
     asset_payload("urn:li:lyndaCourse:3", "Data Engineering"),
 ]
 
+_GENERATED = generated_vendor_data("linkedin")
+_ACTIVITY_REPORTS: list[dict[str, Any]] | None = None
+if _GENERATED is not None:
+    _ASSETS = _GENERATED["assets"]
+    _ACTIVITY_REPORTS = _GENERATED["activity_reports"]
+
 
 def _validate_bearer(authorization: str | None) -> None:
     token = get_mock_settings().mock_linkedin_access_token.get_secret_value()
@@ -150,6 +157,15 @@ async def learning_assets(
     q: Annotated[str, Query()] = "criteria",
     start: Annotated[int, Query(ge=0)] = 0,
     count: Annotated[int, Query(ge=1, le=100)] = 100,
+    asset_type: Annotated[
+        str | None, Query(alias="assetFilteringCriteria.assetTypes[0]")
+    ] = None,
+    last_modified_after: Annotated[
+        int | None, Query(alias="assetFilteringCriteria.lastModifiedAfter", ge=0)
+    ] = None,
+    include_retired: Annotated[
+        bool, Query(alias="assetRetrievalCriteria.includeRetired")
+    ] = False,
     asset_urn: Annotated[
         str | None, Query(alias="assetFilteringCriteria.urn")
     ] = None,
@@ -161,12 +177,32 @@ async def learning_assets(
     if asset_urn is not None:
         matches = [asset for asset in _ASSETS if asset["urn"] == asset_urn]
         return _page(matches, 0, count, "learningAssets")
-    return _page(_ASSETS, start, count, "learningAssets")
+    if asset_type != "COURSE" or not include_retired:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Catalog requires one COURSE type and includeRetired=true",
+        )
+    matches = _ASSETS
+    if last_modified_after is not None:
+        matches = [
+            asset
+            for asset in matches
+            if asset["details"]["lastUpdatedAt"] > last_modified_after
+        ]
+    return _page(matches, start, count, "learningAssets")
 
 
 @router.get("/learningActivityReports")
 async def activity_reports(
     q: Annotated[str, Query()],
+    primary_aggregation: Annotated[
+        str, Query(alias="aggregationCriteria.primary")
+    ],
+    secondary_aggregation: Annotated[
+        str, Query(alias="aggregationCriteria.secondary")
+    ],
+    asset_type: Annotated[str, Query(alias="assetType")],
+    content_source: Annotated[str, Query(alias="contentSource")],
     started_at: Annotated[int, Query(alias="startedAt")],
     duration: Annotated[int, Query(alias="timeOffset.duration", ge=1, le=14)],
     unit: Annotated[str, Query(alias="timeOffset.unit")],
@@ -175,7 +211,18 @@ async def activity_reports(
     authorization: Annotated[str | None, Header()] = None,
 ) -> dict[str, Any]:
     _validate_bearer(authorization)
-    if q != "criteria" or unit != "DAY":
+    if (
+        q != "criteria"
+        or primary_aggregation != "INDIVIDUAL"
+        or secondary_aggregation != "CONTENT"
+        or asset_type != "COURSE"
+        or content_source != "LINKEDIN_LEARNING"
+        or unit != "DAY"
+    ):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid criteria")
-    records = [activity_report_payload(duration, started_at)]
+    records = (
+        _ACTIVITY_REPORTS
+        if _ACTIVITY_REPORTS is not None
+        else [activity_report_payload(duration, started_at)]
+    )
     return _page(records, start, count, "learningActivityReports")

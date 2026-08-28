@@ -3,12 +3,19 @@ from __future__ import annotations
 import json
 from collections import Counter
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
 
 from app.mocks.skillup import assessment_report, skill_profile, taxonomy_item
 from app.models import RunStatus
+from app.repositories import CheckpointStore
+from app.services.skillup.assessment_history import (
+    DAILY_SYNC_SCOPE,
+    FULL_SYNC_SCOPE,
+    WEEKLY_SYNC_SCOPE,
+)
 from app.services.skillup.service import run_skillup_ingestion
 from tests.conftest import no_sleep, response
 
@@ -170,6 +177,178 @@ async def test_skillup_three_domains_paginate_and_preserve_raw(
         taxonomy_item(0),
         taxonomy_item(1),
     ]
+
+
+@pytest.mark.asyncio
+async def test_skillup_uses_incremental_filters_and_daily_assessment_window(
+    settings_factory: Callable[..., object],
+) -> None:
+    settings = settings_factory()
+    store = CheckpointStore(settings.checkpoint_db_path)  # type: ignore[attr-defined]
+    seen: list[tuple[str, dict[str, str]]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        params = dict(request.url.params)
+        seen.append((request.url.path, params))
+        if request.url.path == "/taxonomy":
+            items = [] if "LastModifiedOn" in params else [taxonomy_item()]
+            return response(request, 200, page_payload("items", items))
+        if request.url.path == "/employees/skills-profile":
+            items = (
+                []
+                if "SkillProfileModifiedSince" in params
+                else [skill_profile()]
+            )
+            return response(request, 200, page_payload("items", items))
+        if request.url.path == "/v3/reports":
+            return response(
+                request,
+                200,
+                page_payload("reports", [assessment_report()]),
+            )
+        raise AssertionError(request.url)
+
+    first = await run_skillup_ingestion(
+        settings,  # type: ignore[arg-type]
+        checkpoint_store=store,
+        transport=httpx.MockTransport(handler),
+        sleep=no_sleep,
+    )
+    assert first.status == RunStatus.SUCCEEDED
+
+    taxonomy_watermark = await store.get_watermark("skillup", "skill_taxonomy")
+    inventory_watermark = await store.get_watermark("skillup", "skill_inventory")
+    full_sync_watermark = await store.get_watermark(
+        "skillup", "assessment_history", FULL_SYNC_SCOPE
+    )
+    daily_sync_watermark = await store.get_watermark(
+        "skillup", "assessment_history", DAILY_SYNC_SCOPE
+    )
+    weekly_sync_watermark = await store.get_watermark(
+        "skillup", "assessment_history", WEEKLY_SYNC_SCOPE
+    )
+    assert taxonomy_watermark is not None
+    assert inventory_watermark is not None
+    assert full_sync_watermark is not None
+    assert daily_sync_watermark == full_sync_watermark
+    assert weekly_sync_watermark is not None
+
+    seen.clear()
+    second = await run_skillup_ingestion(
+        settings,  # type: ignore[arg-type]
+        checkpoint_store=store,
+        transport=httpx.MockTransport(handler),
+        sleep=no_sleep,
+    )
+    assert second.status == RunStatus.SUCCEEDED
+
+    requests = {path: params for path, params in seen}
+    assert requests["/taxonomy"]["LastModifiedOn"] == taxonomy_watermark
+    assert (
+        requests["/employees/skills-profile"]["SkillProfileModifiedSince"]
+        == inventory_watermark
+    )
+    daily_start = datetime.fromisoformat(
+        requests["/v3/reports"]["startDate"].replace("Z", "+00:00")
+    )
+    daily_end = datetime.fromisoformat(
+        requests["/v3/reports"]["endDate"].replace("Z", "+00:00")
+    )
+    assert daily_end - daily_start >= timedelta(days=3)
+    assert daily_start == datetime.fromisoformat(
+        daily_sync_watermark.replace("Z", "+00:00")
+    ) - timedelta(days=3)
+    assert second.records_by_domain == {
+        "assessment_history": 1,
+        "skill_inventory": 0,
+        "skill_taxonomy": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_skillup_monthly_assessment_full_sync(
+    settings_factory: Callable[..., object],
+) -> None:
+    settings = settings_factory()
+    store = CheckpointStore(settings.checkpoint_db_path)  # type: ignore[attr-defined]
+    await store.initialize()
+    await store.set_watermark(
+        "skillup",
+        "assessment_history",
+        "2026-01-01T00:00:00Z",
+        "old-run",
+        FULL_SYNC_SCOPE,
+    )
+    assessment_params: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v3/reports":
+            assessment_params.update(request.url.params)
+        return response(request, 200, valid_response(request.url.path))
+
+    summary = await run_skillup_ingestion(
+        settings,  # type: ignore[arg-type]
+        checkpoint_store=store,
+        transport=httpx.MockTransport(handler),
+        sleep=no_sleep,
+    )
+
+    assert summary.status == RunStatus.SUCCEEDED
+    assert assessment_params["startDate"] == "2000-01-01T00:00:00Z"
+    assert "endDate" in assessment_params
+    assert await store.get_watermark(
+        "skillup", "assessment_history", FULL_SYNC_SCOPE
+    ) != "2026-01-01T00:00:00Z"
+    assert await store.get_watermark(
+        "skillup", "assessment_history", WEEKLY_SYNC_SCOPE
+    ) is not None
+
+
+@pytest.mark.asyncio
+async def test_skillup_weekly_assessment_reads_ninety_days(
+    settings_factory: Callable[..., object],
+) -> None:
+    settings = settings_factory(
+        skillup_assessment_weekly_sync_interval_days=7,
+        skillup_assessment_lookback_days=90,
+    )
+    store = CheckpointStore(settings.checkpoint_db_path)  # type: ignore[attr-defined]
+    await store.initialize()
+    await store.set_watermark(
+        "skillup",
+        "assessment_history",
+        datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "recent-full-run",
+        FULL_SYNC_SCOPE,
+    )
+    await store.set_watermark(
+        "skillup",
+        "assessment_history",
+        "2026-01-01T00:00:00Z",
+        "old-lookback-run",
+        WEEKLY_SYNC_SCOPE,
+    )
+    assessment_params: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v3/reports":
+            assessment_params.update(request.url.params)
+        return response(request, 200, valid_response(request.url.path))
+
+    summary = await run_skillup_ingestion(
+        settings,  # type: ignore[arg-type]
+        checkpoint_store=store,
+        transport=httpx.MockTransport(handler),
+        sleep=no_sleep,
+    )
+
+    assert summary.status == RunStatus.SUCCEEDED
+    start = datetime.fromisoformat(assessment_params["startDate"].replace("Z", "+00:00"))
+    end = datetime.fromisoformat(assessment_params["endDate"].replace("Z", "+00:00"))
+    assert (end - start).days == 90
+    assert await store.get_watermark(
+        "skillup", "assessment_history", WEEKLY_SYNC_SCOPE
+    ) != "2026-01-01T00:00:00Z"
 
 
 @pytest.mark.asyncio

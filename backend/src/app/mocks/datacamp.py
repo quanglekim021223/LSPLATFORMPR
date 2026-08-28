@@ -5,6 +5,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Header, HTTPException, Query, status
 
+from app.mocks.generated_data import generated_vendor_data
 from app.mocks.settings import get_mock_settings
 
 router = APIRouter(tags=["DataCamp"])
@@ -84,6 +85,12 @@ _ARCHIVED_COURSES = {
     ]
 }
 _EVENTS = [event_payload(1), event_payload(2), event_payload(3)]
+
+_GENERATED = generated_vendor_data("datacamp")
+if _GENERATED is not None:
+    _LIVE_COURSES = {"data": _GENERATED["live_courses"]}
+    _ARCHIVED_COURSES = {"data": _GENERATED["archived_courses"]}
+    _EVENTS = _GENERATED["events"]
 
 
 def _validate_headers(authorization: str | None, accept: str | None) -> None:

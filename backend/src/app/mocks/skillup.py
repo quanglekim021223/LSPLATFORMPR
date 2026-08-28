@@ -6,15 +6,18 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Header, HTTPException, Query, status
 
+from app.mocks.generated_data import generated_vendor_data
 from app.mocks.settings import get_mock_settings
 
 router = APIRouter(tags=["SkillUp"])
+INFORMATION_TECHNOLOGY = "Information Technology"
+DATA_ENGINEERING = "Data Engineering"
 _TAXONOMY: list[dict[str, Any]] = [
     {
         "taxonomySkillId": 97915,
         "externalId": None,
-        "domain": {"id": 429, "name": "Information Technology"},
-        "subdomain": {"id": 2155, "name": "Information Technology"},
+        "domain": {"id": 429, "name": INFORMATION_TECHNOLOGY},
+        "subdomain": {"id": 2155, "name": INFORMATION_TECHNOLOGY},
         "skillCluster": {"id": 17191, "name": "Programming"},
         "skillClassification": {
             "classificationId": 507,
@@ -34,8 +37,8 @@ _TAXONOMY: list[dict[str, Any]] = [
     {
         "taxonomySkillId": 97916,
         "externalId": None,
-        "domain": {"id": 429, "name": "Information Technology"},
-        "subdomain": {"id": 2155, "name": "Information Technology"},
+        "domain": {"id": 429, "name": INFORMATION_TECHNOLOGY},
+        "subdomain": {"id": 2155, "name": INFORMATION_TECHNOLOGY},
         "skillCluster": {"id": 17192, "name": "Databases"},
         "skillClassification": {
             "classificationId": 507,
@@ -51,19 +54,19 @@ _TAXONOMY: list[dict[str, Any]] = [
     {
         "taxonomySkillId": 97917,
         "externalId": None,
-        "domain": {"id": 429, "name": "Information Technology"},
-        "subdomain": {"id": 2155, "name": "Information Technology"},
-        "skillCluster": {"id": 17193, "name": "Data Engineering"},
+        "domain": {"id": 429, "name": INFORMATION_TECHNOLOGY},
+        "subdomain": {"id": 2155, "name": INFORMATION_TECHNOLOGY},
+        "skillCluster": {"id": 17193, "name": DATA_ENGINEERING},
         "skillClassification": {
             "classificationId": 504,
             "classificationName": "Technical Skill",
         },
         "skill": {
             "id": 93287,
-            "name": "Data Engineering",
+            "name": DATA_ENGINEERING,
             "description": "Data engineering practices",
         },
-        "displayName": "Data Engineering",
+        "displayName": DATA_ENGINEERING,
         "description": "Data engineering practices",
         "isCritical": True,
         "taxonomySkillTags": [],
@@ -193,6 +196,31 @@ _REPORTS: list[dict[str, Any]] = [
     },
 ]
 
+_TAXONOMY_MODIFIED_ON = {
+    97915: "2026-08-20T01:00:00Z",
+    97916: "2026-08-20T02:00:00Z",
+    97917: "2026-08-20T03:00:00Z",
+}
+_SKILL_PROFILE_MODIFIED_ON = {
+    123456: "2026-08-20T01:00:00Z",
+    123457: "2026-08-20T02:00:00Z",
+    123458: "2026-08-20T03:00:00Z",
+}
+
+_GENERATED = generated_vendor_data("skillup")
+if _GENERATED is not None:
+    _TAXONOMY = _GENERATED["taxonomy"]
+    _SKILL_PROFILES = _GENERATED["skill_profiles"]
+    _REPORTS = _GENERATED["reports"]
+    _TAXONOMY_MODIFIED_ON = {
+        int(key): value
+        for key, value in _GENERATED["taxonomy_modified_on"].items()
+    }
+    _SKILL_PROFILE_MODIFIED_ON = {
+        int(key): value
+        for key, value in _GENERATED["skill_profile_modified_on"].items()
+    }
+
 
 def taxonomy_item(index: int = 0) -> dict[str, Any]:
     return deepcopy(_TAXONOMY[index])
@@ -222,15 +250,24 @@ def _page(
 async def taxonomy(
     page_number: Annotated[int, Query(alias="PageNumber", ge=1)] = 1,
     page_size: Annotated[int, Query(alias="PageSize", ge=1, le=100)] = 100,
+    last_modified_on: Annotated[str | None, Query(alias="LastModifiedOn")] = None,
     api_key: Annotated[str | None, Header(alias="x-api-key")] = None,
 ) -> dict[str, Any]:
     _validate_api_key(api_key)
-    items, total_pages = _page(_TAXONOMY, page_number, page_size)
+    records = _TAXONOMY
+    if last_modified_on:
+        records = [
+            record
+            for record in records
+            if _TAXONOMY_MODIFIED_ON[int(record["taxonomySkillId"])]
+            > last_modified_on
+        ]
+    items, total_pages = _page(records, page_number, page_size)
     return {
         "items": items,
         "pageNumber": page_number,
         "totalPages": total_pages,
-        "totalCount": len(_TAXONOMY),
+        "totalCount": len(records),
         "hasPreviousPage": page_number > 1,
         "hasNextPage": page_number < total_pages,
     }
@@ -246,9 +283,15 @@ async def skill_inventory(
     search_text: Annotated[str | None, Query(alias="searchText")] = None,
     api_key: Annotated[str | None, Header(alias="x-api-key")] = None,
 ) -> dict[str, Any]:
-    del skill_profile_modified_since
     _validate_api_key(api_key)
     records = _SKILL_PROFILES
+    if skill_profile_modified_since:
+        records = [
+            record
+            for record in records
+            if _SKILL_PROFILE_MODIFIED_ON[int(record["employeeId"])]
+            > skill_profile_modified_since
+        ]
     if search_text:
         query = search_text.casefold()
         records = [

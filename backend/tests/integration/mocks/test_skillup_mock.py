@@ -35,6 +35,19 @@ async def test_mock_server_runs_full_skillup_pipeline(
         "skill_taxonomy": 3,
     }
 
+    incremental = await run_skillup_ingestion(
+        settings,  # type: ignore[arg-type]
+        transport=httpx.ASGITransport(app=mock_vendor_hub),
+        sleep=no_sleep,
+    )
+
+    assert incremental.status == RunStatus.SUCCEEDED
+    assert incremental.records_by_domain == {
+        "assessment_history": 3,
+        "skill_inventory": 0,
+        "skill_taxonomy": 0,
+    }
+
 
 @pytest.mark.asyncio
 async def test_mock_server_rejects_wrong_api_key() -> None:

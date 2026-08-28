@@ -10,8 +10,13 @@ from app.core.security import sanitize_text
 from app.models import PageWrite
 from app.repositories import BronzeWriter, CheckpointStore
 from app.schemas.datacamp import extra_field_paths, validate_events
+from app.services.watermarks import store_optional_watermarks
 
 DOMAIN = "learning_history"
+VENDOR = "datacamp"
+DAILY_SYNC_SCOPE = "daily_sync"
+WEEKLY_SYNC_SCOPE = "weekly_sync"
+FULL_SYNC_SCOPE = "full_sync"
 logger = logging.getLogger(__name__)
 
 
@@ -27,21 +32,20 @@ async def ingest_learning_history(
     event_type: str | None = None,
     from_value: str | None = None,
     to: str | None = None,
+    daily_sync_watermark: str | None = None,
+    weekly_sync_watermark: str | None = None,
+    full_sync_watermark: str | None = None,
 ) -> None:
     page = 1
     while True:
-        params: dict[str, Any] = {
-            "page": page,
-            "pageSize": settings.datacamp_events_page_size,
-        }
-        if content_type is not None:
-            params["contentType"] = content_type
-        if event_type is not None:
-            params["eventType"] = event_type
-        if from_value is not None:
-            params["from"] = from_value
-        if to is not None:
-            params["to"] = to
+        params = _event_params(
+            page,
+            settings.datacamp_events_page_size,
+            content_type=content_type,
+            event_type=event_type,
+            from_value=from_value,
+            to=to,
+        )
         try:
             payload, raw_payload = await client.get_json("/v1/events", params)
             contract = validate_events(
@@ -88,4 +92,36 @@ async def ingest_learning_history(
         if page >= contract.meta.number_of_pages:
             break
         page += 1
+    await store_optional_watermarks(
+        checkpoints,
+        VENDOR,
+        DOMAIN,
+        run_id,
+        (
+            (DAILY_SYNC_SCOPE, daily_sync_watermark),
+            (WEEKLY_SYNC_SCOPE, weekly_sync_watermark),
+            (FULL_SYNC_SCOPE, full_sync_watermark),
+        ),
+    )
     await checkpoints.mark_domain(run_id, DOMAIN, "completed")
+
+
+def _event_params(
+    page: int,
+    page_size: int,
+    *,
+    content_type: str | None,
+    event_type: str | None,
+    from_value: str | None,
+    to: str | None,
+) -> dict[str, Any]:
+    params: dict[str, Any] = {"page": page, "pageSize": page_size}
+    optional = {
+        "contentType": content_type,
+        "eventType": event_type,
+        "from": from_value,
+        "to": to,
+    }
+    params.update({key: value for key, value in optional.items() if value is not None})
+    return params
+

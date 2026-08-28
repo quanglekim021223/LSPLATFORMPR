@@ -38,29 +38,14 @@ class RetryingHttpClient:
                 response = await self.client.request(method, url, **kwargs)
             except (httpx.TimeoutException, httpx.NetworkError) as exc:
                 duration_ms = (time.perf_counter() - started_at) * 1000
-                if retry_number >= self.max_retries:
-                    logger.error(
-                        "HTTP request failed method=%s endpoint=%s attempt=%d "
-                        "duration_ms=%.1f error_type=%s",
-                        method.upper(),
-                        endpoint,
-                        attempt,
-                        duration_ms,
-                        type(exc).__name__,
-                    )
-                    raise
-                wait_seconds = self._backoff_seconds(retry_number)
-                logger.warning(
-                    "Retrying HTTP request method=%s endpoint=%s attempt=%d "
-                    "duration_ms=%.1f error_type=%s wait_seconds=%.3f",
-                    method.upper(),
-                    endpoint,
-                    attempt,
-                    duration_ms,
-                    type(exc).__name__,
-                    wait_seconds,
+                await self._handle_network_error(
+                    exc=exc,
+                    method=method,
+                    endpoint=endpoint,
+                    attempt=attempt,
+                    retry_number=retry_number,
+                    duration_ms=duration_ms,
                 )
-                await self.sleep(wait_seconds)
                 continue
 
             duration_ms = (time.perf_counter() - started_at) * 1000
@@ -94,6 +79,40 @@ class RetryingHttpClient:
                     continue
             return response
         raise AssertionError("retry loop exhausted unexpectedly")
+
+    async def _handle_network_error(
+        self,
+        *,
+        exc: Exception,
+        method: str,
+        endpoint: str,
+        attempt: int,
+        retry_number: int,
+        duration_ms: float,
+    ) -> None:
+        if retry_number >= self.max_retries:
+            logger.exception(
+                "HTTP request failed method=%s endpoint=%s attempt=%d "
+                "duration_ms=%.1f error_type=%s",
+                method.upper(),
+                endpoint,
+                attempt,
+                duration_ms,
+                type(exc).__name__,
+            )
+            raise exc
+        wait_seconds = self._backoff_seconds(retry_number)
+        logger.warning(
+            "Retrying HTTP request method=%s endpoint=%s attempt=%d "
+            "duration_ms=%.1f error_type=%s wait_seconds=%.3f",
+            method.upper(),
+            endpoint,
+            attempt,
+            duration_ms,
+            type(exc).__name__,
+            wait_seconds,
+        )
+        await self.sleep(wait_seconds)
 
     def _backoff_seconds(self, retry_number: int) -> float:
         return backoff_seconds(retry_number, self.jitter)

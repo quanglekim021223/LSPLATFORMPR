@@ -12,6 +12,7 @@ from app.repositories import BronzeWriter, CheckpointStore
 from app.schemas.skillup import extra_field_paths, validate_skill_inventory
 
 DOMAIN = "skill_inventory"
+VENDOR = "skillup"
 logger = logging.getLogger(__name__)
 
 
@@ -26,16 +27,23 @@ async def ingest_skill_inventory(
     skill_profile_modified_since: str | None = None,
     search_text: str | None = None,
 ) -> None:
+    managed_incremental = (
+        skill_profile_modified_since is None and search_text is None
+    )
+    sync_watermark = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    previous_watermark = (
+        await checkpoints.get_watermark(VENDOR, DOMAIN)
+        if managed_incremental
+        else None
+    )
     page_number = await checkpoints.next_page_number(run_id, DOMAIN)
     while True:
-        params: dict[str, Any] = {
-            "pageNumber": page_number,
-            "pageSize": settings.skillup_page_size,
-        }
-        if skill_profile_modified_since is not None:
-            params["SkillProfileModifiedSince"] = skill_profile_modified_since
-        if search_text is not None:
-            params["searchText"] = search_text
+        params = _inventory_params(
+            page_number,
+            settings.skillup_page_size,
+            skill_profile_modified_since or previous_watermark,
+            search_text,
+        )
         try:
             payload, raw_payload = await client.get_json(
                 settings.skillup_intelligence_base_url,
@@ -82,4 +90,25 @@ async def ingest_skill_inventory(
         if not contract.has_next_page:
             break
         page_number += 1
+    if managed_incremental:
+        await checkpoints.set_watermark(
+            VENDOR,
+            DOMAIN,
+            sync_watermark,
+            run_id,
+        )
     await checkpoints.mark_domain(run_id, DOMAIN, "completed")
+
+
+def _inventory_params(
+    page_number: int,
+    page_size: int,
+    modified_since: str | None,
+    search_text: str | None,
+) -> dict[str, Any]:
+    params: dict[str, Any] = {"pageNumber": page_number, "pageSize": page_size}
+    if modified_since is not None:
+        params["SkillProfileModifiedSince"] = modified_since
+    if search_text is not None:
+        params["searchText"] = search_text
+    return params

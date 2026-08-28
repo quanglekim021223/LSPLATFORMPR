@@ -1,5 +1,6 @@
 from app.schemas.coursera.responses import (
     CourseraContent,
+    CourseraContentChange,
     CourseraContentResponse,
     CourseraContractModel,
     CourseraDomain,
@@ -25,6 +26,7 @@ from app.schemas.coursera.responses import (
 
 __all__ = [
     "CourseraContent",
+    "CourseraContentChange",
     "CourseraContentResponse",
     "CourseraContractModel",
     "CourseraDomain",
