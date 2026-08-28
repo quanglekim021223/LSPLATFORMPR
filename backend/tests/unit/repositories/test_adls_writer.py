@@ -51,7 +51,8 @@ class FakeFileClient:
 
     def rename_file(self, new_name: str) -> FakeFileClient:
         file_system, separator, destination = new_name.partition("/")
-        assert separator and file_system == self.file_system.name
+        assert separator
+        assert file_system == self.file_system.name
         self.file_system.files[destination] = self.file_system.files.pop(self.path)
         return FakeFileClient(self.file_system, destination)
 
