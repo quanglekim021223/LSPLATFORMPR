@@ -124,6 +124,9 @@ class Settings(BaseSettings):
 
     bronze_storage_type: str = "local"
     bronze_local_path: Path = Path("./data/bronze")
+    adls_account_name: str = ""
+    adls_file_system: str = "bronze"
+    adls_base_path: str = ""
     checkpoint_db_path: Path = Path("./data/state/ingestion.db")
     checkpoint_retention_days: int = Field(default=30, ge=1)
 
@@ -155,9 +158,10 @@ class Settings(BaseSettings):
     @field_validator("bronze_storage_type")
     @classmethod
     def validate_storage_type(cls, value: str) -> str:
-        if value.lower() != "local":
-            raise ValueError("Only local Bronze storage is implemented; OneLake is not configured")
-        return value.lower()
+        normalized = value.strip().lower()
+        if normalized not in {"local", "adls"}:
+            raise ValueError("BRONZE_STORAGE_TYPE must be local or adls")
+        return normalized
 
     @property
     def scheduler_may_run(self) -> bool:

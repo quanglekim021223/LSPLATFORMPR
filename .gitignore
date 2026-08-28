@@ -8,5 +8,11 @@ __pycache__/
 .DS_Store
 data/
 .sonar/
-.coverage 
+.coverage
 coverage.xml
+local.settings.json
+AzuriteConfig
+__azurite_db_*.json
+__blobstorage__/
+__queuestorage__/
+__tablestorage__/

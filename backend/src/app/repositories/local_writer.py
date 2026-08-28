@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import logging
 import os
@@ -10,8 +9,13 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from app.core.security import sanitize_mapping
 from app.models import BinaryFileWrite, PageWrite
+from app.repositories.writer import (
+    StorageWriteResult,
+    merge_file_manifest,
+    merge_page_manifest,
+    payload_sha256,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -22,13 +26,13 @@ class LocalBronzeWriter:
     def __init__(self, root: Path) -> None:
         self.root = root
 
-    async def write_page(self, page: PageWrite) -> Path:
+    async def write_page(self, page: PageWrite) -> StorageWriteResult:
         return await asyncio.to_thread(self._write_page, page)
 
-    async def write_file(self, file: BinaryFileWrite) -> Path:
+    async def write_file(self, file: BinaryFileWrite) -> StorageWriteResult:
         return await asyncio.to_thread(self._write_file, file)
 
-    def _write_page(self, page: PageWrite) -> Path:
+    def _write_page(self, page: PageWrite) -> StorageWriteResult:
         if not page.raw_payload:
             raise ValueError("Refusing to write an empty raw payload")
 
@@ -47,37 +51,13 @@ class LocalBronzeWriter:
         self._atomic_write(output_path, page.raw_payload)
 
         manifest_path = directory / "manifest.json"
-        manifest = self._load_manifest(manifest_path)
-        manifest.update(
-            {
-                "vendor": page.vendor,
-                "data_domain": page.data_domain,
-                "ingestion_date": page.ingestion_date,
-                "run_id": page.run_id,
-                "course_id": page.course_id,
-            }
+        sha256 = payload_sha256(page.raw_payload)
+        manifest = merge_page_manifest(
+            self._load_manifest(manifest_path),
+            page,
+            file_name=output_path.name,
+            sha256=sha256,
         )
-        pages: dict[int, dict[str, Any]] = {}
-        raw_pages = manifest.get("pages")
-        if isinstance(raw_pages, list):
-            pages = {
-                int(item["offset"]): item
-                for item in raw_pages
-                if isinstance(item, dict) and "offset" in item
-            }
-        pages[page.offset] = {
-            "offset": page.offset,
-            "file": output_path.name,
-            "records_count": page.records_count,
-            "request_parameters": sanitize_mapping(page.request_parameters),
-            "fetched_at": page.fetched_at.isoformat(),
-            "sha256": hashlib.sha256(page.raw_payload).hexdigest(),
-        }
-        manifest["pages"] = [pages[offset] for offset in sorted(pages)]
-        manifest["records_count"] = sum(
-            int(item.get("records_count", 0)) for item in pages.values()
-        )
-        manifest["updated_at"] = page.fetched_at.isoformat()
         self._atomic_write(
             manifest_path,
             json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8"),
@@ -93,9 +73,13 @@ class LocalBronzeWriter:
             len(page.raw_payload),
             output_path.name,
         )
-        return output_path
+        return StorageWriteResult(
+            uri=output_path.resolve().as_uri(),
+            size_bytes=len(page.raw_payload),
+            sha256=sha256,
+        )
 
-    def _write_file(self, file: BinaryFileWrite) -> Path:
+    def _write_file(self, file: BinaryFileWrite) -> StorageWriteResult:
         if not file.raw_payload:
             raise ValueError("Refusing to write an empty raw payload")
         if Path(file.file_name).name != file.file_name:
@@ -114,33 +98,12 @@ class LocalBronzeWriter:
         output_path = directory / file.file_name
         self._atomic_write(output_path, file.raw_payload)
         manifest_path = directory / "manifest.json"
-        manifest = self._load_manifest(manifest_path)
-        manifest.update(
-            {
-                "vendor": file.vendor,
-                "data_domain": file.data_domain,
-                "ingestion_date": file.ingestion_date,
-                "run_id": file.run_id,
-            }
+        sha256 = payload_sha256(file.raw_payload)
+        manifest = merge_file_manifest(
+            self._load_manifest(manifest_path),
+            file,
+            sha256=sha256,
         )
-        entry = {
-            "file": file.file_name,
-            "remote_filename": file.file_name,
-            "remote_path": file.remote_path,
-            "file_size": file.file_size,
-            "remote_modified_time": file.remote_modified_time.isoformat(),
-            "downloaded_at": file.downloaded_at.isoformat(),
-            "sha256": hashlib.sha256(file.raw_payload).hexdigest(),
-            "records_count": file.records_count,
-        }
-        files = {
-            str(item["remote_path"]): item
-            for item in manifest.get("files", [])
-            if isinstance(item, dict) and "remote_path" in item
-        }
-        files[file.remote_path] = entry
-        manifest["files"] = [files[path] for path in sorted(files)]
-        manifest.update(entry)
         self._atomic_write(
             manifest_path,
             json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8"),
@@ -155,7 +118,11 @@ class LocalBronzeWriter:
             len(file.raw_payload),
             output_path.name,
         )
-        return output_path
+        return StorageWriteResult(
+            uri=output_path.resolve().as_uri(),
+            size_bytes=len(file.raw_payload),
+            sha256=sha256,
+        )
 
     @staticmethod
     def _load_manifest(path: Path) -> dict[str, Any]:

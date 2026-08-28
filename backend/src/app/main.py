@@ -12,7 +12,12 @@ from app.core.config import Settings, get_settings
 from app.core.logging_config import (
     configure_application_logging as _configure_application_logging,
 )
-from app.repositories import BronzeWriter, CheckpointStore, LocalBronzeWriter
+from app.repositories import (
+    ADLSGen2BronzeWriter,
+    BronzeWriter,
+    CheckpointStore,
+    LocalBronzeWriter,
+)
 from app.services.coursera.service import run_coursera_ingestion
 from app.services.datacamp.service import run_datacamp_ingestion
 from app.services.fams.service import run_fams_ingestion
@@ -26,7 +31,17 @@ logger = logging.getLogger(__name__)
 IngestionRunner = Callable[..., Awaitable[object]]
 
 
-def _scheduled_jobs(
+def build_bronze_writer(config: Settings) -> BronzeWriter:
+    if config.bronze_storage_type == "local":
+        return LocalBronzeWriter(config.bronze_local_path)
+    return ADLSGen2BronzeWriter(
+        account_name=config.adls_account_name,
+        file_system=config.adls_file_system,
+        base_path=config.adls_base_path,
+    )
+
+
+def build_ingestion_jobs(
     config: Settings,
     store: CheckpointStore,
     writer: BronzeWriter,
@@ -77,7 +92,7 @@ def create_app(
     config = settings or get_settings()
     _configure_application_logging(config.log_level)
     store = checkpoint_store or CheckpointStore(config.checkpoint_db_path)
-    writer = bronze_writer or LocalBronzeWriter(config.bronze_local_path)
+    writer = bronze_writer or build_bronze_writer(config)
 
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
@@ -85,7 +100,7 @@ def create_app(
         await store.initialize()
         scheduler = None
         if config.scheduler_may_run:
-            jobs = _scheduled_jobs(config, store, writer)
+            jobs = build_ingestion_jobs(config, store, writer)
             if not jobs:
                 raise ValueError("Scheduler enabled but no vendor is fully configured")
             scheduler = build_scheduler(config, jobs)
