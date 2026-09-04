@@ -22,7 +22,7 @@ class TokenResponse(BaseModel):
 def build_auth_router(settings: Settings) -> APIRouter:
     router = APIRouter(prefix="/auth", tags=["auth"])
 
-    @router.post("/login", response_model=TokenResponse)
+    @router.post("/login")
     async def login(request: LoginRequest) -> TokenResponse:
         username_matches = compare_digest(
             request.userid.encode(),

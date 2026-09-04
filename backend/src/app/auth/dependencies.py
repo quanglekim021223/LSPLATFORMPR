@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, status
@@ -13,12 +13,12 @@ from app.auth.auth import (
 )
 from app.core.config import Settings
 
-AdminDependency = Callable[..., Awaitable[str]]
+AdminDependency = Callable[..., str]
 _BEARER_SCHEME = HTTPBearer(auto_error=False)
 
 
 def build_admin_dependency(settings: Settings) -> AdminDependency:
-    async def require_admin(
+    def require_admin(
         credentials: Annotated[
             HTTPAuthorizationCredentials | None,
             Depends(_BEARER_SCHEME),

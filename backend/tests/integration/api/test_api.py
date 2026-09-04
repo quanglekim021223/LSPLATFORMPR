@@ -60,6 +60,8 @@ async def test_health_ready_latest_and_scheduler_disabled_in_test(
             )
             client.headers["Authorization"] = f"Bearer {non_admin_token}"
             forbidden = await client.get("/jobs/levelup/latest")
+            client.headers["Authorization"] = "Bearer malformed.token.here"
+            invalid_token_res = await client.get("/jobs/levelup/latest")
             client.headers["Authorization"] = (
                 f"Bearer {login.json()['access_token']}"
             )
@@ -84,6 +86,7 @@ async def test_health_ready_latest_and_scheduler_disabled_in_test(
             assert login.status_code == 200
             assert login.json()["token_type"] == "Bearer"
             assert forbidden.status_code == 403
+            assert invalid_token_res.status_code == 401
             assert missing.status_code == 404
             assert missing_skillup.status_code == 404
             assert missing_datacamp.status_code == 404
