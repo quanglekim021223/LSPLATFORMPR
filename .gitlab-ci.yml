@@ -25,15 +25,28 @@ build-function-dev:
     - cp -R src "$CI_PROJECT_DIR/.function-build/"
     - python -m compileall -q function_app.py src
 
-    - cd "$CI_PROJECT_DIR/.function-build"
-    - python -m zipfile -c "$CI_PROJECT_DIR/functionapp.zip" .
+    - |
+      python -c "
+      from pathlib import Path
+      from zipfile import ZIP_DEFLATED, ZipFile
+
+      root = Path('$CI_PROJECT_DIR/.function-build')
+      output = Path('$CI_PROJECT_DIR/functionapp.zip')
+
+      with ZipFile(output, 'w', ZIP_DEFLATED) as archive:
+          for path in root.rglob('*'):
+              if path.is_file():
+                  archive.write(path, path.relative_to(root).as_posix())
+
+      print('Deployment package created')
+      "
 
     - |
       python -c "
       import zipfile
 
       with zipfile.ZipFile('$CI_PROJECT_DIR/functionapp.zip') as archive:
-          names = {name.lstrip('./') for name in archive.namelist()}
+          names = set(archive.namelist())
 
       required = {
           'host.json',
@@ -43,6 +56,8 @@ build-function-dev:
 
       missing = required - names
       assert not missing, f'Missing root files: {missing}'
+      assert not any(name.startswith('./') for name in names), \
+          'ZIP entries must not start with ./'
       print('Deployment package verified')
       "
 
