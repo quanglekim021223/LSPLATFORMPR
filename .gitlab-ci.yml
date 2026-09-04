@@ -2,10 +2,20 @@ stages:
   - build
   - deploy
 
+
+# ============================================================
+# PIPELINE RULES
+# ============================================================
+
 workflow:
   rules:
     - if: '$CI_COMMIT_BRANCH == "develop"'
     - when: never
+
+
+# ============================================================
+# BUILD
+# ============================================================
 
 build-function-dev:
   stage: build
@@ -14,42 +24,96 @@ build-function-dev:
     - vm-az-gitlab
 
   image: python:3.11-slim
+
   timeout: 30m
 
   script:
+    # ----------------------------------------------------------
+    # Prepare build directory
+    # ----------------------------------------------------------
     - rm -rf "$CI_PROJECT_DIR/.function-build"
     - rm -f "$CI_PROJECT_DIR/functionapp.zip"
+
     - mkdir -p "$CI_PROJECT_DIR/.function-build"
+
+    # ----------------------------------------------------------
+    # Copy Azure Function source
+    # ----------------------------------------------------------
     - cd "$CI_PROJECT_DIR/backend"
-    - cp function_app.py host.json requirements.txt pyproject.toml "$CI_PROJECT_DIR/.function-build/"
-    - cp -R src "$CI_PROJECT_DIR/.function-build/"
-    - python -m compileall -q function_app.py src
 
+    - cp \
+        function_app.py \
+        host.json \
+        requirements.txt \
+        "$CI_PROJECT_DIR/.function-build/"
+
+    - cp -R src \
+        "$CI_PROJECT_DIR/.function-build/"
+
+    # ----------------------------------------------------------
+    # Python syntax validation
+    # ----------------------------------------------------------
+    - python -m compileall -q \
+        function_app.py \
+        src
+
+    # ----------------------------------------------------------
+    # Create deployment ZIP
+    # ----------------------------------------------------------
     - cd "$CI_PROJECT_DIR/.function-build"
-    - python -m zipfile -c "$CI_PROJECT_DIR/functionapp.zip" .
 
+    - python -m zipfile \
+        -c "$CI_PROJECT_DIR/functionapp.zip" \
+        .
+
+    # ----------------------------------------------------------
+    # Verify deployment package
+    # ----------------------------------------------------------
     - |
-      python -c "
+      python - <<'PY'
       import zipfile
+      import sys
 
-      with zipfile.ZipFile('$CI_PROJECT_DIR/functionapp.zip') as archive:
-          names = {name.lstrip('./') for name in archive.namelist()}
+      zip_path = "functionapp.zip"
 
-      required = {
-          'host.json',
-          'function_app.py',
-          'requirements.txt',
+      required_files = {
+          "host.json",
+          "function_app.py",
+          "requirements.txt",
       }
 
-      missing = required - names
-      assert not missing, f'Missing root files: {missing}'
-      print('Deployment package verified')
-      "
+      with zipfile.ZipFile(zip_path) as archive:
+          files = set(archive.namelist())
+
+      missing_files = required_files - files
+
+      if missing_files:
+          print(
+              f"ERROR: Missing required files: "
+              f"{sorted(missing_files)}"
+          )
+          sys.exit(1)
+
+      print("Deployment package verified successfully.")
+      print("Required files:")
+      for filename in sorted(required_files):
+          print(f"  - {filename}")
+      PY
+
+    # ----------------------------------------------------------
+    # Show package information
+    # ----------------------------------------------------------
+    - ls -lh "$CI_PROJECT_DIR/functionapp.zip"
 
   artifacts:
     paths:
       - functionapp.zip
     expire_in: 1 day
+
+
+# ============================================================
+# DEPLOY
+# ============================================================
 
 deploy-dev:
   stage: deploy
@@ -58,7 +122,9 @@ deploy-dev:
     - vm-az-gitlab
 
   image: mcr.microsoft.com/azure-cli:latest
+
   timeout: 30m
+
   resource_group: fsa-function-app-dev
 
   needs:
@@ -66,14 +132,42 @@ deploy-dev:
       artifacts: true
 
   before_script:
+
+    # ----------------------------------------------------------
+    # Validate custom firewall CA
+    # ----------------------------------------------------------
     - test -n "$AZURE_FIREWALL_CA"
-    - printf '%s\n' "$AZURE_FIREWALL_CA" > "$CI_PROJECT_DIR/firewall-ca.crt"
-    - grep -q "BEGIN CERTIFICATE" "$CI_PROJECT_DIR/firewall-ca.crt"
-    - cp /etc/ssl/certs/ca-certificates.crt "$CI_PROJECT_DIR/custom-ca.crt"
-    - cat "$CI_PROJECT_DIR/firewall-ca.crt" >> "$CI_PROJECT_DIR/custom-ca.crt"
+
+    - |
+      printf '%s\n' "$AZURE_FIREWALL_CA" \
+        > "$CI_PROJECT_DIR/firewall-ca.crt"
+
+    - |
+      grep -q "BEGIN CERTIFICATE" \
+        "$CI_PROJECT_DIR/firewall-ca.crt"
+
+    # ----------------------------------------------------------
+    # Build custom CA bundle
+    # ----------------------------------------------------------
+    - |
+      cp \
+        /etc/ssl/certs/ca-certificates.crt \
+        "$CI_PROJECT_DIR/custom-ca.crt"
+
+    - |
+      cat \
+        "$CI_PROJECT_DIR/firewall-ca.crt" \
+        >> "$CI_PROJECT_DIR/custom-ca.crt"
+
+    # ----------------------------------------------------------
+    # Configure SSL certificate environment
+    # ----------------------------------------------------------
     - export SSL_CERT_FILE="$CI_PROJECT_DIR/custom-ca.crt"
     - export REQUESTS_CA_BUNDLE="$CI_PROJECT_DIR/custom-ca.crt"
 
+    # ----------------------------------------------------------
+    # Azure authentication
+    # ----------------------------------------------------------
     - |
       az login \
         --service-principal \
@@ -82,11 +176,26 @@ deploy-dev:
         --tenant "$AZURE_TENANT_ID" \
         --output none
 
-    - az account set --subscription "$AZURE_SUBSCRIPTION_ID"
+    # ----------------------------------------------------------
+    # Select Azure subscription
+    # ----------------------------------------------------------
+    - |
+      az account set \
+        --subscription "$AZURE_SUBSCRIPTION_ID"
 
   script:
+
+    # ----------------------------------------------------------
+    # Validate artifact
+    # ----------------------------------------------------------
     - test -f "$CI_PROJECT_DIR/functionapp.zip"
 
+    - |
+      ls -lh "$CI_PROJECT_DIR/functionapp.zip"
+
+    # ----------------------------------------------------------
+    # Deploy Azure Function
+    # ----------------------------------------------------------
     - |
       az functionapp deployment source config-zip \
         --resource-group "$RESOURCE_GROUP" \
