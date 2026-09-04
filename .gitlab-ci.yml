@@ -4,20 +4,8 @@ stages:
 
 workflow:
   rules:
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
     - if: '$CI_COMMIT_BRANCH == "develop"'
     - when: never
-
-variables:
-  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
-  PIP_DEFAULT_TIMEOUT: "120"
-  PIP_RETRIES: "5"
-  PIP_DISABLE_PIP_VERSION_CHECK: "1"
-
-cache:
-  key: "pip-$CI_COMMIT_REF_SLUG"
-  paths:
-    - .cache/pip/
 
 build-function-dev:
   stage: build
@@ -28,50 +16,14 @@ build-function-dev:
   image: python:3.11-slim
   timeout: 30m
 
-  before_script:
-    - test -n "$AZURE_FIREWALL_CA"
-    - printf '%s\n' "$AZURE_FIREWALL_CA" > "$CI_PROJECT_DIR/firewall-ca.crt"
-    - grep -q "BEGIN CERTIFICATE" "$CI_PROJECT_DIR/firewall-ca.crt"
-    - cp /etc/ssl/certs/ca-certificates.crt "$CI_PROJECT_DIR/custom-ca.crt"
-    - cat "$CI_PROJECT_DIR/firewall-ca.crt" >> "$CI_PROJECT_DIR/custom-ca.crt"
-    - export SSL_CERT_FILE="$CI_PROJECT_DIR/custom-ca.crt"
-    - export REQUESTS_CA_BUNDLE="$CI_PROJECT_DIR/custom-ca.crt"
-    - export PIP_CERT="$CI_PROJECT_DIR/custom-ca.crt"
-
   script:
     - rm -rf "$CI_PROJECT_DIR/.function-build"
     - rm -f "$CI_PROJECT_DIR/functionapp.zip"
-    - mkdir -p "$CI_PROJECT_DIR/.function-build/.python_packages/lib/site-packages"
+    - mkdir -p "$CI_PROJECT_DIR/.function-build"
     - cd "$CI_PROJECT_DIR/backend"
-
-    - |
-      for attempt in 1 2 3; do
-        if python -m pip install \
-          --timeout 120 \
-          --retries 5 \
-          --target "$CI_PROJECT_DIR/.function-build/.python_packages/lib/site-packages" \
-          -r requirements.txt; then
-          break
-        fi
-
-        if [ "$attempt" -eq 3 ]; then
-          echo "pip install failed after 3 attempts"
-          exit 1
-        fi
-
-        echo "pip install failed; retrying in 10 seconds"
-        sleep 10
-      done
-
     - cp function_app.py host.json requirements.txt pyproject.toml "$CI_PROJECT_DIR/.function-build/"
-
-    - |
-      PYTHONPATH="$CI_PROJECT_DIR/.function-build/.python_packages/lib/site-packages" \
-        python -c "
-      import app
-      import azure.functions
-      print('Function dependencies verified')
-      "
+    - cp -R src "$CI_PROJECT_DIR/.function-build/"
+    - python -m compileall -q function_app.py src
 
     - cd "$CI_PROJECT_DIR/.function-build"
     - python -m zipfile -c "$CI_PROJECT_DIR/functionapp.zip" .
@@ -98,13 +50,6 @@ build-function-dev:
     paths:
       - functionapp.zip
     expire_in: 1 day
-
-  rules:
-    - if: >
-        $CI_PIPELINE_SOURCE == "merge_request_event" &&
-        $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "develop"
-    - if: '$CI_COMMIT_BRANCH == "develop"'
-    - when: never
 
 deploy-dev:
   stage: deploy
@@ -147,8 +92,4 @@ deploy-dev:
         --resource-group "$RESOURCE_GROUP" \
         --name "$FUNCTIONAPP_NAME" \
         --src "$CI_PROJECT_DIR/functionapp.zip" \
-        --build-remote false
-
-  rules:
-    - if: '$CI_COMMIT_BRANCH == "develop"'
-    - when: never
+        --build-remote true
