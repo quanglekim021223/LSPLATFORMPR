@@ -213,3 +213,58 @@ async def test_adls_binary_writer_preserves_csv_and_manifest(
 def test_adls_writer_rejects_relative_base_path() -> None:
     with pytest.raises(ValueError, match="relative path"):
         adls_module.ADLSGen2BronzeWriter("fsastorage", "bronze", "../raw")
+
+
+def test_adls_writer_allows_empty_base_path() -> None:
+    writer = adls_module.ADLSGen2BronzeWriter("fsastorage", "bronze", "   ")
+    assert writer.base_path == ""
+
+
+async def test_adls_binary_writer_handles_existing_identical_and_modified_file(
+    adls_writer: tuple[
+        adls_module.ADLSGen2BronzeWriter,
+        FakeFileSystemClient,
+        dict[str, Any],
+    ],
+) -> None:
+    writer, file_system, _constructor = adls_writer
+    raw1 = b"learner_id,course_id\n1,c1\n"
+    timestamp = datetime(2026, 8, 28, 5, 0, tzinfo=UTC)
+
+    req1 = BinaryFileWrite(
+        vendor="harvard_hmm",
+        data_domain="learning_history",
+        ingestion_date="2026-08-28",
+        run_id="run-2",
+        raw_payload=raw1,
+        file_name="report.csv",
+        remote_path="/reports/report.csv",
+        file_size=len(raw1),
+        remote_modified_time=timestamp,
+        downloaded_at=timestamp,
+        records_count=1,
+    )
+
+    res1 = await writer.write_file(req1)
+    # Write identical file again -> triggers early return without error
+    res2 = await writer.write_file(req1)
+    assert res1.uri == res2.uri
+
+    # Write modified file with same name -> triggers replacement
+    raw2 = b"learner_id,course_id\n2,c2\n"
+    req2 = BinaryFileWrite(
+        vendor="harvard_hmm",
+        data_domain="learning_history",
+        ingestion_date="2026-08-28",
+        run_id="run-2",
+        raw_payload=raw2,
+        file_name="report.csv",
+        remote_path="/reports/report.csv",
+        file_size=len(raw2),
+        remote_modified_time=timestamp,
+        downloaded_at=timestamp,
+        records_count=1,
+    )
+    res3 = await writer.write_file(req2)
+    assert res3.sha256 == hashlib.sha256(raw2).hexdigest()
+
