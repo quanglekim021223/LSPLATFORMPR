@@ -4,8 +4,21 @@ stages:
 
 workflow:
   rules:
+    # Temporary: remove after Azure deployment is verified.
+    - if: '$CI_COMMIT_BRANCH == "feature/fix_cicd"'
     - if: '$CI_COMMIT_BRANCH == "develop"'
     - when: never
+
+variables:
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+  PIP_DEFAULT_TIMEOUT: "600"
+  PIP_RETRIES: "10"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+cache:
+  key: "pip-python-3.11"
+  paths:
+    - .cache/pip/
 
 build-function-dev:
   stage: build
@@ -16,14 +29,49 @@ build-function-dev:
   image: python:3.11-slim
   timeout: 30m
 
+  before_script:
+    - test -n "$AZURE_FIREWALL_CA"
+    - printf '%s\n' "$AZURE_FIREWALL_CA" > "$CI_PROJECT_DIR/firewall-ca.crt"
+    - grep -q "BEGIN CERTIFICATE" "$CI_PROJECT_DIR/firewall-ca.crt"
+    - cp /etc/ssl/certs/ca-certificates.crt "$CI_PROJECT_DIR/custom-ca.crt"
+    - cat "$CI_PROJECT_DIR/firewall-ca.crt" >> "$CI_PROJECT_DIR/custom-ca.crt"
+    - export SSL_CERT_FILE="$CI_PROJECT_DIR/custom-ca.crt"
+    - export REQUESTS_CA_BUNDLE="$CI_PROJECT_DIR/custom-ca.crt"
+    - export PIP_CERT="$CI_PROJECT_DIR/custom-ca.crt"
+
   script:
     - rm -rf "$CI_PROJECT_DIR/.function-build"
     - rm -f "$CI_PROJECT_DIR/functionapp.zip"
-    - mkdir -p "$CI_PROJECT_DIR/.function-build"
+    - mkdir -p "$CI_PROJECT_DIR/.function-build/.python_packages/lib/site-packages"
     - cd "$CI_PROJECT_DIR/backend"
+
+    - |
+      python -m pip install \
+        --timeout "$PIP_DEFAULT_TIMEOUT" \
+        --retries "$PIP_RETRIES" \
+        --target "$CI_PROJECT_DIR/.function-build/.python_packages/lib/site-packages" \
+        -r requirements.txt
+
     - cp function_app.py host.json requirements.txt pyproject.toml "$CI_PROJECT_DIR/.function-build/"
     - cp -R src "$CI_PROJECT_DIR/.function-build/"
-    - python -m compileall -q function_app.py src
+    - python -m compileall -q "$CI_PROJECT_DIR/.function-build/function_app.py" "$CI_PROJECT_DIR/.function-build/src"
+
+    - |
+      PYTHONPATH="$CI_PROJECT_DIR/.function-build/.python_packages/lib/site-packages" \
+        python -c "
+      import sys
+
+      sys.path.insert(0, '$CI_PROJECT_DIR/.function-build')
+      import function_app
+
+      names = sorted(
+          function.get_function_name()
+          for function in function_app.app.get_functions()
+      )
+      expected = ['http_app_func', 'scheduled_vendor_ingestion']
+      assert names == expected, f'Unexpected Azure Functions: {names}'
+      print(f'Function entrypoint verified: {names}')
+      "
 
     - |
       python -c "
@@ -58,6 +106,10 @@ build-function-dev:
       assert not missing, f'Missing root files: {missing}'
       assert not any(name.startswith('./') for name in names), \
           'ZIP entries must not start with ./'
+      assert any(
+          name.startswith('.python_packages/lib/site-packages/azure/functions/')
+          for name in names
+      ), 'azure-functions dependency is missing from the deployment package'
       print('Deployment package verified')
       "
 
@@ -107,4 +159,4 @@ deploy-dev:
         --resource-group "$RESOURCE_GROUP" \
         --name "$FUNCTIONAPP_NAME" \
         --src "$CI_PROJECT_DIR/functionapp.zip" \
-        --build-remote true
+        --build-remote false
