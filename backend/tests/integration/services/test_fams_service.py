@@ -14,6 +14,9 @@ from app.repositories import CheckpointStore
 from app.services.fams.service import run_fams_ingestion
 from tests.conftest import no_sleep, response
 
+TEST_ADMIN_USERNAME = "test-admin"
+TEST_ADMIN_PASSWORD = "test-admin-password"
+
 
 def _valid_payload() -> dict[str, Any]:
     return {
@@ -211,6 +214,16 @@ async def test_filtered_configuration_errors_are_saved_in_latest_run(
             transport=httpx.ASGITransport(app=app),
             base_url="http://test",
         ) as client:
+            login = await client.post(
+                "/auth/login",
+                json={
+                    "userid": TEST_ADMIN_USERNAME,
+                    "password": TEST_ADMIN_PASSWORD,
+                },
+            )
+            client.headers["Authorization"] = (
+                f"Bearer {login.json()['access_token']}"
+            )
             latest = await client.get("/jobs/fams/latest")
     assert latest.status_code == 200
     assert latest.json()["run_id"] == summary.run_id

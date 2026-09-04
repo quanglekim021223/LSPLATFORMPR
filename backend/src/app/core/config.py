@@ -35,6 +35,17 @@ class Settings(BaseSettings):
     scheduler_enabled: bool = False
     ingestion_time: str = "05:00"
     ingestion_timezone: str = "Asia/Ho_Chi_Minh"
+    cors_allowed_origins: list[str] = Field(
+        default_factory=lambda: [
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+        ]
+    )
+
+    auth_admin_username: str = ""
+    auth_admin_password_hash: SecretStr = Field(default=SecretStr(""))
+    auth_jwt_secret: SecretStr = Field(default=SecretStr(""))
+    auth_token_expire_minutes: int = Field(default=60, ge=1, le=1440)
 
     levelup_base_url: str = ""
     levelup_auth_path: str = "/authenticate"
@@ -272,6 +283,24 @@ class Settings(BaseSettings):
     def fams_secrets(self) -> tuple[str, ...]:
         api_key = self.fams_api_key.get_secret_value()
         return (api_key,) if api_key else ()
+
+    def validate_auth_runtime(self) -> None:
+        missing = [
+            name
+            for name, value in (
+                ("AUTH_ADMIN_USERNAME", self.auth_admin_username),
+                (
+                    "AUTH_ADMIN_PASSWORD_HASH",
+                    self.auth_admin_password_hash.get_secret_value(),
+                ),
+                ("AUTH_JWT_SECRET", self.auth_jwt_secret.get_secret_value()),
+            )
+            if not value
+        ]
+        if missing:
+            raise ValueError(f"Missing authentication configuration: {', '.join(missing)}")
+        if len(self.auth_jwt_secret.get_secret_value()) < 32:
+            raise ValueError("AUTH_JWT_SECRET must contain at least 32 characters")
 
     def validate_levelup_runtime(self) -> None:
         missing = []

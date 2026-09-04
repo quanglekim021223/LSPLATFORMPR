@@ -1,13 +1,17 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 
+from app.auth.dependencies import AdminDependency
 from app.models import RunSummary
 from app.repositories import CheckpointStore
 
 
-def build_job_router(checkpoints: CheckpointStore) -> APIRouter:
-    router = APIRouter()
+def build_job_router(
+    checkpoints: CheckpointStore,
+    require_admin: AdminDependency,
+) -> APIRouter:
+    router = APIRouter(dependencies=[Depends(require_admin)])
 
     async def latest(vendor: str, display_name: str) -> RunSummary:
         summary = await checkpoints.latest_run(vendor)
