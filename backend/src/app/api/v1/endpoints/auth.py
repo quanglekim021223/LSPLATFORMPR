@@ -1,90 +1,49 @@
-from fastapi import APIRouter
-from app.auth.auth import create_access_token, get_user_password_hash, verify_password, hash_password, save_user_password_hash
-from pydantic import BaseModel
-from fastapi import APIRouter, HTTPException, status
+from __future__ import annotations
 
-class RegisterRequest(BaseModel):
-    userid: str
-    password: str
+from secrets import compare_digest
+
+from fastapi import APIRouter, HTTPException, status
+from pydantic import BaseModel
+
+from app.auth.auth import create_access_token, verify_password
+from app.core.config import Settings
 
 
 class LoginRequest(BaseModel):
     userid: str
     password: str
 
-@router.post("/login")
-async def login(
-    request: LoginRequest,
-):
 
-    password_hash = await get_user_password_hash(
-        keyvault_client,
-        request.userid,
-    )
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str
 
-    if not password_hash:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid credentials",
+
+def build_auth_router(settings: Settings) -> APIRouter:
+    router = APIRouter(prefix="/auth", tags=["auth"])
+
+    @router.post("/login", response_model=TokenResponse)
+    async def login(request: LoginRequest) -> TokenResponse:
+        username_matches = compare_digest(
+            request.userid.encode(),
+            settings.auth_admin_username.encode(),
         )
-
-    is_valid = verify_password(
-        request.password,
-        password_hash,
-    )
-
-    if not is_valid:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid credentials",
+        password_matches = verify_password(
+            request.password,
+            settings.auth_admin_password_hash.get_secret_value(),
         )
-
-    token = create_access_token(
-        subject=request.userid,
-    )
-
-    return {
-        "access_token": token,
-        "token_type": "Bearer",
-    }
-    
-def build_auth_router(
-    keyvault_client,
-) -> APIRouter:
-
-    router = APIRouter(
-        prefix="/auth",
-        tags=["auth"],
-    )
-
-    @router.post("/register")
-    async def register(
-        request: RegisterRequest,
-    ):
-
-        existing = await get_user_password_hash(
-            keyvault_client,
-            request.userid,
-        )
-
-        if existing:
+        if not username_matches or not password_matches:
             raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="User already exists",
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid credentials",
+                headers={"WWW-Authenticate": "Bearer"},
             )
 
-        password_hash = hash_password(
-            request.password
+        token = create_access_token(
+            user_id=request.userid,
+            secret_key=settings.auth_jwt_secret.get_secret_value(),
+            expire_minutes=settings.auth_token_expire_minutes,
         )
-
-        await save_user_password_hash(
-            keyvault_client,
-            request.userid,
-            password_hash,
-        )
-
-        return {
-            "message": "User registered"
-        }
+        return TokenResponse(access_token=token, token_type="Bearer")
 
     return router

@@ -5,9 +5,13 @@ from collections.abc import Callable
 import httpx
 import pytest
 
+from app.auth.auth import create_access_token
 from app.main import create_app
 from app.models import RunStatus
 from app.repositories import CheckpointStore
+
+TEST_ADMIN_USERNAME = "test-admin"
+TEST_ADMIN_PASSWORD = "test-admin-password"
 
 
 @pytest.mark.asyncio
@@ -25,6 +29,40 @@ async def test_health_ready_latest_and_scheduler_disabled_in_test(
         ) as client:
             health = await client.get("/health")
             ready = await client.get("/ready")
+            login_preflight = await client.options(
+                "/auth/login",
+                headers={
+                    "Origin": "http://localhost:5173",
+                    "Access-Control-Request-Method": "POST",
+                    "Access-Control-Request-Headers": "content-type",
+                },
+            )
+            unauthorized = await client.get("/jobs/levelup/latest")
+            bad_login = await client.post(
+                "/auth/login",
+                json={"userid": TEST_ADMIN_USERNAME, "password": "wrong"},
+            )
+            registration = await client.post(
+                "/auth/register",
+                json={"userid": "new-admin", "password": "password"},
+            )
+            login = await client.post(
+                "/auth/login",
+                json={
+                    "userid": TEST_ADMIN_USERNAME,
+                    "password": TEST_ADMIN_PASSWORD,
+                },
+            )
+            non_admin_token = create_access_token(
+                user_id="another-user",
+                secret_key=settings.auth_jwt_secret.get_secret_value(),  # type: ignore[attr-defined]
+                expire_minutes=10,
+            )
+            client.headers["Authorization"] = f"Bearer {non_admin_token}"
+            forbidden = await client.get("/jobs/levelup/latest")
+            client.headers["Authorization"] = (
+                f"Bearer {login.json()['access_token']}"
+            )
             missing = await client.get("/jobs/levelup/latest")
             missing_skillup = await client.get("/jobs/skillup/latest")
             missing_datacamp = await client.get("/jobs/datacamp/latest")
@@ -35,6 +73,17 @@ async def test_health_ready_latest_and_scheduler_disabled_in_test(
             missing_fams = await client.get("/jobs/fams/latest")
             assert health.json() == {"status": "ok"}
             assert ready.json() == {"status": "ready"}
+            assert login_preflight.status_code == 200
+            assert (
+                login_preflight.headers["access-control-allow-origin"]
+                == "http://localhost:5173"
+            )
+            assert unauthorized.status_code == 401
+            assert bad_login.status_code == 401
+            assert registration.status_code == 404
+            assert login.status_code == 200
+            assert login.json()["token_type"] == "Bearer"
+            assert forbidden.status_code == 403
             assert missing.status_code == 404
             assert missing_skillup.status_code == 404
             assert missing_datacamp.status_code == 404

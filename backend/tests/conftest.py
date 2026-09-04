@@ -8,7 +8,12 @@ from typing import Any
 import httpx
 import pytest
 
+from app.auth.auth import hash_password
 from app.core.config import Settings
+
+TEST_ADMIN_USERNAME = "test-admin"
+TEST_ADMIN_PASSWORD = "test-admin-password"
+TEST_ADMIN_PASSWORD_HASH = hash_password(TEST_ADMIN_PASSWORD)
 
 _MOCK_ENV = {
     "MOCK_LEVELUP_USERNAME": "mock-user",
@@ -54,6 +59,10 @@ def settings_factory(tmp_path: Path) -> Callable[..., Settings]:
             "scheduler_enabled": False,
             "ingestion_time": "05:00",
             "ingestion_timezone": "Asia/Ho_Chi_Minh",
+            "auth_admin_username": TEST_ADMIN_USERNAME,
+            "auth_admin_password_hash": TEST_ADMIN_PASSWORD_HASH,
+            "auth_jwt_secret": "test-only-jwt-secret-with-at-least-32-characters",
+            "auth_token_expire_minutes": 60,
             "levelup_base_url": "https://levelup.test",
             "levelup_username": "test-user",
             "levelup_password": "test-password",

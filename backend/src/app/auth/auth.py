@@ -1,91 +1,75 @@
-# auth.py
+from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-import jwt
-from jwt.exceptions import ExpiredSignatureError, InvalidTokenError
+from datetime import UTC, datetime, timedelta
+from secrets import compare_digest
+from typing import cast
+
 import bcrypt
-from azure.keyvault.secrets import SecretClient
+import jwt
+from jwt.exceptions import InvalidTokenError
 
-SECRET_KEY = "your-secret-key"
 ALGORITHM = "HS256"
 
 
-def create_access_token(user_id: str) -> str:
-    payload = {
-        "sub": user_id,
-        "exp": datetime.now(timezone.utc) + timedelta(hours=1)
-    }
+class AuthenticationError(Exception):
+    """Raised when a bearer token cannot be authenticated."""
 
+
+class AuthorizationError(Exception):
+    """Raised when an authenticated token is not the configured admin."""
+
+
+def create_access_token(
+    *,
+    user_id: str,
+    secret_key: str,
+    expire_minutes: int,
+) -> str:
+    now = datetime.now(UTC)
     token = jwt.encode(
-        payload,
-        SECRET_KEY,
-        algorithm=ALGORITHM
+        {
+            "sub": user_id,
+            "role": "admin",
+            "iat": now,
+            "exp": now + timedelta(minutes=expire_minutes),
+        },
+        secret_key,
+        algorithm=ALGORITHM,
     )
-
     return token
 
 
-
-def verify_token(token: str) -> dict:
-
+def verify_admin_token(
+    *,
+    token: str,
+    secret_key: str,
+    admin_username: str,
+) -> str:
     try:
-        payload = jwt.decode(
-            token,
-            SECRET_KEY,
-            algorithms=[ALGORITHM]
+        payload = cast(
+            dict[str, object],
+            jwt.decode(token, secret_key, algorithms=[ALGORITHM]),
         )
+    except InvalidTokenError as exc:
+        raise AuthenticationError("Invalid or expired token") from exc
 
-        return payload
+    subject = payload.get("sub")
+    role = payload.get("role")
+    if (
+        not isinstance(subject, str)
+        or not compare_digest(subject.encode(), admin_username.encode())
+        or role != "admin"
+    ):
+        raise AuthorizationError("Admin access required")
+    return subject
 
-    except ExpiredSignatureError:
-        raise Exception("Token expired")
-
-    except InvalidTokenError:
-        raise Exception("Invalid token")
-    
 
 def hash_password(password: str) -> str:
-    return bcrypt.hashpw(
-        password.encode("utf-8"),
-        bcrypt.gensalt(),
-    ).decode("utf-8")
+    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
 
 
-def verify_password(
-    password: str,
-    password_hash: str,
-) -> bool:
-
-    return bcrypt.checkpw(
-        password.encode("utf-8"),
-        password_hash.encode("utf-8"),
-    )    
-    
-    
-
-async def get_user_password_hash(
-    client: SecretClient,
-    userid: str,
-) -> str | None:
-
+def verify_password(password: str, password_hash: str) -> bool:
     try:
-        secret = client.get_secret(
-            f"user-{userid}"
-        )
-
-        return secret.value
-
-    except Exception:
-        return None
-
-
-async def save_user_password_hash(
-    client: SecretClient,
-    userid: str,
-    password_hash: str,
-) -> None:
-
-    client.set_secret(
-        f"user-{userid}",
-        password_hash,
-    )    
+        return bcrypt.checkpw(password.encode(), password_hash.encode())
+    except ValueError:
+        return False

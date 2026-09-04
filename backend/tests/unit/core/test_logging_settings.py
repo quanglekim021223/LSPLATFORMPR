@@ -24,6 +24,16 @@ def test_invalid_log_level_is_rejected(
         settings_factory(log_level="verbose")
 
 
+def test_auth_runtime_configuration_is_required(
+    settings_factory: Callable[..., Settings],
+) -> None:
+    with pytest.raises(ValueError, match="AUTH_ADMIN_USERNAME"):
+        settings_factory(auth_admin_username="").validate_auth_runtime()
+
+    with pytest.raises(ValueError, match="at least 32 characters"):
+        settings_factory(auth_jwt_secret="short").validate_auth_runtime()
+
+
 def test_application_logs_use_uvicorn_handler() -> None:
     output = io.StringIO()
     handler = logging.StreamHandler(output)

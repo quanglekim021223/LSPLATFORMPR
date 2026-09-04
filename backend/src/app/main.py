@@ -5,6 +5,7 @@ from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.router import build_api_router
 from app.config.scheduler import ScheduledJob, build_scheduler
@@ -82,6 +83,7 @@ def create_app(
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
         _configure_application_logging(config.log_level)
+        config.validate_auth_runtime()
         await store.initialize()
         scheduler = None
         if config.scheduler_may_run:
@@ -111,8 +113,15 @@ def create_app(
         version="0.1.0",
         lifespan=lifespan,
     )
+    application.add_middleware(
+        CORSMiddleware,
+        allow_origins=config.cors_allowed_origins,
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type"],
+    )
 
-    application.include_router(build_api_router(store))
+    application.include_router(build_api_router(store, config))
 
     return application
 
