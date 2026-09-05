@@ -45,74 +45,15 @@ build-function-dev:
     - mkdir -p "$CI_PROJECT_DIR/.function-build/.python_packages/lib/site-packages"
     - cd "$CI_PROJECT_DIR/backend"
 
-    # Temporary diagnostic: inspect the metadata response on the runner network.
-    - |
-      python -u - <<'PY'
-      import hashlib
-      import time
-      import urllib.request
-      from datetime import datetime, timezone
-
-      print("Diagnostic started UTC:", datetime.now(timezone.utc).isoformat())
-      # Exact metadata target from the failed pip download; no JSON lookup.
-      url = (
-          "https://files.pythonhosted.org/packages/49/9a/"
-          "417b3a533e01953a7c618884df2cb05a71e7b68bdbce4fbdb62349d2a2e8/"
-          "azure_identity-1.25.3-py3-none-any.whl.metadata"
-      )
-      expected = "9f5f4a1c9476d7c0e6c26dfd7a57de3a10b98d65bf018c509d96ce3b6921de54"
-
-      print("URL:", url)
-      started = time.monotonic()
-      received = 0
-      digest = hashlib.sha256()
-
-      try:
-          request = urllib.request.Request(
-              url, headers={"Accept-Encoding": "identity"}
-          )
-          with urllib.request.urlopen(request, timeout=180) as response:
-              print("HTTP status:", response.status)
-              for name in (
-                  "Content-Length", "Content-Type", "Server",
-                  "Via", "Age", "X-Cache"
-              ):
-                  print(f"{name}: {response.headers.get(name)}")
-
-              while True:
-                  chunk = response.read1(4096)
-                  if not chunk:
-                      break
-                  received += len(chunk)
-                  digest.update(chunk)
-                  print("Progress bytes:", received)
-
-      except Exception as error:
-          print("Download error:", type(error).__name__, str(error))
-
-      print("Elapsed seconds:", round(time.monotonic() - started, 1))
-      print("Bytes received:", received)
-      print("Expected SHA256:", expected)
-      print("Received SHA256:", digest.hexdigest())
-      print("Hash matches:", digest.hexdigest() == expected)
-      PY
-
-    # Temporary diagnostic: verify package downloads without using pip cache.
-    - |
-      python -m pip install \
-        --dry-run \
-        --ignore-installed \
-        --no-cache-dir \
-        --timeout 600 \
-        --retries 10 \
-        --verbose \
-        "azure-identity==1.25.3"
+    # Temporary: use the official wheel directly to avoid the truncated metadata endpoint.
+    # SHA256 verified against PyPI release data; this is the wheel hash, not metadata hash.
 
     - |
       python -m pip install \
         --timeout "$PIP_DEFAULT_TIMEOUT" \
         --retries "$PIP_RETRIES" \
         --target "$CI_PROJECT_DIR/.function-build/.python_packages/lib/site-packages" \
+        "https://files.pythonhosted.org/packages/49/9a/417b3a533e01953a7c618884df2cb05a71e7b68bdbce4fbdb62349d2a2e8/azure_identity-1.25.3-py3-none-any.whl#sha256=f4d0b956a8146f30333e071374171f3cfa7bdb8073adb8c3814b65567aa7447c" \
         -r requirements.txt
 
     - cp function_app.py host.json requirements.txt pyproject.toml "$CI_PROJECT_DIR/.function-build/"
