@@ -45,6 +45,17 @@ build-function-dev:
     - mkdir -p "$CI_PROJECT_DIR/.function-build/.python_packages/lib/site-packages"
     - cd "$CI_PROJECT_DIR/backend"
 
+    # Temporary diagnostic: verify package downloads without using pip cache.
+    - |
+      python -m pip install \
+        --dry-run \
+        --ignore-installed \
+        --no-cache-dir \
+        --timeout 600 \
+        --retries 10 \
+        --verbose \
+        "azure-identity==1.25.3"
+
     - |
       python -m pip install \
         --timeout "$PIP_DEFAULT_TIMEOUT" \
