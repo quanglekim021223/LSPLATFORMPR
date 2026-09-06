@@ -24,11 +24,47 @@ def _valid_payload() -> dict[str, Any]:
         "message": "ok",
         "error_code": "",
         "data": {
-            "classList": [{"classId": "c1"}, {"classId": "c2"}],
+            "classList": [
+                {
+                    "id": 1,
+                    "site": "HN",
+                    "courseCode": "course-1",
+                    "courseName": "Course 1",
+                    "courseStatus": "CLOSED",
+                },
+                {
+                    "id": 2,
+                    "site": "HCM",
+                    "courseCode": "course-2",
+                    "courseName": "Course 2",
+                    "courseStatus": "INPROGRESS",
+                },
+            ],
             "studentList": [
-                {"studentId": "s1"},
-                {"studentId": "s2"},
-                {"studentId": "s3"},
+                {
+                    "account": "student-1",
+                    "name": "Student 1",
+                    "site": "HN",
+                    "courseCode": "course-1",
+                    "courseName": "Course 1",
+                    "statusInClass": "Graduated",
+                },
+                {
+                    "account": "student-2",
+                    "name": "Student 2",
+                    "site": "HN",
+                    "courseCode": "course-1",
+                    "courseName": "Course 1",
+                    "statusInClass": "InProgress",
+                },
+                {
+                    "account": "student-3",
+                    "name": "Student 3",
+                    "site": "HCM",
+                    "courseCode": "course-2",
+                    "courseName": "Course 2",
+                    "statusInClass": "InProgress",
+                },
             ],
         },
     }
@@ -41,11 +77,10 @@ async def test_full_load_header_counts_and_exact_raw_bronze(
 ) -> None:
     settings = settings_factory()
     caplog.set_level(logging.DEBUG, logger="app.services.fams.training_data")
-    raw_payload = (
-        b'{\n  "success": true, "message": "ok", "error_code": "",\n'
-        b'  "data": {"classList": [{"classId": "c1"}], '
-        b'"studentList": [{"studentId": "s1"}, {"studentId": "s2"}]}\n}\n'
-    )
+    payload = _valid_payload()
+    payload["data"]["classList"] = payload["data"]["classList"][:1]
+    payload["data"]["studentList"] = payload["data"]["studentList"][:2]
+    raw_payload = json.dumps(payload, indent=2).encode()
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/api/fsa-reports/training-data"
