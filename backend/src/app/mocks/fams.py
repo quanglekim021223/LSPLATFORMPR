@@ -8,12 +8,14 @@ from app.mocks.generated_data import generated_vendor_data
 from app.mocks.settings import get_mock_settings
 
 router = APIRouter(tags=["FAMS"])
+_FAMS_COURSE_1_NAME = "FAMS Course 1"
+
 _CLASSES: list[dict[str, Any]] = [
     {
         "id": 1,
         "site": "HCM",
         "courseCode": "class-001",
-        "courseName": "FAMS Course 1",
+        "courseName": _FAMS_COURSE_1_NAME,
         "courseStatus": "CLOSED",
         "actualStartDate": "2026-08-20",
     },
@@ -32,7 +34,7 @@ _STUDENTS: list[dict[str, Any]] = [
         "name": "Student 1",
         "site": "HCM",
         "courseCode": "class-001",
-        "courseName": "FAMS Course 1",
+        "courseName": _FAMS_COURSE_1_NAME,
         "statusInClass": "Graduated",
     },
     {
@@ -40,7 +42,7 @@ _STUDENTS: list[dict[str, Any]] = [
         "name": "Student 2",
         "site": "HCM",
         "courseCode": "class-001",
-        "courseName": "FAMS Course 1",
+        "courseName": _FAMS_COURSE_1_NAME,
         "statusInClass": "InProgress",
     },
     {
