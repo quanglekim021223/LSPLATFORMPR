@@ -9,38 +9,17 @@ from typing import Any
 
 from app.clients.fams_client import (
     FAMSClient,
-    FAMSResponseContractError,
     is_retryable_error,
 )
 from app.core.security import sanitize_text
 from app.models import PageWrite
 from app.repositories import BronzeWriter, CheckpointStore
+from app.schemas.fams import extra_field_paths, validate_training_data
 
 DOMAIN = "training_data"
 VENDOR = "fams"
 CONTENT_FINGERPRINT_SCOPE = "content_fingerprint"
 logger = logging.getLogger(__name__)
-
-
-def _validated_lists(payload: Any) -> tuple[list[Any], list[Any]]:
-    if not isinstance(payload, dict):
-        raise FAMSResponseContractError("FAMS response must be a JSON object")
-    if payload.get("success") is not True:
-        raise FAMSResponseContractError("FAMS response success is not true")
-    data = payload.get("data")
-    if not isinstance(data, dict):
-        raise FAMSResponseContractError("FAMS response data must be an object")
-    class_list = data.get("classList")
-    student_list = data.get("studentList")
-    if not isinstance(class_list, list):
-        raise FAMSResponseContractError(
-            "FAMS response data.classList must be an array"
-        )
-    if not isinstance(student_list, list):
-        raise FAMSResponseContractError(
-            "FAMS response data.studentList must be an array"
-        )
-    return class_list, student_list
 
 
 def _content_fingerprint(
@@ -92,9 +71,23 @@ async def ingest_training_data(
     request_parameters = dict(filters or {})
     try:
         payload, raw_payload = await client.get_training_data(filters)
-        class_list, student_list = _validated_lists(payload)
+        contract = validate_training_data(payload)
+        class_list = [
+            item.model_dump(mode="json", by_alias=True)
+            for item in contract.data.class_list
+        ]
+        student_list = [
+            item.model_dump(mode="json", by_alias=True)
+            for item in contract.data.student_list
+        ]
         class_count = len(class_list)
         student_count = len(student_list)
+        extras = extra_field_paths(contract)
+        if extras:
+            logger.warning(
+                "FAMS Training Data contains new contract fields fields=%s",
+                ",".join(extras),
+            )
         fingerprint = _content_fingerprint(class_list, student_list)
         fingerprint_scope = _fingerprint_scope(filters)
         previous_fingerprint = await checkpoints.get_watermark(

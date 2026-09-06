@@ -8,24 +8,49 @@ from app.mocks.generated_data import generated_vendor_data
 from app.mocks.settings import get_mock_settings
 
 router = APIRouter(tags=["FAMS"])
-_CLASSES = [
+_CLASSES: list[dict[str, Any]] = [
     {
-        "classId": "class-001",
-        "status": "CLOSED",
+        "id": 1,
         "site": "HCM",
-        "actualStartDate": "20260820",
+        "courseCode": "class-001",
+        "courseName": "FAMS Course 1",
+        "courseStatus": "CLOSED",
+        "actualStartDate": "2026-08-20",
     },
     {
-        "classId": "class-002",
-        "status": "INPROGRESS",
+        "id": 2,
         "site": "HN",
-        "actualStartDate": "20260823",
+        "courseCode": "class-002",
+        "courseName": "FAMS Course 2",
+        "courseStatus": "INPROGRESS",
+        "actualStartDate": "2026-08-23",
     },
 ]
-_STUDENTS = [
-    {"studentId": "student-001", "classId": "class-001"},
-    {"studentId": "student-002", "classId": "class-001"},
-    {"studentId": "student-003", "classId": "class-002"},
+_STUDENTS: list[dict[str, Any]] = [
+    {
+        "account": "student-001",
+        "name": "Student 1",
+        "site": "HCM",
+        "courseCode": "class-001",
+        "courseName": "FAMS Course 1",
+        "statusInClass": "Graduated",
+    },
+    {
+        "account": "student-002",
+        "name": "Student 2",
+        "site": "HCM",
+        "courseCode": "class-001",
+        "courseName": "FAMS Course 1",
+        "statusInClass": "InProgress",
+    },
+    {
+        "account": "student-003",
+        "name": "Student 3",
+        "site": "HN",
+        "courseCode": "class-002",
+        "courseName": "FAMS Course 2",
+        "statusInClass": "InProgress",
+    },
 ]
 
 _GENERATED = generated_vendor_data("fams")
@@ -57,19 +82,19 @@ async def training_data(
     classes = [
         item
         for item in _CLASSES
-        if (statuses is None or item["status"] in statuses)
+        if (statuses is None or item["courseStatus"] in statuses)
         and (site is None or item["site"] == site)
         and (
             actual_start_date_from is None
-            or item["actualStartDate"] >= actual_start_date_from
+            or item["actualStartDate"].replace("-", "") >= actual_start_date_from
         )
         and (
             actual_start_date_to is None
-            or item["actualStartDate"] <= actual_start_date_to
+            or item["actualStartDate"].replace("-", "") <= actual_start_date_to
         )
     ]
-    class_ids = {item["classId"] for item in classes}
-    students = [item for item in _STUDENTS if item["classId"] in class_ids]
+    course_codes = {item["courseCode"] for item in classes}
+    students = [item for item in _STUDENTS if item["courseCode"] in course_codes]
     return {
         "success": True,
         "message": "Mock FAMS training data",
