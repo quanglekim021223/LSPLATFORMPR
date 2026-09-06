@@ -62,6 +62,8 @@ def test_incremental_dataset_contains_edits_and_new_records() -> None:
     )
     assert vendors["harvard_hmm"]["catalog"][0]["Title"].endswith("(Updated)")
     assert vendors["harvard_spark"]["catalog"][0]["Title"].endswith("(Updated)")
+    assert vendors["fams"]["classes"][0]["courseStatus"] == "INPROGRESS"
+    assert "status" not in vendors["fams"]["classes"][0]
 
 
 def test_performance_dataset_is_written_as_one_file_per_vendor(tmp_path: Path) -> None:

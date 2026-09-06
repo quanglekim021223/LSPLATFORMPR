@@ -370,8 +370,10 @@ def build_incremental_dataset(
         vendors[vendor]["catalog"][0]["LastModifiedDate"] = now.date().isoformat()
 
     fams = vendors["fams"]
-    fams["classes"][0]["status"] = (
-        "INPROGRESS" if fams["classes"][0]["status"] == "CLOSED" else "CLOSED"
+    fams["classes"][0]["courseStatus"] = (
+        "INPROGRESS"
+        if fams["classes"][0]["courseStatus"] == "CLOSED"
+        else "CLOSED"
     )
 
     validate_dataset(incremental)
