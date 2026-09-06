@@ -4,8 +4,6 @@ stages:
 
 workflow:
   rules:
-    # Temporary: remove after Azure deployment is verified.
-    - if: '$CI_COMMIT_BRANCH == "feature/fix_cicd"'
     - if: '$CI_COMMIT_BRANCH == "develop"'
     - when: never
 
