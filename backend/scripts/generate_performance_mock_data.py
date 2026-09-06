@@ -49,6 +49,7 @@ from app.schemas.datacamp import (  # noqa: E402
     validate_events,
     validate_live_catalog,
 )
+from app.schemas.fams import validate_training_data  # noqa: E402
 from app.schemas.harvard import validate_catalog, validate_history_csv  # noqa: E402
 from app.schemas.levelup import (  # noqa: E402
     validate_course_list as validate_levelup_course_list,
@@ -232,17 +233,23 @@ def _fams(total: int) -> dict[str, Any]:
     student_count = total - class_count
     classes = [
         {
-            "classId": f"perf-class-{index:05d}",
-            "status": "INPROGRESS" if index % 2 else "CLOSED",
+            "id": index + 1,
             "site": "HCM" if index % 2 else "HN",
-            "actualStartDate": "20260827",
+            "courseCode": f"perf-class-{index:05d}",
+            "courseName": f"Performance Class {index}",
+            "courseStatus": "INPROGRESS" if index % 2 else "CLOSED",
+            "actualStartDate": "2026-08-27",
         }
         for index in range(class_count)
     ]
     students = [
         {
-            "studentId": f"perf-student-{index:06d}",
-            "classId": classes[index % class_count]["classId"],
+            "account": f"perf-student-{index:06d}",
+            "name": f"Performance Student {index}",
+            "site": classes[index % class_count]["site"],
+            "courseCode": classes[index % class_count]["courseCode"],
+            "courseName": classes[index % class_count]["courseName"],
+            "statusInClass": "InProgress",
         }
         for index in range(student_count)
     ]
@@ -357,8 +364,17 @@ def validate_dataset(dataset: dict[str, Any]) -> None:
         validate_history_csv(_harvard_history_csv(vendor, harvard["history_rows"]), vendor)
 
     fams = vendors["fams"]
-    if not isinstance(fams["classes"], list) or not isinstance(fams["students"], list):
-        raise ValueError("FAMS generated classList and studentList must be arrays")
+    validate_training_data(
+        {
+            "success": True,
+            "message": "Generated FAMS training data",
+            "error_code": None,
+            "data": {
+                "classList": fams["classes"],
+                "studentList": fams["students"],
+            },
+        }
+    )
 
 
 def _offset_page(key: str, records: list[dict[str, Any]]) -> dict[str, Any]:
