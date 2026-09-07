@@ -636,7 +636,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Generate validated performance data for all 8 mock vendors."
     )
-    parser.add_argument("--records", type=int, default=1_000)
+    parser.add_argument("--records", type=int, default=10_000)
     parser.add_argument(
         "--variant",
         choices=("initial", "incremental", "pair"),

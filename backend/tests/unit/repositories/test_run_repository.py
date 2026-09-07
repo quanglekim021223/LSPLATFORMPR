@@ -87,6 +87,28 @@ async def test_page_checkpoint_uses_vendor_from_run(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_run_summary_reports_latest_completed_checkpoint_time(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "state.db"
+    store = CheckpointStore(database_path)
+    await store.initialize()
+    await store.start_run("progress-run", "linkedin")
+    await store.record_completed_page("progress-run", "course_catalog", 0, 100)
+    expected = "2026-09-07T04:38:12+00:00"
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            "UPDATE checkpoints SET finished_at = ? WHERE run_id = ?",
+            (expected, "progress-run"),
+        )
+
+    summary = await store.get_run("progress-run")
+
+    assert summary is not None
+    assert summary.last_progress_at == datetime.fromisoformat(expected)
+
+
+@pytest.mark.asyncio
 async def test_vendor_lock_prevents_two_levelup_jobs(tmp_path: Path) -> None:
     store = CheckpointStore(tmp_path / "state.db")
     await store.initialize()

@@ -21,6 +21,7 @@ class RunSummary(BaseModel):
     status: RunStatus
     started_at: datetime
     finished_at: datetime | None = None
+    last_progress_at: datetime | None = None
     course_catalog_records: int = 0
     enrollment_records: int = 0
     courses_succeeded: int = 0

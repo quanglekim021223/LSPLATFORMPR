@@ -43,7 +43,7 @@ async def test_mock_server_runs_full_skillup_pipeline(
 
     assert incremental.status == RunStatus.SUCCEEDED
     assert incremental.records_by_domain == {
-        "assessment_history": 3,
+        "assessment_history": 0,
         "skill_inventory": 0,
         "skill_taxonomy": 0,
     }

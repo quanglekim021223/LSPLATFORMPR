@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from math import ceil
 from typing import Annotated, Any
 
@@ -99,6 +100,13 @@ def _validate_headers(authorization: str | None, accept: str | None) -> None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid mock credentials")
 
 
+def _parse_datetime(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
 @router.get("/v1/catalog/live-courses")
 async def live_courses(
     authorization: Annotated[str | None, Header()] = None,
@@ -128,15 +136,29 @@ async def events(
     authorization: Annotated[str | None, Header()] = None,
     accept: Annotated[str | None, Header()] = None,
 ) -> dict[str, Any]:
-    del content_type, event_type, from_value, to
     _validate_headers(authorization, accept)
+    filtered = _EVENTS
+    if content_type is not None:
+        filtered = [item for item in filtered if item.get("contentType") == content_type]
+    if event_type is not None:
+        filtered = [item for item in filtered if item.get("eventType") == event_type]
+    if from_value is not None:
+        start_time = _parse_datetime(from_value)
+        filtered = [
+            item for item in filtered if _parse_datetime(str(item["timestamp"])) >= start_time
+        ]
+    if to is not None:
+        end_time = _parse_datetime(to)
+        filtered = [
+            item for item in filtered if _parse_datetime(str(item["timestamp"])) <= end_time
+        ]
     start = (page - 1) * page_size
-    records = _EVENTS[start : start + page_size]
+    records = filtered[start : start + page_size]
     return {
         "data": records,
         "meta": {
             "page": page,
             "pageSize": page_size,
-            "numberOfPages": ceil(len(_EVENTS) / page_size),
+            "numberOfPages": ceil(len(filtered) / page_size),
         },
     }
