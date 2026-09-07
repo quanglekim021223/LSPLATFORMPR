@@ -50,7 +50,7 @@ class FAMSJob:
         self.writer = bronze_writer
         self._heartbeat_error: Exception | None = None
 
-    async def run(self) -> RunSummary:
+    async def run(self, *, on_started: Callable[[str], None] | None = None) -> RunSummary:
         run_id = str(uuid4())
         owner_task = asyncio.current_task()
         if owner_task is None:
@@ -66,6 +66,8 @@ class FAMSJob:
         )
         try:
             await self.checkpoints.start_run(run_id, VENDOR)
+            if on_started is not None:
+                on_started(run_id)
             await self.checkpoints.add_domains(run_id, list(DOMAINS))
             self.settings.validate_fams_runtime()
             ingestion_date = datetime.now(
@@ -140,6 +142,7 @@ class FAMSJob:
 async def run_fams_ingestion(
     settings: Settings,
     *,
+    on_started: Callable[[str], None] | None = None,
     checkpoint_store: CheckpointStore | None = None,
     bronze_writer: BronzeWriter | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
@@ -160,4 +163,4 @@ async def run_fams_ingestion(
     async with httpx.AsyncClient(timeout=timeout, transport=transport) as http_client:
         client = FAMSClient(settings, http_client, sleep=sleep)
         job = FAMSJob(settings, client, store, writer)
-        return await job.run()
+        return await job.run(on_started=on_started)

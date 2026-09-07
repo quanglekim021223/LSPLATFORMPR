@@ -37,7 +37,7 @@ class LevelUpJob:
         self.writer = bronze_writer
         self._heartbeat_error: Exception | None = None
 
-    async def run(self) -> RunSummary:
+    async def run(self, *, on_started: Callable[[str], None] | None = None) -> RunSummary:
         self._heartbeat_error = None
         current_run_id = str(uuid4())
 
@@ -55,6 +55,8 @@ class LevelUpJob:
         )
         try:
             await self.checkpoints.start_run(current_run_id, "levelup")
+            if on_started is not None:
+                on_started(current_run_id)
             await self.client.authenticate()
             ingestion_date = datetime.now(
                 ZoneInfo(self.settings.ingestion_timezone)
@@ -155,6 +157,7 @@ class LevelUpJob:
 async def run_levelup_ingestion(
     settings: Settings,
     *,
+    on_started: Callable[[str], None] | None = None,
     checkpoint_store: CheckpointStore | None = None,
     bronze_writer: BronzeWriter | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
@@ -178,4 +181,4 @@ async def run_levelup_ingestion(
     async with httpx.AsyncClient(timeout=timeout, transport=transport) as http_client:
         client = LevelUpClient(settings, http_client, sleep=sleep)
         job = LevelUpJob(settings, client, store, writer)
-        return await job.run()
+        return await job.run(on_started=on_started)

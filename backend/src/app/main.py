@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.router import build_api_router
-from app.config.scheduler import ScheduledJob, build_scheduler
+from app.config.scheduler import build_scheduler
 from app.core.config import Settings, get_settings
 from app.core.logging_config import (
     configure_application_logging as _configure_application_logging,
@@ -26,6 +26,7 @@ from app.services.harvard.hmm_service import run_harvard_hmm_ingestion
 from app.services.harvard.spark_service import run_harvard_spark_ingestion
 from app.services.levelup.service import run_levelup_ingestion
 from app.services.linkedin.service import run_linkedin_ingestion
+from app.services.manual_pull import IngestionJob, ManualPullManager
 from app.services.skillup.service import run_skillup_ingestion
 
 logger = logging.getLogger(__name__)
@@ -46,7 +47,7 @@ def build_ingestion_jobs(
     config: Settings,
     store: CheckpointStore,
     writer: BronzeWriter,
-) -> dict[str, ScheduledJob]:
+) -> dict[str, IngestionJob]:
     runners: tuple[tuple[str, bool, IngestionRunner], ...] = (
         ("levelup", config.levelup_configured, run_levelup_ingestion),
         ("skillup", config.skillup_configured, run_skillup_ingestion),
@@ -73,8 +74,17 @@ def _bind_scheduled_job(
     config: Settings,
     store: CheckpointStore,
     writer: BronzeWriter,
-) -> ScheduledJob:
-    async def scheduled_ingestion() -> object:
+) -> IngestionJob:
+    async def scheduled_ingestion(
+        *, on_started: Callable[[str], None] | None = None
+    ) -> object:
+        if on_started is not None:
+            return await runner(
+                config,
+                checkpoint_store=store,
+                bronze_writer=writer,
+                on_started=on_started,
+            )
         return await runner(
             config,
             checkpoint_store=store,
@@ -94,6 +104,8 @@ def create_app(
     _configure_application_logging(config.log_level)
     store = checkpoint_store or CheckpointStore(config.checkpoint_db_path)
     writer = bronze_writer or build_bronze_writer(config)
+    jobs = build_ingestion_jobs(config, store, writer)
+    manual_pulls = ManualPullManager(jobs, store)
 
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
@@ -102,7 +114,6 @@ def create_app(
         await store.initialize()
         scheduler = None
         if config.scheduler_may_run:
-            jobs = build_ingestion_jobs(config, store, writer)
             if not jobs:
                 raise ValueError("Scheduler enabled but no vendor is fully configured")
             scheduler = build_scheduler(config, jobs)
@@ -122,6 +133,7 @@ def create_app(
         finally:
             if scheduler is not None:
                 scheduler.shutdown(wait=False)
+            await manual_pulls.close()
 
     application = FastAPI(
         title="FSA Learning Vendor Ingestion",
@@ -136,7 +148,7 @@ def create_app(
         allow_headers=["Authorization", "Content-Type"],
     )
 
-    application.include_router(build_api_router(store, config))
+    application.include_router(build_api_router(store, config, manual_pulls))
 
     return application
 

@@ -54,6 +54,7 @@ class DataCampJob:
     async def run(
         self,
         *,
+        on_started: Callable[[str], None] | None = None,
         content_type: str | None = None,
         event_type: str | None = None,
         from_value: str | None = None,
@@ -70,6 +71,8 @@ class DataCampJob:
         )
         try:
             await self.checkpoints.start_run(current_run_id, VENDOR)
+            if on_started is not None:
+                on_started(current_run_id)
             await self.checkpoints.add_domains(current_run_id, list(DOMAINS))
             ingestion_date = datetime.now(
                 ZoneInfo(self.settings.ingestion_timezone)
@@ -251,6 +254,7 @@ class DataCampJob:
 async def run_datacamp_ingestion(
     settings: Settings,
     *,
+    on_started: Callable[[str], None] | None = None,
     checkpoint_store: CheckpointStore | None = None,
     bronze_writer: BronzeWriter | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
@@ -277,6 +281,7 @@ async def run_datacamp_ingestion(
         client = DataCampClient(settings, http_client, sleep=sleep)
         job = DataCampJob(settings, client, store, writer)
         return await job.run(
+            on_started=on_started,
             content_type=content_type,
             event_type=event_type,
             from_value=from_value,

@@ -55,7 +55,12 @@ class HarvardJob:
         self.sleep = sleep
         self._heartbeat_error: Exception | None = None
 
-    async def run(self, *, start_date: str | None = None) -> RunSummary:
+    async def run(
+        self,
+        *,
+        start_date: str | None = None,
+        on_started: Callable[[str], None] | None = None,
+    ) -> RunSummary:
         current_run_id = str(uuid4())
         owner_task = asyncio.current_task()
         if owner_task is None:
@@ -69,6 +74,8 @@ class HarvardJob:
         )
         try:
             await self.checkpoints.start_run(current_run_id, self.vendor.vendor)
+            if on_started is not None:
+                on_started(current_run_id)
             await self.checkpoints.add_domains(current_run_id, list(DOMAINS))
             run_now = self.now()
             ingestion_date = run_now.date().isoformat()
@@ -256,6 +263,7 @@ async def run_harvard_ingestion(
     settings: Settings,
     vendor_name: str,
     *,
+    on_started: Callable[[str], None] | None = None,
     checkpoint_store: CheckpointStore | None = None,
     bronze_writer: BronzeWriter | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
@@ -298,7 +306,7 @@ async def run_harvard_ingestion(
             now=clock,
             sleep=sleep,
         )
-        return await job.run(start_date=start_date)
+        return await job.run(start_date=start_date, on_started=on_started)
 
 
 def _catalog_start_date(watermark: str | None) -> str | None:

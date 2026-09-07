@@ -55,6 +55,7 @@ class SkillUpJob:
     async def run(
         self,
         *,
+        on_started: Callable[[str], None] | None = None,
         taxonomy_params: Mapping[str, Any] | None = None,
         skill_profile_modified_since: str | None = None,
         search_text: str | None = None,
@@ -74,6 +75,8 @@ class SkillUpJob:
         )
         try:
             await self.checkpoints.start_run(current_run_id, VENDOR)
+            if on_started is not None:
+                on_started(current_run_id)
             await self.checkpoints.add_domains(current_run_id, list(DOMAINS))
             ingestion_date = datetime.now(
                 ZoneInfo(self.settings.ingestion_timezone)
@@ -280,6 +283,7 @@ class SkillUpJob:
 async def run_skillup_ingestion(
     settings: Settings,
     *,
+    on_started: Callable[[str], None] | None = None,
     checkpoint_store: CheckpointStore | None = None,
     bronze_writer: BronzeWriter | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
@@ -308,6 +312,7 @@ async def run_skillup_ingestion(
         client = SkillUpClient(settings, http_client, sleep=sleep)
         job = SkillUpJob(settings, client, store, writer)
         return await job.run(
+            on_started=on_started,
             taxonomy_params=taxonomy_params,
             skill_profile_modified_since=skill_profile_modified_since,
             search_text=search_text,

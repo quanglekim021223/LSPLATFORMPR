@@ -8,13 +8,16 @@ from app.api.v1.endpoints.jobs import build_job_router
 from app.auth.dependencies import build_admin_dependency
 from app.core.config import Settings
 from app.repositories import CheckpointStore
+from app.services.manual_pull import ManualPullManager
 
 
-def build_api_router(checkpoints: CheckpointStore, settings: Settings) -> APIRouter:
+def build_api_router(
+    checkpoints: CheckpointStore, settings: Settings, manual_pulls: ManualPullManager
+) -> APIRouter:
     router = APIRouter()
     router.include_router(build_health_router(checkpoints))
     router.include_router(build_auth_router(settings))
     router.include_router(
-        build_job_router(checkpoints, build_admin_dependency(settings))
+        build_job_router(checkpoints, build_admin_dependency(settings), manual_pulls)
     )
     return router

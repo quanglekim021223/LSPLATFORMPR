@@ -39,11 +39,63 @@ FastAPI lifespan / APScheduler, or Azure Functions Timer Trigger
 → LocalBronzeWriter + SQLite run summary
 ```
 
-There is no public manual-trigger endpoint. `GET /health`, `GET /ready`, and
+Authenticated manual pulls use `POST /jobs/{vendor}/pull` (see below).
+`GET /health`, `GET /ready`, and
 `GET /jobs/levelup/latest`, `GET /jobs/skillup/latest`, `GET /jobs/datacamp/latest`,
 `GET /jobs/coursera/latest`, `GET /jobs/linkedin/latest`, `GET /jobs/harvard-hmm/latest`, and
 `GET /jobs/harvard-spark/latest`, and `GET /jobs/fams/latest` expose operational state without
 credentials or raw personal data.
+
+### Manual pull from the frontend (local demo)
+
+Each vendor button calls `POST /jobs/{vendor}/pull` with no request body. Supported
+URL values are `levelup`, `skillup`, `datacamp`, `coursera`, `linkedin`,
+`harvard-hmm`, `harvard-spark`, and `fams`. The backend runs **only that vendor's**
+existing ingestion service, including its configured domains, filters, incremental
+behavior, raw Bronze writer, and checkpoints. It does not trigger all vendors,
+replace the scheduler, or clear existing data. For a local demo, configure
+`BRONZE_STORAGE_TYPE=local` and `SCHEDULER_ENABLED=false`.
+
+Use the admin JWT returned by `POST /auth/login` for both starting and polling:
+
+```http
+POST /jobs/fams/pull
+Authorization: Bearer <admin JWT>
+```
+
+After the service acquires its vendor lock and creates a run, the API returns
+`202 Accepted`, a `Location` header, and this JSON shape:
+
+```json
+{
+  "run_id": "11111111-1111-4111-8111-111111111111",
+  "vendor": "fams",
+  "status": "accepted",
+  "status_url": "/jobs/runs/11111111-1111-4111-8111-111111111111"
+}
+```
+
+FE should poll `GET {status_url}` with the same JWT (for example, every 1–2 seconds)
+until `status` changes from `running` to `succeeded`, `partial_failure`, or `failed`.
+The response is the existing run summary with counters such as `records_by_domain`;
+it is **not** a percentage-progress contract. A `202` response means the run started,
+not that ingestion succeeded. Use `run_id`, rather than `/latest`, to track a specific
+button click. Harvard summaries retain internal vendor keys `harvard_hmm` and
+`harvard_spark`, while their URL slugs use hyphens.
+
+- `401`/`403`: missing/invalid token or a non-admin user.
+- `404`: unknown vendor or run ID.
+- `409`: the same vendor is already running, including a scheduled run. Do not
+  start another pull; continue monitoring the existing run via `/jobs/{vendor}/latest`.
+- `503`: vendor not configured or ingestion could not be started.
+
+Tasks run inside the local API process. Keep that process running while pulling;
+graceful shutdown cancels owned tasks and marks unfinished runs failed. A hard crash
+can leave a run marked `running` until operational recovery and the vendor lock TTL
+expires. This is **not a durable queue for Azure Functions/serverless execution**;
+production background execution needs a durable worker/queue. CSV export, clearing
+Bronze data, and realtime percentage progress are separate capabilities, not added
+by this manual-trigger endpoint.
 
 ## Code layout
 

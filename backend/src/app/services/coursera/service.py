@@ -50,7 +50,7 @@ class CourseraJob:
         self.writer = bronze_writer
         self._heartbeat_error: Exception | None = None
 
-    async def run(self) -> RunSummary:
+    async def run(self, *, on_started: Callable[[str], None] | None = None) -> RunSummary:
         current_run_id = str(uuid4())
         owner_task = asyncio.current_task()
         if owner_task is None:
@@ -64,6 +64,8 @@ class CourseraJob:
         )
         try:
             await self.checkpoints.start_run(current_run_id, VENDOR)
+            if on_started is not None:
+                on_started(current_run_id)
             await self.checkpoints.add_domains(current_run_id, list(DOMAINS))
             self.settings.validate_coursera_runtime()
             self.client.content_detail_path("configuration-check")
@@ -242,6 +244,7 @@ class CourseraJob:
 async def run_coursera_ingestion(
     settings: Settings,
     *,
+    on_started: Callable[[str], None] | None = None,
     checkpoint_store: CheckpointStore | None = None,
     bronze_writer: BronzeWriter | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
@@ -261,7 +264,7 @@ async def run_coursera_ingestion(
     )
     async with httpx.AsyncClient(timeout=timeout, transport=transport) as http_client:
         client = CourseraClient(settings, http_client, sleep=sleep)
-        return await CourseraJob(settings, client, store, writer).run()
+        return await CourseraJob(settings, client, store, writer).run(on_started=on_started)
 
 
 def _parse_epoch(value: str | None) -> int | None:

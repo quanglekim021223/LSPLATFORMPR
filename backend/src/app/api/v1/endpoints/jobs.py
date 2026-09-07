@@ -1,17 +1,71 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from typing import Literal
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Response, status
+from pydantic import BaseModel
 
 from app.auth.dependencies import AdminDependency
 from app.models import RunSummary
-from app.repositories import CheckpointStore
+from app.repositories import CheckpointStore, JobAlreadyRunning
+from app.services.manual_pull import ManualPullManager
+
+VENDOR_KEYS = {
+    "levelup": "levelup",
+    "skillup": "skillup",
+    "datacamp": "datacamp",
+    "coursera": "coursera",
+    "linkedin": "linkedin",
+    "harvard-hmm": "harvard_hmm",
+    "harvard-spark": "harvard_spark",
+    "fams": "fams",
+}
+
+
+class PullAccepted(BaseModel):
+    run_id: str
+    vendor: str
+    status: Literal["accepted"] = "accepted"
+    status_url: str
 
 
 def build_job_router(
     checkpoints: CheckpointStore,
     require_admin: AdminDependency,
+    manual_pulls: ManualPullManager,
 ) -> APIRouter:
     router = APIRouter(dependencies=[Depends(require_admin)])
+
+    @router.post("/jobs/{vendor}/pull", status_code=status.HTTP_202_ACCEPTED)
+    async def pull_vendor(vendor: str, response: Response) -> PullAccepted:
+        vendor_key = VENDOR_KEYS.get(vendor)
+        if vendor_key is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown vendor")
+        if vendor_key not in manual_pulls.jobs:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE, "Vendor is not configured for ingestion"
+            )
+        try:
+            run_id = await manual_pulls.start(vendor_key)
+        except JobAlreadyRunning as exc:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, "An ingestion for this vendor is already running"
+            ) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE, "Unable to start ingestion"
+            ) from exc
+        status_url = f"/jobs/runs/{run_id}"
+        response.headers["Location"] = status_url
+        return PullAccepted(run_id=run_id, vendor=vendor_key, status_url=status_url)
+
+    @router.get("/jobs/runs/{run_id}")
+    async def get_job_run(run_id: UUID) -> RunSummary:
+        summary = await checkpoints.get_run(str(run_id))
+        if summary is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Run not found")
+        return summary
 
     async def latest(vendor: str, display_name: str) -> RunSummary:
         summary = await checkpoints.latest_run(vendor)
