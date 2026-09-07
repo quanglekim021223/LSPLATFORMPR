@@ -124,7 +124,7 @@ deploy-dev:
   stage: deploy
 
   tags:
-    - vm-az-gitlab
+    - vm-az-gitlab-be
 
   image: mcr.microsoft.com/azure-cli:latest
   timeout: 30m
