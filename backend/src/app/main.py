@@ -97,7 +97,10 @@ def create_app(
     store = checkpoint_store or CheckpointStore(config.checkpoint_db_path)
     writer = bronze_writer or build_bronze_writer(config)
     configured_jobs = ingestion_jobs or build_ingestion_jobs(config, store, writer)
-    coordinator = IngestionCoordinator(configured_jobs)
+    coordinator = IngestionCoordinator(
+        configured_jobs,
+        progress_reader=store.latest_run,
+    )
  
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:

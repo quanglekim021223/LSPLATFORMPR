@@ -27,6 +27,16 @@ logger = logging.getLogger(__name__)
 
 _IS_WINDOWS = os.name == "nt"
 _WRITE_RETRY_DELAYS = (0.05, 0.10, 0.20, 0.40, 0.80, 1.60, 3.20)
+_JSON_RECORD_KEYS = (
+    "courses",
+    "enrollments",
+    "items",
+    "list",
+    "reports",
+    "elements",
+    "classList",
+    "studentList",
+)
 
 
 class LocalBronzeWriter:
@@ -230,7 +240,7 @@ class LocalBronzeWriter:
         payload = path.read_bytes()
         if path.suffix.casefold() == ".json":
             try:
-                return [json.loads(payload)]
+                return LocalBronzeWriter._json_records(json.loads(payload))
             except (json.JSONDecodeError, UnicodeDecodeError):
                 pass
         if path.suffix.casefold() == ".csv":
@@ -241,6 +251,30 @@ class LocalBronzeWriter:
             except UnicodeDecodeError:
                 pass
         return [{"raw_base64": base64.b64encode(payload).decode("ascii")}]
+
+    @staticmethod
+    def _json_records(payload: object) -> list[object]:
+        if isinstance(payload, list):
+            return list(payload)
+        if not isinstance(payload, dict):
+            return [payload]
+
+        containers = [payload]
+        nested_data = payload.get("data")
+        if isinstance(nested_data, list):
+            return list(nested_data)
+        if isinstance(nested_data, dict):
+            containers.append(nested_data)
+
+        records: list[object] = []
+        recognized_container = False
+        for container in containers:
+            for key in _JSON_RECORD_KEYS:
+                value = container.get(key)
+                if isinstance(value, list):
+                    recognized_container = True
+                    records.extend(value)
+        return records if recognized_container else [payload]
 
     def _manifest_lock_for(self, path: Path) -> Lock:
         key = path.resolve()
