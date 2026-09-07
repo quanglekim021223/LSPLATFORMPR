@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 from datetime import UTC, datetime
 
@@ -10,6 +11,7 @@ from app.repositories import BronzeWriter, CheckpointStore
 from app.schemas.datacamp import extra_field_paths, validate_live_catalog
 
 DOMAIN = "course_catalog_live"
+CONTENT_FINGERPRINT_SCOPE = "content_fingerprint"
 logger = logging.getLogger(__name__)
 
 
@@ -30,6 +32,16 @@ async def ingest_live_courses(
                 "DataCamp Live Course Catalog contains new contract fields fields=%s",
                 ",".join(extras),
             )
+        fingerprint = hashlib.sha256(raw_payload).hexdigest()
+        previous_fingerprint = await checkpoints.get_watermark(
+            "datacamp",
+            DOMAIN,
+            CONTENT_FINGERPRINT_SCOPE,
+        )
+        if previous_fingerprint == fingerprint:
+            await checkpoints.record_completed_page(run_id, DOMAIN, 1, 0)
+            await checkpoints.mark_domain(run_id, DOMAIN, "completed")
+            return
         await writer.write_page(
             PageWrite(
                 vendor="datacamp",
@@ -44,6 +56,13 @@ async def ingest_live_courses(
             )
         )
         await checkpoints.record_completed_page(run_id, DOMAIN, 1, records_count)
+        await checkpoints.set_watermark(
+            "datacamp",
+            DOMAIN,
+            fingerprint,
+            run_id,
+            CONTENT_FINGERPRINT_SCOPE,
+        )
         await checkpoints.mark_domain(run_id, DOMAIN, "completed")
     except Exception as exc:
         message = sanitize_text(exc, client.sensitive_values())
