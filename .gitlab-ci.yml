@@ -22,7 +22,7 @@ build-function-dev:
   stage: build
 
   tags:
-    - vm-az-gitlab
+    - vm-az-gitlab-be
 
   image: python:3.11-slim
   timeout: 30m
