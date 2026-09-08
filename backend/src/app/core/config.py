@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Literal
 from zoneinfo import ZoneInfo
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import AliasChoices, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 FAMS_ALLOWED_STATUSES = {
@@ -52,7 +52,10 @@ class Settings(BaseSettings):
     levelup_courses_path: str = "/courses"
     levelup_username: SecretStr = Field(default=SecretStr(""))
     levelup_password: SecretStr = Field(default=SecretStr(""))
-    levelup_api_key: SecretStr = Field(default=SecretStr(""))
+    levelup_api_key: SecretStr = Field(
+        default=SecretStr(""),
+        validation_alias=AliasChoices("LEVELUP_KEY", "levelup_api_key"),
+    )
     levelup_api_version: str = "2"
     levelup_page_size: int = Field(default=1000, ge=1, le=1000)
     levelup_max_concurrency: int = Field(default=5, ge=1, le=100)
@@ -60,7 +63,10 @@ class Settings(BaseSettings):
 
     skillup_intelligence_base_url: str = "https://api.skillsintelligence.imocha.io"
     skillup_reports_base_url: str = "https://apiv3.imocha.io"
-    skillup_api_key: SecretStr = Field(default=SecretStr(""))
+    skillup_api_key: SecretStr = Field(
+        default=SecretStr(""),
+        validation_alias=AliasChoices("SKILLUP_KEY", "skillup_api_key"),
+    )
     skillup_page_size: int = Field(default=100, ge=1, le=100)
     skillup_assessment_start_date: str = "2000-01-01T00:00:00Z"
     skillup_assessment_daily_overlap_days: int = Field(default=3, ge=0)
@@ -76,7 +82,10 @@ class Settings(BaseSettings):
 
     coursera_token_url: str = ""
     coursera_base_url: str = ""
-    coursera_username: SecretStr = Field(default=SecretStr(""))
+    coursera_username: SecretStr = Field(
+        default=SecretStr(""),
+        validation_alias=AliasChoices("COURSERA_USER_NAME", "coursera_username"),
+    )
     coursera_password: SecretStr = Field(default=SecretStr(""))
     coursera_org_id: str = ""
     coursera_content_detail_path_template: str = ""
@@ -90,6 +99,7 @@ class Settings(BaseSettings):
     linkedin_base_url: str = ""
     linkedin_client_id: SecretStr = Field(default=SecretStr(""))
     linkedin_client_secret: SecretStr = Field(default=SecretStr(""))
+    linkedin_grant_type: Literal["client_credentials"] = "client_credentials"
     linkedin_page_size: int = Field(default=100, ge=1, le=100)
     linkedin_history_start_time: str = ""
     linkedin_history_daily_lookback_days: int = Field(default=3, ge=0)
@@ -100,17 +110,32 @@ class Settings(BaseSettings):
 
     harvard_catalog_base_url: str = "https://catalog-api.myhbp.org/v1"
     harvard_page_size: int = Field(default=1000, ge=1, le=1000)
-    harvard_hmm_client_id: SecretStr = Field(default=SecretStr(""))
-    harvard_hmm_client_secret: SecretStr = Field(default=SecretStr(""))
+    harvard_hmm_client_id: SecretStr = Field(
+        default=SecretStr(""),
+        validation_alias=AliasChoices("harvard_hmm_client_id", "HARVARD_API_USER_NAME"),
+    )
+    harvard_hmm_client_secret: SecretStr = Field(
+        default=SecretStr(""),
+        validation_alias=AliasChoices("harvard_hmm_client_secret", "HARVARD_API_PASSWORD"),
+    )
     harvard_hmm_org_key: str = ""
     harvard_hmm_history_start_date: str = ""
-    harvard_spark_client_id: SecretStr = Field(default=SecretStr(""))
-    harvard_spark_client_secret: SecretStr = Field(default=SecretStr(""))
+    harvard_spark_client_id: SecretStr = Field(
+        default=SecretStr(""),
+        validation_alias=AliasChoices("harvard_spark_client_id", "HARVARD_API_USER_NAME"),
+    )
+    harvard_spark_client_secret: SecretStr = Field(
+        default=SecretStr(""),
+        validation_alias=AliasChoices("harvard_spark_client_secret", "HARVARD_API_PASSWORD"),
+    )
     harvard_spark_org_key: str = ""
     harvard_spark_history_start_date: str = ""
     harvard_sftp_host: str = "transfer.hbsp.harvard.edu"
     harvard_sftp_port: int = Field(default=22, ge=1, le=65535)
-    harvard_sftp_username: SecretStr = Field(default=SecretStr(""))
+    harvard_sftp_username: SecretStr = Field(
+        default=SecretStr(""),
+        validation_alias=AliasChoices("HARVARD_SFTP_USER_NAME", "harvard_sftp_username"),
+    )
     harvard_sftp_password: SecretStr = Field(default=SecretStr(""))
     harvard_sftp_remote_dir: str = "/fpt_sparkprod_feed"
     harvard_sftp_known_hosts: Path | None = None

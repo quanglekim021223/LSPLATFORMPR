@@ -85,7 +85,7 @@ def build_bronze_router(
             },
         )
  
-    @router.delete("", response_model=CleanupResponse)
+    @router.delete("")
     async def cleanup(request: CleanupRequest) -> CleanupResponse:
         vendors = _validated_vendors(request.vendors)
         if coordinator.has_active_vendor(vendors):

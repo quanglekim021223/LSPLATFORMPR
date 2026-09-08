@@ -26,7 +26,7 @@ def build_ingestion_router(
         dependencies=[Depends(require_admin)],
     )
  
-    @router.post("", response_model=IngestionState, status_code=status.HTTP_202_ACCEPTED)
+    @router.post("", status_code=status.HTTP_202_ACCEPTED)
     async def start_ingestion(request: StartIngestionRequest) -> IngestionState:
         try:
             return await coordinator.start(request.vendors)
@@ -46,7 +46,7 @@ def build_ingestion_router(
                 detail=str(exc),
             ) from exc
  
-    @router.get("/{job_id}", response_model=IngestionState)
+    @router.get("/{job_id}")
     async def ingestion_status(job_id: str) -> IngestionState:
         state = await coordinator.get(job_id)
         if state is None:
@@ -57,4 +57,3 @@ def build_ingestion_router(
         return state
  
     return router
- 
