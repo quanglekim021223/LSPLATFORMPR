@@ -39,7 +39,7 @@ class FAMSClient:
             "GET",
             f"{self.settings.fams_base_url.rstrip('/')}/api/fsa-reports/training-data",
             headers={
-                "Fsa-Report-Api-Key": self.settings.fams_api_key.get_secret_value(),
+                "Fsa-Report-Api-Key": self.settings.fams_token.get_secret_value(),
                 "Accept": "application/json",
             },
             params=filters,

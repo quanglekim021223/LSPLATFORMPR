@@ -47,7 +47,7 @@ class MockSettings(BaseSettings):
     mock_harvard_sftp_password: SecretStr = SecretStr("")
     mock_harvard_sftp_host_key: str = ""
 
-    mock_fams_api_key: SecretStr = SecretStr("")
+    mock_fams_token: SecretStr = SecretStr("")
 
     def validate_runtime(self) -> None:
         values: dict[str, str] = {
@@ -106,7 +106,7 @@ class MockSettings(BaseSettings):
                 self.mock_harvard_sftp_password.get_secret_value()
             ),
             "MOCK_HARVARD_SFTP_HOST_KEY": self.mock_harvard_sftp_host_key,
-            "MOCK_FAMS_API_KEY": self.mock_fams_api_key.get_secret_value(),
+            "MOCK_FAMS_TOKEN": self.mock_fams_token.get_secret_value(),
         }
         missing = [name for name, value in values.items() if not value]
         if missing:

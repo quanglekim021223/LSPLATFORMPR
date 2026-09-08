@@ -48,7 +48,7 @@ async def test_mock_server_skips_unchanged_fams_response(
 ) -> None:
     settings = settings_factory(
         fams_base_url="http://mock-vendor-hub/fams",
-        fams_api_key="mock-fams-key",
+        fams_token="mock-fams-key",
         fams_load_mode="full",
     )
 
