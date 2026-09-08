@@ -27,6 +27,62 @@ class CheckpointStore:
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         await asyncio.to_thread(self._initialize)
 
+    async def delete_vendor_data(self, vendors: list[str]) -> int:
+        return await asyncio.to_thread(self._delete_vendor_data, vendors)
+
+    async def locked_vendor(self, vendors: list[str]) -> str | None:
+        return await asyncio.to_thread(self._locked_vendor, vendors)
+
+    def _locked_vendor(self, vendors: list[str]) -> str | None:
+        if not vendors:
+            return None
+        placeholders = ",".join("?" for _ in vendors)
+        with self._connect() as connection:
+            row = connection.execute(
+                f"SELECT vendor FROM vendor_locks WHERE vendor IN ({placeholders}) LIMIT 1",
+                vendors,
+            ).fetchone()
+            return str(row["vendor"]) if row is not None else None
+
+    def _delete_vendor_data(self, vendors: list[str]) -> int:
+        if not vendors:
+            return 0
+        placeholders = ",".join("?" for _ in vendors)
+        with self._connect() as connection:
+            locked = connection.execute(
+                f"SELECT vendor FROM vendor_locks WHERE vendor IN ({placeholders}) LIMIT 1",
+                vendors,
+            ).fetchone()
+            if locked is not None:
+                raise JobAlreadyRunning(
+                    f"Cannot clear Bronze data while {locked['vendor']} is running"
+                )
+            run_ids = [
+                str(row["run_id"])
+                for row in connection.execute(
+                    f"SELECT run_id FROM runs WHERE vendor IN ({placeholders})", vendors
+                )
+            ]
+            if run_ids:
+                run_placeholders = ",".join("?" for _ in run_ids)
+                for table in ("checkpoints", "run_courses", "run_domains"):
+                    connection.execute(
+                        f"DELETE FROM {table} WHERE run_id IN ({run_placeholders})",
+                        run_ids,
+                    )
+                connection.execute(
+                    f"DELETE FROM runs WHERE run_id IN ({run_placeholders})", run_ids
+                )
+            for table in (
+                "ingested_source_files",
+                "ingestion_watermarks",
+                "vendor_entity_keys",
+            ):
+                connection.execute(
+                    f"DELETE FROM {table} WHERE vendor IN ({placeholders})", vendors
+                )
+            return len(run_ids)
+
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.database_path, timeout=30)
         connection.row_factory = sqlite3.Row
@@ -364,6 +420,20 @@ class CheckpointStore:
                 (run_id,),
             )
         }
+        last_progress_row = connection.execute(
+            """
+            SELECT MAX(finished_at) AS last_progress_at
+            FROM checkpoints
+            WHERE run_id = ? AND status = 'completed'
+            """,
+            (run_id,),
+        ).fetchone()
+        last_progress_value = (
+            str(last_progress_row["last_progress_at"])
+            if last_progress_row is not None
+            and last_progress_row["last_progress_at"] is not None
+            else None
+        )
         course_totals = {
             item["status"]: int(item["count"])
             for item in connection.execute(
@@ -381,6 +451,11 @@ class CheckpointStore:
             started_at=datetime.fromisoformat(str(row["started_at"])),
             finished_at=(
                 datetime.fromisoformat(str(row["finished_at"])) if row["finished_at"] else None
+            ),
+            last_progress_at=(
+                datetime.fromisoformat(last_progress_value)
+                if last_progress_value is not None
+                else None
             ),
             course_catalog_records=checkpoint_totals.get("course_catalog", 0),
             enrollment_records=checkpoint_totals.get("learning_history", 0),

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
+import shutil
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from math import ceil
 from pathlib import Path
 from typing import Any
@@ -256,10 +258,14 @@ def _fams(total: int) -> dict[str, Any]:
     return {"classes": classes, "students": students}
 
 
-def build_dataset(records_per_vendor: int) -> dict[str, Any]:
+def build_dataset(
+    records_per_vendor: int,
+    *,
+    generated_at: datetime | None = None,
+) -> dict[str, Any]:
     if records_per_vendor < 10:
         raise ValueError("--records must be at least 10")
-    now = datetime.now(UTC)
+    now = generated_at or datetime.now(UTC)
     timestamp = now.isoformat().replace("+00:00", "Z")
     epoch_seconds = int(now.timestamp())
     return {
@@ -278,6 +284,100 @@ def build_dataset(records_per_vendor: int) -> dict[str, Any]:
             "fams": _fams(records_per_vendor),
         },
     }
+
+
+def build_incremental_dataset(
+    records_per_vendor: int,
+    new_records_per_vendor: int,
+    *,
+    updated_at: datetime | None = None,
+) -> dict[str, Any]:
+    """Create a contract-valid second source snapshot with edits and new records."""
+    if new_records_per_vendor < 1:
+        raise ValueError("--new-records must be at least 1")
+
+    now = updated_at or datetime.now(UTC)
+    baseline = build_dataset(records_per_vendor, generated_at=now - timedelta(days=1))
+    expanded = build_dataset(records_per_vendor + new_records_per_vendor, generated_at=now)
+    incremental = copy.deepcopy(baseline)
+    incremental["generated_at"] = now.isoformat().replace("+00:00", "Z")
+    incremental["records_per_vendor"] = records_per_vendor + new_records_per_vendor
+    vendors = incremental["vendors"]
+    expanded_vendors = expanded["vendors"]
+
+    array_collections = {
+        "skillup": ("taxonomy", "skill_profiles", "reports"),
+        "datacamp": ("live_courses", "archived_courses", "events"),
+        "coursera": ("contents", "enrollments"),
+        "linkedin": ("assets", "activity_reports"),
+        "harvard_hmm": ("catalog", "history_rows"),
+        "harvard_spark": ("catalog", "history_rows"),
+        "fams": ("classes", "students"),
+    }
+    for vendor, collections in array_collections.items():
+        for collection in collections:
+            existing = vendors[vendor][collection]
+            source = expanded_vendors[vendor][collection]
+            existing.extend(copy.deepcopy(source[len(existing) :]))
+
+    levelup = vendors["levelup"]
+    expanded_levelup = expanded_vendors["levelup"]
+    levelup["courses"].extend(
+        copy.deepcopy(expanded_levelup["courses"][len(levelup["courses"]) :])
+    )
+    existing_enrollment_ids = {
+        str(record["id"])
+        for records in levelup["enrollments"].values()
+        for record in records
+    }
+    for course_id, records in expanded_levelup["enrollments"].items():
+        additions = [
+            copy.deepcopy(record)
+            for record in records
+            if str(record["id"]) not in existing_enrollment_ids
+        ]
+        if additions:
+            levelup["enrollments"].setdefault(course_id, []).extend(additions)
+
+    timestamp = now.isoformat().replace("+00:00", "Z")
+    epoch_seconds = int(now.timestamp())
+    levelup["courses"][0]["name"] += " (Updated)"
+    levelup["courses"][0]["dateEdited"] = timestamp
+
+    skillup = vendors["skillup"]
+    skillup["taxonomy"][0]["displayName"] += " (Updated)"
+    taxonomy_id = str(skillup["taxonomy"][0]["taxonomySkillId"])
+    skillup["taxonomy_modified_on"][taxonomy_id] = timestamp
+    for key, value in expanded_vendors["skillup"]["taxonomy_modified_on"].items():
+        skillup["taxonomy_modified_on"].setdefault(key, value)
+    for key, value in expanded_vendors["skillup"]["skill_profile_modified_on"].items():
+        skillup["skill_profile_modified_on"].setdefault(key, value)
+
+    datacamp = vendors["datacamp"]
+    datacamp["live_courses"][0]["title"] += " (Updated)"
+    datacamp["live_courses"][0]["updatedAt"] = timestamp
+
+    coursera = vendors["coursera"]
+    coursera["contents"][0]["name"] += " (Updated)"
+    coursera["contents"][0]["lastUpdatedAt"] = epoch_seconds
+
+    linkedin = vendors["linkedin"]
+    linkedin["assets"][0]["title"]["value"] += " (Updated)"
+    linkedin["assets"][0]["details"]["lastUpdatedAt"] = epoch_seconds * 1000
+
+    for vendor in ("harvard_hmm", "harvard_spark"):
+        vendors[vendor]["catalog"][0]["Title"] += " (Updated)"
+        vendors[vendor]["catalog"][0]["LastModifiedDate"] = now.date().isoformat()
+
+    fams = vendors["fams"]
+    fams["classes"][0]["courseStatus"] = (
+        "INPROGRESS"
+        if fams["classes"][0]["courseStatus"] == "CLOSED"
+        else "CLOSED"
+    )
+
+    validate_dataset(incremental)
+    return incremental
 
 
 def validate_dataset(dataset: dict[str, Any]) -> None:
@@ -465,15 +565,69 @@ def _harvard_history_csv(vendor: str, rows: list[dict[str, Any]]) -> bytes:
     return (header + body).encode("utf-8")
 
 
-def generate_data(records: int, output_directory: Path) -> Path:
-    dataset = build_dataset(records)
-    validate_dataset(dataset)
+def generate_data(
+    records: int,
+    output_directory: Path,
+    *,
+    variant: str = "initial",
+    new_records: int = 10,
+) -> Path:
     output_directory = output_directory.resolve()
+    output_directory.mkdir(parents=True, exist_ok=True)
+
+    if variant == "pair":
+        updated_at = datetime.now(UTC)
+        dataset = build_dataset(
+            records,
+            generated_at=updated_at - timedelta(days=1),
+        )
+        incremental_dataset = build_incremental_dataset(
+            records,
+            new_records,
+            updated_at=updated_at,
+        )
+        validate_dataset(dataset)
+        validate_dataset(incremental_dataset)
+        _write_vendor_files(dataset, output_directory)
+        _write_vendor_files(incremental_dataset, output_directory / "incremental")
+        return output_directory
+
+    dataset = (
+        build_incremental_dataset(records, new_records)
+        if variant == "incremental"
+        else build_dataset(records)
+    )
+    validate_dataset(dataset)
+    _write_vendor_files(dataset, output_directory)
+    return output_directory
+
+
+def _write_vendor_files(dataset: dict[str, Any], output_directory: Path) -> None:
     output_directory.mkdir(parents=True, exist_ok=True)
     for vendor, data in dataset["vendors"].items():
         (output_directory / f"{vendor}.json").write_text(
             json.dumps(data, ensure_ascii=False),
             encoding="utf-8",
+        )
+
+
+def activate_incremental_snapshot(output_directory: Path) -> Path:
+    output_directory = output_directory.resolve()
+    incremental_directory = output_directory / "incremental"
+    missing = [
+        vendor
+        for vendor in PERFORMANCE_VENDORS
+        if not (incremental_directory / f"{vendor}.json").is_file()
+    ]
+    if missing:
+        raise ValueError(
+            "Generate the matched scenario pair before activation; missing: "
+            + ", ".join(missing)
+        )
+    for vendor in PERFORMANCE_VENDORS:
+        shutil.copyfile(
+            incremental_directory / f"{vendor}.json",
+            output_directory / f"{vendor}.json",
         )
     return output_directory
 
@@ -482,7 +636,18 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Generate validated performance data for all 8 mock vendors."
     )
-    parser.add_argument("--records", type=int, default=1_000)
+    parser.add_argument("--records", type=int, default=10_000)
+    parser.add_argument(
+        "--variant",
+        choices=("initial", "incremental", "pair"),
+        default="initial",
+    )
+    parser.add_argument("--new-records", type=int, default=10)
+    parser.add_argument(
+        "--activate-incremental",
+        action="store_true",
+        help="Replace the active vendor files with the generated incremental snapshot.",
+    )
     parser.add_argument(
         "--output-dir",
         type=Path,
@@ -490,12 +655,37 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    output = generate_data(args.records, args.output_dir)
-    size_mb = sum(path.stat().st_size for path in output.glob("*.json")) / 1024 / 1024
-    print(
-        f"Generated 8 x {args.records:,} records in {output} ({size_mb:.2f} MB)",
-        flush=True,
+    if args.activate_incremental:
+        output = activate_incremental_snapshot(args.output_dir)
+        print(f"Activated incremental source data in {output}", flush=True)
+        return
+
+    output = generate_data(
+        args.records,
+        args.output_dir,
+        variant=args.variant,
+        new_records=args.new_records,
     )
+    size_mb = sum(path.stat().st_size for path in output.glob("*.json")) / 1024 / 1024
+    if args.variant == "pair":
+        incremental_size_mb = sum(
+            path.stat().st_size for path in (output / "incremental").glob("*.json")
+        ) / 1024 / 1024
+        print(
+            f"Generated matched snapshots: 8 x {args.records:,} initial records "
+            f"({size_mb:.2f} MB) and 8 x {args.records + args.new_records:,} "
+            f"incremental records ({incremental_size_mb:.2f} MB) in {output}",
+            flush=True,
+        )
+    else:
+        output_records = args.records + (
+            args.new_records if args.variant == "incremental" else 0
+        )
+        print(
+            f"Generated 8 x {output_records:,} {args.variant} records "
+            f"in {output} ({size_mb:.2f} MB)",
+            flush=True,
+        )
 
 
 if __name__ == "__main__":

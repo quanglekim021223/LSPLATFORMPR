@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -22,9 +21,7 @@ async def test_mock_server_runs_full_linkedin_pipeline(
         linkedin_client_id="mock-linkedin-client",
         linkedin_client_secret="mock-linkedin-secret",
         linkedin_page_size=2,
-        linkedin_history_start_time=(
-            datetime.now(UTC) - timedelta(hours=1)
-        ).isoformat(),
+        linkedin_history_start_time="2026-08-20T00:00:00Z",
         linkedin_asset_detail_query_template=(
             "q=criteria&assetFilteringCriteria.urn={urn}"
         ),
@@ -41,4 +38,16 @@ async def test_mock_server_runs_full_linkedin_pipeline(
         "course_catalog": 3,
         "course_detail": 3,
         "learning_history": 1,
+    }
+
+    incremental = await run_linkedin_ingestion(
+        settings,  # type: ignore[arg-type]
+        transport=httpx.ASGITransport(app=mock_vendor_hub),
+        sleep=no_sleep,
+    )
+
+    assert incremental.status == RunStatus.SUCCEEDED
+    assert incremental.records_by_domain == {
+        "course_catalog": 0,
+        "learning_history": 0,
     }

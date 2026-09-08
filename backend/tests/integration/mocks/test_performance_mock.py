@@ -2,7 +2,9 @@ from pathlib import Path
 
 from scripts.generate_performance_mock_data import (
     PERFORMANCE_VENDORS,
+    activate_incremental_snapshot,
     build_dataset,
+    build_incremental_dataset,
     generate_data,
     validate_dataset,
 )
@@ -45,6 +47,25 @@ def test_performance_dataset_validates_datacamp_across_multiple_pages() -> None:
     validate_dataset(build_dataset(3_004))
 
 
+def test_incremental_dataset_contains_edits_and_new_records() -> None:
+    dataset = build_incremental_dataset(100, 10)
+
+    validate_dataset(dataset)
+    vendors = dataset["vendors"]
+    assert dataset["records_per_vendor"] == 110
+    assert vendors["levelup"]["courses"][0]["name"].endswith("(Updated)")
+    assert vendors["skillup"]["taxonomy"][0]["displayName"].endswith("(Updated)")
+    assert vendors["datacamp"]["live_courses"][0]["title"].endswith("(Updated)")
+    assert vendors["coursera"]["contents"][0]["name"].endswith("(Updated)")
+    assert vendors["linkedin"]["assets"][0]["title"]["value"].endswith(
+        "(Updated)"
+    )
+    assert vendors["harvard_hmm"]["catalog"][0]["Title"].endswith("(Updated)")
+    assert vendors["harvard_spark"]["catalog"][0]["Title"].endswith("(Updated)")
+    assert vendors["fams"]["classes"][0]["courseStatus"] == "INPROGRESS"
+    assert "status" not in vendors["fams"]["classes"][0]
+
+
 def test_performance_dataset_is_written_as_one_file_per_vendor(tmp_path: Path) -> None:
     output_directory = generate_data(10, tmp_path)
 
@@ -52,3 +73,28 @@ def test_performance_dataset_is_written_as_one_file_per_vendor(tmp_path: Path) -
     assert sorted(path.stem for path in output_directory.glob("*.json")) == sorted(
         PERFORMANCE_VENDORS
     )
+
+
+def test_matched_scenario_pair_is_written_for_incremental_demo(tmp_path: Path) -> None:
+    output_directory = generate_data(
+        10,
+        tmp_path,
+        variant="pair",
+        new_records=2,
+    )
+
+    assert sorted(path.stem for path in output_directory.glob("*.json")) == sorted(
+        PERFORMANCE_VENDORS
+    )
+    assert sorted(
+        path.stem for path in (output_directory / "incremental").glob("*.json")
+    ) == sorted(PERFORMANCE_VENDORS)
+
+    initial_levelup = (output_directory / "levelup.json").read_bytes()
+    incremental_levelup = (
+        output_directory / "incremental" / "levelup.json"
+    ).read_bytes()
+    activate_incremental_snapshot(output_directory)
+
+    assert (output_directory / "levelup.json").read_bytes() == incremental_levelup
+    assert (output_directory / "levelup.json").read_bytes() != initial_levelup

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import UTC, datetime
 from math import ceil
 from typing import Annotated, Any
 
@@ -246,6 +247,23 @@ def _page(
     return records[start : start + page_size], ceil(len(records) / page_size)
 
 
+def _parse_datetime(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _report_timestamp(report: dict[str, Any]) -> datetime:
+    value = report.get("completedOn") or report.get("appearedOn")
+    if not isinstance(value, str):
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "Mock SkillUp report has no activity timestamp",
+        )
+    return _parse_datetime(value)
+
+
 @router.get("/taxonomy")
 async def taxonomy(
     page_number: Annotated[int, Query(alias="PageNumber", ge=1)] = 1,
@@ -319,9 +337,15 @@ async def assessment_history(
     end_date: Annotated[str | None, Query(alias="endDate")] = None,
     api_key: Annotated[str | None, Header(alias="x-api-key")] = None,
 ) -> dict[str, Any]:
-    del start_date, end_date
     _validate_api_key(api_key)
-    reports, total_pages = _page(_REPORTS, page_number, page_size)
+    records = _REPORTS
+    if start_date is not None:
+        start = _parse_datetime(start_date)
+        records = [record for record in records if _report_timestamp(record) >= start]
+    if end_date is not None:
+        end = _parse_datetime(end_date)
+        records = [record for record in records if _report_timestamp(record) <= end]
+    reports, total_pages = _page(records, page_number, page_size)
     if not include_sections:
         reports = [
             {key: value for key, value in report.items() if key != "sections"}
@@ -331,7 +355,7 @@ async def assessment_history(
         "reports": reports,
         "pageNumber": page_number,
         "totalPages": total_pages,
-        "totalCount": len(_REPORTS),
+        "totalCount": len(records),
         "hasPreviousPage": page_number > 1,
         "hasNextPage": page_number < total_pages,
     }

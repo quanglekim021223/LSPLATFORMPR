@@ -1,11 +1,11 @@
 # FSA Learning Vendor Ingestion
-
+ 
 FastAPI service for scheduled ingestion of learning-vendor data into a raw Bronze layer. It
 supports LevelUP (Absorb), SkillUp (iMocha), DataCamp, Coursera, LinkedIn Learning, Harvard HMM,
 Harvard Spark, and FAMS ingestion domains.
-
+ 
 ## Runtime flow
-
+ 
 ```text
 FastAPI lifespan / APScheduler, or Azure Functions Timer Trigger
 ├→ run_levelup_ingestion
@@ -38,15 +38,26 @@ FastAPI lifespan / APScheduler, or Azure Functions Timer Trigger
    └→ GET /api/fsa-reports/training-data once (full or configured filtered mode)
 → LocalBronzeWriter + SQLite run summary
 ```
-
-There is no public manual-trigger endpoint. `GET /health`, `GET /ready`, and
+ 
+`GET /health` and `GET /ready` expose unauthenticated operational health. The following dashboard
+endpoints require the admin Bearer token returned by `POST /auth/login`:
+ 
+- `POST /ingestions` starts a tracked, non-overlapping multi-vendor ingestion job.
+- `GET /ingestions/{job_id}` reports aggregate and per-vendor status, run IDs, record counts, and
+  failures for that exact submission.
+- `GET /bronze/export.csv?vendor=...` exports persisted local Bronze payloads as a raw CSV envelope.
+- `DELETE /bronze` deletes explicitly listed local Bronze vendor directories and their checkpoint
+  state, and refuses to run while an affected vendor is ingesting.
+ 
 `GET /jobs/levelup/latest`, `GET /jobs/skillup/latest`, `GET /jobs/datacamp/latest`,
-`GET /jobs/coursera/latest`, `GET /jobs/linkedin/latest`, `GET /jobs/harvard-hmm/latest`, and
-`GET /jobs/harvard-spark/latest`, and `GET /jobs/fams/latest` expose operational state without
-credentials or raw personal data.
-
+`GET /jobs/coursera/latest`, `GET /jobs/linkedin/latest`, `GET /jobs/harvard-hmm/latest`,
+`GET /jobs/harvard-spark/latest`, and `GET /jobs/fams/latest` expose the latest persisted vendor run.
+ 
+CSV export and cleanup intentionally support `BRONZE_STORAGE_TYPE=local` only in this phase. They
+return `501` for ADLS rather than attempting cloud configuration.
+ 
 ## Code layout
-
+ 
 ```text
 backend/src/app/main.py                  application composition and lifespan
 backend/function_app.py                 Azure Functions ASGI and Timer entrypoint
@@ -62,11 +73,11 @@ backend/src/app/mocks/                   single local mock hub and vendor fixtur
 backend/tests/unit/                      isolated client, schema, core, and repository tests
 backend/tests/integration/               API, service orchestration, and mock-hub tests
 ```
-
+ 
 ## Local setup
-
+ 
 Python 3.11+ is required.
-
+ 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
@@ -75,16 +86,16 @@ cp backend/.env.example backend/.env
 cd backend
 uvicorn app.main:app --reload
 ```
-
+ 
 Fill the vendor values in `backend/.env`; never commit that file. LevelUP authentication follows the
 supplied matrix:
-
+ 
 - `POST /authenticate`
 - JSON fields `username`, `password`, and `privateKey`
 - headers `X-API-Key` and `x-api-version: 2`
 - a plain-string token response (JSON `token` / `access_token` envelopes are also accepted)
 - subsequent `Authorization` header contains the token exactly as returned by Absorb
-
+ 
 LevelUP Course List and Enrollment pages are validated against vendor-specific Pydantic objects
 before they are written to Bronze or their checkpoints are marked completed. Missing required keys,
 incompatible types, invalid ISO-8601 timestamps, or inconsistent `returnedItems` counts fail the
@@ -94,7 +105,7 @@ schema-drift warning containing field paths only, never response values.
 Fields whose non-null production shape has not yet been supplied (`prices`, cost/time, audience,
 goals, and similar nullable fields) remain required keys but temporarily accept their original
 value type.
-
+ 
 SkillUp uses `x-api-key: <SKILLUP_API_KEY>` for every request. Its Intelligence and Reports APIs
 use separate base URLs configured by `SKILLUP_INTELLIGENCE_BASE_URL` and
 `SKILLUP_REPORTS_BASE_URL`. Assessment History performs a full initial/monthly sync, starts daily
@@ -105,7 +116,7 @@ vendor-specific Pydantic contracts before Bronze writes and completed checkpoint
 removal, incompatible types, invalid timestamps, or inconsistent pagination metadata fail only the
 affected domain and do not enter Bronze. Valid responses retain their exact original bytes;
 additive fields are retained and logged by field path without logging employee or report values.
-
+ 
 DataCamp sends `Authorization: Bearer <DATACAMP_TOKEN>` and `Accept: application/json` on every
 request. Live and archived catalogs are fetched once per run because their pagination contract is
 not present in the supplied response envelope. Catalog items expose `updatedAt`, but the
@@ -117,7 +128,7 @@ contracts before Bronze writes. Live catalog rows must have `live=true`, archive
 `live=false`, and Events must use the exact `data` plus `meta` envelope with matching page metadata.
 Contract-invalid responses fail only their domain and do not enter Bronze. Valid responses keep
 their original bytes, while additive fields produce path-only schema-drift warnings.
-
+ 
 DataCamp Learning History uses explicit `from`/`to` event windows. The first run reads from
 `DATACAMP_EVENTS_START_TIME` through the run start time. Normal daily runs start from the last
 successfully stored daily watermark minus `DATACAMP_EVENTS_DAILY_OVERLAP_DAYS` (default 3), every
@@ -125,7 +136,7 @@ seven days a reconciliation run re-reads `DATACAMP_EVENTS_LOOKBACK_DAYS` (defaul
 first run in each new calendar month re-reads the full configured history. The three watermarks
 advance only after every `/v1/events` page has entered Bronze successfully. Explicit `from`/`to`
 arguments remain manual overrides and do not alter scheduled watermarks.
-
+ 
 Coursera exchanges HTTP Basic credentials for one run-scoped access token at
 `COURSERA_TOKEN_URL`, then sends `Authorization: Bearer <token>`. A `401` refreshes the token and
 retries that request exactly once. Course List and Learning History use `start`/`limit` and
@@ -140,7 +151,7 @@ Bronze. Valid response bytes remain unchanged; additive fields are retained and 
 path only. Course Detail must contain exactly one element whose `contentId` matches the request.
 Completion-only enrollment fields (`completedAt`, `grade`, and `contentCertificateUrl`) may be
 absent for incomplete enrollments.
-
+ 
 LinkedIn Learning exchanges form-encoded `client_id` and `client_secret` for one run-scoped token.
 Catalog and activity requests use `Authorization: Bearer <token>`; a `401` refreshes the token and
 retries once. Course Catalog runs a full load when no successful catalog watermark exists. Later
@@ -161,14 +172,14 @@ complete activity range succeeds.
 `LINKEDIN_ASSET_DETAIL_QUERY_TEMPLATE` is deliberately blank in `backend/.env.example`; an
 administrator must provide the exact query string containing one `{urn}` placeholder. The
 production filter is never inferred by code. See the official
-[Learning Assets](https://learn.microsoft.com/en-us/linkedin/learning/reference/learningassets)
-and [Learning Activity Reports](https://learn.microsoft.com/en-us/linkedin/learning/reference/learning-activity-reports-reference)
+[Learning Assets](LinkedIn Learning API Learning Assets - LinkedIn | Microsoft Learn)
+and [Learning Activity Reports](LinkedIn Learning API Reference - Learning Activity Reports - LinkedIn | Microsoft Learn)
 contracts. Token, Learning Assets, Asset Detail, and Learning Activity Reports are validated
 against LinkedIn-specific Pydantic contracts before Bronze is written. Contract-invalid responses
 fail the affected domain and are not stored in Bronze. Valid response bytes remain unchanged;
 additive fields are retained and logged by field path only. Asset Detail must contain exactly one
 element whose `urn` matches the requested URN.
-
+ 
 Harvard HMM and Harvard Spark share the same implementation but use separate vendor names,
 credentials, Catalog codes, locks, run summaries, and Bronze directories. Each branch obtains one
 Catalog token with HTTP Basic credentials and form scope `hbp.org.api/catalog.read`; a `401`
@@ -180,7 +191,7 @@ Token and Catalog responses use shared Harvard Pydantic contracts. HMM and Spark
 separate header/row contracts because their column names and shapes differ. Contract-invalid JSON
 or CSV fails the affected domain and is not written to Bronze; valid payload bytes are preserved
 unchanged. Additive Catalog fields are retained and logged by field path only.
-
+ 
 Learning History does not use the Catalog token. It connects with `asyncssh`, and
 `HARVARD_SFTP_KNOWN_HOSTS` must point to a trusted OpenSSH known-hosts file. Unknown host keys are
 never accepted automatically. For local demos only, `HARVARD_SFTP_MOCK_ENABLED=true` replaces the
@@ -199,12 +210,12 @@ daily-only behavior. One SFTP session is reused for the entire backfill run. CSV
 then the original bytes are written unchanged; the manifest contains one `files`
 entry per download with remote path/name, size, remote modified time, download time, SHA-256, run
 ID, and ingestion date.
-
+ 
 Transient SFTP connection errors (timeout, connection reset/lost, and OS network errors) reopen
 the session and retry up to `HARVARD_SFTP_MAX_RETRIES` times, default `3`, with backoff. Missing
 files continue to use the polling deadline. Authentication and SSH host-key failures are not
 retried.
-
+ 
 FAMS calls one internal endpoint with `Fsa-Report-Api-Key: <FAMS_API_KEY>`. The scheduled Full mode
 still downloads the complete JSON response because the API has no update-time filter. After the
 response passes its contract, the job compares an order-independent fingerprint of `classList`
@@ -222,54 +233,67 @@ There is deliberately no `both` mode, OAuth flow, or separate raw file for `clas
 `studentList`. A run succeeds only when `success=true`, `data` is an object, and both lists are
 arrays. The record count is the combined size of those two lists.
 Invalid contract responses are marked failed and are not written to Bronze.
-
+ 
 Run checks with:
-
+ 
 ```bash
 ruff check .
 mypy src/app
 pytest
 ```
-
+ 
 ## Runtime logs
-
+ 
 Set `LOG_LEVEL=INFO` for concise operational logs: run start, run result, duration, total records by
 domain, retry warnings, schema drift, and failures. Failed pages include their domain, offset,
 retryability, and sanitized error message. Set `LOG_LEVEL=DEBUG` only when troubleshooting deeply;
 it additionally shows every HTTP response and successful Bronze page/file write.
-
+ 
 Query parameters, request headers, credentials, tokens, API keys, raw response content, and learner
 data are deliberately excluded from these logs. Retry logs include only the safe endpoint path,
 status or network error type, attempt number, and wait time.
-
+ 
 ## Local multi-vendor mock demo
-
-The local `backend/.env` points every mock vendor to a path on the same port. Start these two
+ 
+The local `backend/.env` points every ingestion client to the shared mock hub on port `9000` and
+keeps the ingestion API on port `8000`. Start these two
 processes in separate terminals from the repository root:
-
+ 
+Generate the contract-valid performance fixtures first. The default is 10,000 logical records for
+each of the eight vendors:
+ 
+```bash
+cd backend
+python scripts/generate_performance_mock_data.py
+```
+ 
 ```bash
 # Terminal 1: shared upstream mock hub
 cd backend
 uvicorn app.mocks.app:app --host 127.0.0.1 --port 9000
-
+ 
 # Terminal 2: ingestion service and scheduler
 cd backend
 uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
-
+ 
 Mock authentication has independent client-side and vendor-side settings. For example,
 `SKILLUP_API_KEY` is what the ingestion client sends, while `MOCK_SKILLUP_API_KEY` is what the mock
 vendor accepts. Matching values succeed; different values return `401`, which allows realistic
 negative authentication tests. The same pattern covers direct API keys, pre-issued Bearer tokens,
 username/password login, and OAuth client credentials. Access tokens returned by the mock token
 endpoints come from the corresponding `MOCK_*_ACCESS_TOKEN` settings and are never logged.
-
+ 
 The generated Harvard SFTP mock also compares the configured client username/password with its
 `MOCK_HARVARD_SFTP_*` values and requires the configured `HARVARD_SFTP_KNOWN_HOSTS` file to contain
 the expected mock host key. This checks the application's authentication and trust configuration;
 it does not implement an SSH network protocol or replace the real `asyncssh` host-key verification
 used when `HARVARD_SFTP_MOCK_ENABLED=false`.
-
+ 
+The React dashboard calls port `8000`; it never calls the mock hub or `/mock-data` directly. A
+manual pull invokes the existing vendor runners against port `9000`, validates their real response
+contracts, applies backend incremental rules, and writes raw responses under `backend/data/bronze`.
+ 
 For a quick scheduler test, set `INGESTION_TIME` in `backend/.env` to a future minute in
 `Asia/Ho_Chi_Minh` before starting Terminal 2. At that minute the single scheduler registers and
 starts `levelup-daily-ingestion`, `skillup-daily-ingestion`, `datacamp-daily-ingestion`,
@@ -282,32 +306,33 @@ check the relevant
 `/jobs/{vendor}/latest`
 endpoints and vendor directories under
 `backend/data/bronze/` (the configured `./data/bronze` path is relative to the `backend/`
-working directory). Swagger on port `8000` is status-only. The shared mock Swagger at
+working directory). Swagger on port `8000` includes authentication, tracked ingestion, status,
+local export, and cleanup. The shared mock Swagger at
 `http://127.0.0.1:9000/docs` exposes all mock vendors and can grow to include future vendor routers
 without adding more processes.
-
+ 
 ## Azure Functions local entrypoint
-
+ 
 `backend/function_app.py` exposes the existing FastAPI application through an ASGI Function and
 registers one Python v2 Timer Trigger. The Timer only composes existing ingestion runners; vendor
 logic remains in `src/app/services/`.
-
+ 
 ```text
 Azure Functions Timer Trigger
 → app.main.build_ingestion_jobs()
 → existing run_*_ingestion()
 → service → client → contract → repository/writer
 ```
-
+ 
 Install the backend dependencies, create the local Functions settings file, then start Azure
 Functions Core Tools from `backend/`:
-
+ 
 ```bash
 python -m pip install -e '.[dev]'
 cp local.settings.example.json local.settings.json
 func start
 ```
-
+ 
 The example schedule `0 0 22 * * *` is an Azure Functions NCRONTAB expression for 22:00 UTC,
 equivalent to 05:00 in `Asia/Ho_Chi_Minh`. Keep `SCHEDULER_ENABLED=false` when the Timer Trigger is
 active so APScheduler does not launch the same ingestion a second time. The Azure Functions
@@ -318,63 +343,63 @@ empty, so `/health`, `/ready`, and `/jobs/{vendor}/latest` retain their existing
 Functions use Function-level authorization when deployed; local Functions Core Tools development
 does not require committing a key. A delayed invocation logs `past_due` before ingestion starts.
 Never commit `local.settings.json`.
-
+ 
 The writer is selected by `BRONZE_STORAGE_TYPE`: local development uses `LocalBronzeWriter`, while
 Azure deployment uses `ADLSGen2BronzeWriter`. The SQLite checkpoint repository remains local to the
 Function instance in this phase; a durable shared run repository is still a later deployment step.
-
+ 
 ### Azure Functions runtime storage
-
+ 
 The Timer Trigger requires host storage even when the Function App is limited to one instance. It
 uses this storage for timer monitoring, singleton leases, host coordination, and Functions host
 state. This storage is separate from the ADLS Gen2 account selected by `BRONZE_STORAGE_TYPE=adls`.
-
+ 
 Local development uses Azurite through `local.settings.json`:
-
+ 
 ```ini
 AzureWebJobsStorage=UseDevelopmentStorage=true
 ```
-
+ 
 For Azure deployment, prefer a separate general-purpose v2 storage account in the same region as
 the Function App. Enable the Function App system-assigned managed identity, grant it `Storage Blob
 Data Owner` on the runtime storage account, remove the connection-string form of
 `AzureWebJobsStorage`, and configure the identity-based setting:
-
+ 
 ```ini
 AzureWebJobsStorage__accountName=<function-runtime-storage-account>
 AzureWebJobsStorage__credential=managedidentity
 ```
-
+ 
 Do not deploy `UseDevelopmentStorage=true`, a storage account key, or a runtime storage connection
 string. When no `__clientId` or `__managedIdentityResourceId` is configured, `managedidentity`
 uses the system-assigned identity. A custom DNS endpoint or sovereign cloud instead requires the
 service-specific `__blobServiceUri`, `__queueServiceUri`, and `__tableServiceUri` settings.
-
+ 
 The Functions host owns the containers and host artifacts it creates in this account; the setting
 does not select a custom runtime container. A dedicated runtime storage account therefore provides
 the clearest isolation from the Bronze filesystem:
-
+ 
 ```text
 AzureWebJobsStorage__accountName  -> Functions runtime storage
 ADLS_ACCOUNT_NAME                -> Bronze data lake storage
 ADLS_FILE_SYSTEM=bronze          -> Bronze filesystem
 ```
-
+ 
 ### Phase 1 SQLite checkpoint limitation
-
+ 
 For the single-instance Azure Functions demo, configure the checkpoint database on writable
 temporary storage:
-
+ 
 ```ini
 CHECKPOINT_DB_PATH=/tmp/fsa_ingestion.db
 ```
-
+ 
 Keep the Function App maximum instance count at `1` using the scale setting supported by the
 selected hosting plan. This preserves the existing vendor locks, watermarks, source-file metadata,
 and run summaries only while that Function instance and its temporary filesystem survive.
-
+ 
 The accepted Phase 1 limitations are:
-
+ 
 - Restarting, redeploying, recycling, or moving the Function to another instance can delete the
   SQLite checkpoint database.
 - `/jobs/{vendor}/latest` can lose its run history after that state is deleted.
@@ -382,20 +407,20 @@ The accepted Phase 1 limitations are:
   metadata are no longer available.
 - This design is for a single-instance demo only and is not suitable as long-term production
   persistence.
-
+ 
 Do not place the SQLite database in ADLS. ADLS stores immutable Bronze payloads and manifests; a
 shared transactional repository such as Azure SQL replaces SQLite in the later phase.
-
+ 
 ## Scheduler
-
+ 
 The scheduler is disabled by default. To enable the daily 05:00 jobs locally:
-
+ 
 ```text
 SCHEDULER_ENABLED=true
 INGESTION_TIME=05:00
 INGESTION_TIMEZONE=Asia/Ho_Chi_Minh
 ```
-
+ 
 Only vendors with a complete credential configuration are scheduled. LevelUP, SkillUp, DataCamp,
 Coursera, LinkedIn, Harvard HMM, Harvard Spark, and FAMS receive separate APScheduler jobs at the
 same configured time. The
@@ -404,11 +429,11 @@ it independently in every Uvicorn worker or replica. For multi-worker production
 keep it disabled and let Fabric, Azure Data Factory, or another external scheduler own the single
 job invocation. `max_instances=1`, coalescing, and a five-minute misfire grace prevent overlapping
 or accumulated catch-up executions within one process. It is always disabled when `APP_ENV=test`.
-
+ 
 ## Bronze layout
-
+ 
 The following local paths are relative to `backend/`:
-
+ 
 ```text
 data/bronze/levelup/
 ├── course_catalog/ingestion_date=YYYY-MM-DD/run_id=<uuid>/
@@ -418,90 +443,90 @@ data/bronze/levelup/
     └── course_id=<course-id>/
         ├── offset=000000.json
         └── manifest.json
-
+ 
 data/bronze/skillup/
 ├── skill_taxonomy/ingestion_date=YYYY-MM-DD/run_id=<uuid>/
 ├── skill_inventory/ingestion_date=YYYY-MM-DD/run_id=<uuid>/
 └── assessment_history/ingestion_date=YYYY-MM-DD/run_id=<uuid>/
     ├── offset=000001.json
     └── manifest.json
-
+ 
 data/bronze/datacamp/
 ├── course_catalog_live/ingestion_date=YYYY-MM-DD/run_id=<uuid>/
 ├── course_catalog_archived/ingestion_date=YYYY-MM-DD/run_id=<uuid>/
 └── learning_history/ingestion_date=YYYY-MM-DD/run_id=<uuid>/
     ├── offset=000001.json
     └── manifest.json
-
+ 
 data/bronze/coursera/
 ├── course_catalog/ingestion_date=YYYY-MM-DD/run_id=<uuid>/
 ├── course_detail/ingestion_date=YYYY-MM-DD/run_id=<uuid>/
 │   └── course_id=<content-id>/
 └── learning_history/ingestion_date=YYYY-MM-DD/run_id=<uuid>/
-
+ 
 data/bronze/linkedin/
 ├── course_catalog/ingestion_date=YYYY-MM-DD/run_id=<uuid>/
 ├── course_detail/ingestion_date=YYYY-MM-DD/run_id=<uuid>/
 │   └── course_id=<asset-urn>/
 └── learning_history/ingestion_date=YYYY-MM-DD/run_id=<uuid>/
-
+ 
 data/bronze/harvard_hmm/
 ├── course_catalog/ingestion_date=YYYY-MM-DD/run_id=<uuid>/
 └── learning_history/ingestion_date=YYYY-MM-DD/run_id=<uuid>/
     ├── harvard_hmm_reporting_YYYYMMDD.csv
     └── manifest.json
-
+ 
 data/bronze/harvard_spark/
 ├── course_catalog/ingestion_date=YYYY-MM-DD/run_id=<uuid>/
 └── learning_history/ingestion_date=YYYY-MM-DD/run_id=<uuid>/
     ├── harvard_Spark_reporting_YYYYMMDD.csv
     └── manifest.json
-
+ 
 data/bronze/fams/
 └── training_data/ingestion_date=YYYY-MM-DD/run_id=<uuid>/
     ├── offset=000001.json
     └── manifest.json
 ```
-
+ 
 Each page is atomically promoted only after the response succeeds. Manifests are separate from
 raw JSON and include offset, record count, sanitized request parameters, fetch time, and SHA-256.
 Every response body is stored byte-for-byte as received. If a Course Catalog page still contains
 LinkedIn Learning rows, those raw rows remain in Bronze; the client-side filter only prevents their
 course IDs from feeding Learning History. A curated catalog belongs in Silver or a separate output.
-
+ 
 Both implementations return a storage-neutral `StorageWriteResult` containing `uri`, `size_bytes`,
 and `sha256`. Select the backend with these settings:
-
+ 
 ```ini
 # Local development
 BRONZE_STORAGE_TYPE=local
 BRONZE_LOCAL_PATH=./data/bronze
-
+ 
 # Azure deployment
 BRONZE_STORAGE_TYPE=adls
 ADLS_ACCOUNT_NAME=<storage-account-name>
 ADLS_FILE_SYSTEM=bronze
 ADLS_BASE_PATH=
 ```
-
+ 
 `ADLSGen2BronzeWriter` authenticates with `DefaultAzureCredential`; it does not accept or read a
 storage account key. It uploads raw bytes to a temporary path, renames that path to the final
 Bronze path, and writes the manifest only after promotion succeeds. The ADLS account must have
 Hierarchical Namespace enabled so path rename semantics are available. The Function App's
 system-assigned managed identity needs `Storage Blob Data Contributor` scoped to the Bronze
 storage account or container/file system. Create the `bronze` file system before the first run.
-
+ 
 The ADLS path contract remains identical to local storage:
-
+ 
 ```text
 {ADLS_BASE_PATH/}{vendor}/{domain}/ingestion_date=YYYY-MM-DD/run_id=<uuid>/...
 ```
-
+ 
 Do not deploy `local.settings.json` or `.env`. Azure Function App Settings provide non-secret ADLS
 names, and Key Vault references provide vendor credentials.
-
+ 
 ## Retry, concurrency, and checkpoints
-
+ 
 - Timeout, connection failures, HTTP 429, and HTTP 5xx are retried up to
   `HTTP_MAX_RETRIES` times after the initial attempt.
 - `Retry-After` is honored; otherwise exponential backoff with jitter is used.
@@ -549,9 +574,9 @@ names, and Key Vault references provide vendor credentials.
   Harvard Spark, use different lock keys, so their scheduled runs can execute independently.
 - At ingestion startup, terminal checkpoint runs older than `CHECKPOINT_RETENTION_DAYS` are deleted
   with their page/course/domain rows. Running or locked runs are kept.
-
+ 
 ## Information still needed from Minh/team
-
+ 
 1. Production LevelUP tenant/base URL and confirmation that `Authorization` must contain the raw
    token rather than `Bearer <token>`.
 2. Whether the authentication response is always a plain string in every environment.
@@ -576,9 +601,9 @@ names, and Key Vault references provide vendor credentials.
     for every calendar day or omits weekends/holidays.
 15. Production FAMS base URL/API key, IP allowlist, and confirmation that the response field names
     and date-filter semantics match the supplied `fsa-reports-training-data.md` contract.
-
+ 
 ### SkillUp Assessment History date range
-
+ 
 The iMocha `GET /v3/reports` contract returns only the most recent seven days when no range is
 provided. The first run sends `startDate` from `SKILLUP_ASSESSMENT_START_DATE` and `endDate` as the
 current UTC time to backfill history. Daily runs explicitly request from the last successful daily

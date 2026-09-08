@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import httpx
 import pytest
 
 from app.mocks.app import app
+from app.models import RunStatus
+from app.services.fams.service import run_fams_ingestion
+from tests.conftest import no_sleep
 
 
 @pytest.mark.asyncio
@@ -35,3 +40,30 @@ async def test_mock_fams_full_filtered_and_api_key() -> None:
         assert filtered.status_code == 200
         assert len(filtered.json()["data"]["classList"]) == 1
         assert len(filtered.json()["data"]["studentList"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_mock_server_skips_unchanged_fams_response(
+    settings_factory: Callable[..., object],
+) -> None:
+    settings = settings_factory(
+        fams_base_url="http://mock-vendor-hub/fams",
+        fams_api_key="mock-fams-key",
+        fams_load_mode="full",
+    )
+
+    first = await run_fams_ingestion(
+        settings,  # type: ignore[arg-type]
+        transport=httpx.ASGITransport(app=app),
+        sleep=no_sleep,
+    )
+    second = await run_fams_ingestion(
+        settings,  # type: ignore[arg-type]
+        transport=httpx.ASGITransport(app=app),
+        sleep=no_sleep,
+    )
+
+    assert first.status == RunStatus.SUCCEEDED
+    assert first.records_by_domain == {"training_data": 5}
+    assert second.status == RunStatus.SUCCEEDED
+    assert second.records_by_domain == {"training_data": 0}
