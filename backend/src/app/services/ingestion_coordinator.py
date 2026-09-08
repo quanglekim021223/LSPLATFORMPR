@@ -160,7 +160,7 @@ class IngestionCoordinator:
         state.started_at = datetime.now(UTC)
         try:
             await asyncio.gather(
-                *(self._run_vendor(state, vendor) for vendor in state.vendor_runs)
+                *(self._run_vendor(vendor) for vendor in state.vendor_runs)
             )
             state.total_records = sum(vendor.total_records for vendor in state.vendor_runs)
             statuses = {vendor.status for vendor in state.vendor_runs}
@@ -186,7 +186,7 @@ class IngestionCoordinator:
                 self._active_job_id = None
 
     async def _run_vendor(
-        self, state: IngestionState, vendor_state: VendorIngestionState
+        self, vendor_state: VendorIngestionState
     ) -> None:
         vendor_state.status = IngestionStatus.RUNNING
         vendor_state.started_at = datetime.now(UTC)

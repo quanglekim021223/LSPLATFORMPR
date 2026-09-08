@@ -26,6 +26,7 @@ from app.repositories.writer import (
 logger = logging.getLogger(__name__)
 
 _IS_WINDOWS = os.name == "nt"
+_MANIFEST_FILENAME = "manifest.json"
 _WRITE_RETRY_DELAYS = (0.05, 0.10, 0.20, 0.40, 0.80, 1.60, 3.20)
 _JSON_RECORD_KEYS = (
     "courses",
@@ -77,7 +78,7 @@ class LocalBronzeWriter:
         output_path = directory / f"offset={page.offset:06d}.json"
         self._atomic_write(output_path, page.raw_payload)
 
-        manifest_path = directory / "manifest.json"
+        manifest_path = directory / _MANIFEST_FILENAME
         sha256 = payload_sha256(page.raw_payload)
         with self._manifest_lock_for(manifest_path):
             manifest = merge_page_manifest(
@@ -128,7 +129,7 @@ class LocalBronzeWriter:
         output_path = directory / file.file_name
         self._atomic_write(output_path, file.raw_payload)
 
-        manifest_path = directory / "manifest.json"
+        manifest_path = directory / _MANIFEST_FILENAME
         sha256 = payload_sha256(file.raw_payload)
         with self._manifest_lock_for(manifest_path):
             manifest = merge_file_manifest(
@@ -176,7 +177,7 @@ class LocalBronzeWriter:
             if vendor_root.parent != root or not vendor_root.exists():
                 continue
             for path in sorted(item for item in vendor_root.rglob("*") if item.is_file()):
-                if path.name == "manifest.json" or path.name.startswith("."):
+                if path.name == _MANIFEST_FILENAME or path.name.startswith("."):
                     continue
                 metadata = self._path_metadata(root, path)
                 for index, raw_record in enumerate(self._records_for_export(path)):
@@ -245,8 +246,9 @@ class LocalBronzeWriter:
                 pass
         if path.suffix.casefold() == ".csv":
             try:
-                rows = list(csv.DictReader(io.StringIO(payload.decode("utf-8-sig"))))
-                records: list[object] = list(rows)
+                records: list[object] = list(
+                    csv.DictReader(io.StringIO(payload.decode("utf-8-sig")))
+                )
                 return records or [{"raw_text": payload.decode("utf-8-sig")}]
             except UnicodeDecodeError:
                 pass
