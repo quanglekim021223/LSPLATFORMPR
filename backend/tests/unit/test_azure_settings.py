@@ -14,6 +14,7 @@ def test_function_app_key_names() -> None:
         "COURSERA_USER_NAME": "fake-coursera-user",
         "COURSERA_PASSWORD": "fake-coursera-password",
         "DATACAMP_TOKEN": "fake-datacamp-token",
+        "FAMS_TOKEN": "fake-fams-token",
         "HARVARD_API_USER_NAME": "fake-harvard-user",
         "HARVARD_API_PASSWORD": "fake-harvard-password",
         "HARVARD_SFTP_USER_NAME": "fake-sftp-user",
@@ -30,6 +31,7 @@ def test_function_app_key_names() -> None:
         "coursera_username": "COURSERA_USER_NAME",
         "coursera_password": "COURSERA_PASSWORD",
         "datacamp_token": "DATACAMP_TOKEN",
+        "fams_token": "FAMS_TOKEN",
         "harvard_hmm_client_id": "HARVARD_API_USER_NAME",
         "harvard_spark_client_id": "HARVARD_API_USER_NAME",
         "harvard_hmm_client_secret": "HARVARD_API_PASSWORD",
@@ -65,6 +67,22 @@ def test_legacy_names_and_constructor_still_work(field: str) -> None:
     with patch.dict(os.environ, {}, clear=True):
         settings = Settings(_env_file=None, **{field: "constructor-test-value"})
         assert getattr(settings, field).get_secret_value() == "constructor-test-value"
+
+
+@pytest.mark.parametrize("token", ["new-fams-token", ""])
+def test_fams_token_runtime_configuration(token: str) -> None:
+    with patch.dict(os.environ, {
+        "FAMS_TOKEN": token,
+    }, clear=True):
+        settings = Settings(_env_file=None)
+    assert settings.fams_token.get_secret_value() == token
+    assert settings.fams_configured == bool(token)
+    assert settings.fams_secrets() == ((token,) if token else ())
+    if not token:
+        with pytest.raises(ValueError, match="Missing FAMS configuration: FAMS_TOKEN"):
+            settings.validate_fams_runtime()
+    else:
+        settings.validate_fams_runtime()
 
 
 def test_explicit_harvard_credentials_override_shared_keys() -> None:

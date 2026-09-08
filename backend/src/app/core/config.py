@@ -146,7 +146,7 @@ class Settings(BaseSettings):
     harvard_sftp_mock_enabled: bool = False
 
     fams_base_url: str = "https://fams.fa.edu.vn"
-    fams_api_key: SecretStr = Field(default=SecretStr(""))
+    fams_token: SecretStr = Field(default=SecretStr(""))
     fams_load_mode: Literal["full", "filtered"] = "full"
     fams_status: str = ""
     fams_site: str = ""
@@ -303,11 +303,11 @@ class Settings(BaseSettings):
 
     @property
     def fams_configured(self) -> bool:
-        return bool(self.fams_base_url and self.fams_api_key.get_secret_value())
+        return bool(self.fams_base_url and self.fams_token.get_secret_value())
 
     def fams_secrets(self) -> tuple[str, ...]:
-        api_key = self.fams_api_key.get_secret_value()
-        return (api_key,) if api_key else ()
+        token = self.fams_token.get_secret_value()
+        return (token,) if token else ()
 
     def validate_auth_runtime(self) -> None:
         missing = [
@@ -432,7 +432,7 @@ class Settings(BaseSettings):
     def _missing_fams_configuration(self) -> list[str]:
         values = {
             "FAMS_BASE_URL": self.fams_base_url,
-            "FAMS_API_KEY": self.fams_api_key.get_secret_value(),
+            "FAMS_TOKEN": self.fams_token.get_secret_value(),
         }
         return [name for name, value in values.items() if not value]
 

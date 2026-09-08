@@ -216,7 +216,10 @@ the session and retry up to `HARVARD_SFTP_MAX_RETRIES` times, default `3`, with 
 files continue to use the polling deadline. Authentication and SSH host-key failures are not
 retried.
  
-FAMS calls one internal endpoint with `Fsa-Report-Api-Key: <FAMS_API_KEY>`. The scheduled Full mode
+FAMS calls one internal endpoint with `Fsa-Report-Api-Key: <FAMS_TOKEN>`.
+Use `FAMS_TOKEN` in both the local `.env` and Azure Function App settings.
+The HTTP header name remains `Fsa-Report-Api-Key`.
+The scheduled Full mode
 still downloads the complete JSON response because the API has no update-time filter. After the
 response passes its contract, the job compares an order-independent fingerprint of `classList`
 and `studentList` with the previous successful Full run. Changed data is stored as one exact raw

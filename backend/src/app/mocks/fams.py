@@ -76,7 +76,7 @@ async def training_data(
         Query(alias="actualStartDateTo"),
     ] = None,
 ) -> dict[str, Any]:
-    expected_key = get_mock_settings().mock_fams_api_key.get_secret_value()
+    expected_key = get_mock_settings().mock_fams_token.get_secret_value()
     if api_key != expected_key or accept != "application/json":
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid FAMS API key")
 

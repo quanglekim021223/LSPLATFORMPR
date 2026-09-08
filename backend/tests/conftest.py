@@ -45,7 +45,7 @@ _MOCK_ENV = {
         "ssh-ed25519 "
         "AAAAC3NzaC1lZDI1NTE5AAAAIANeqwMmZ87//cJ6mwB8qeyF+egQrDQhkRrsyhymF8UO"
     ),
-    "MOCK_FAMS_API_KEY": "mock-fams-key",
+    "MOCK_FAMS_TOKEN": "mock-fams-key",
 }
 for _name, _value in _MOCK_ENV.items():
     os.environ.setdefault(_name, _value)
@@ -126,7 +126,7 @@ def settings_factory(tmp_path: Path) -> Callable[..., Settings]:
             "harvard_sftp_max_wait_seconds": 7200,
             "harvard_sftp_max_retries": 3,
             "fams_base_url": "https://fams.test",
-            "fams_api_key": "test-fams-key",
+            "fams_token": "test-fams-key",
             "fams_load_mode": "full",
             "fams_lock_ttl_seconds": 3600,
             "http_max_retries": 0,
