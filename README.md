@@ -65,6 +65,33 @@ backend/tests/integration/               API, service orchestration, and mock-hu
 
 ## Local setup
 
+### Function App environment variable names
+
+`Settings` reads process environment variables automatically; services do not need
+separate `os.getenv()` calls. Azure credentials must be Application Settings, not
+HTTP Function keys. Never put credential values in Git or pipeline logs.
+
+Supported Azure names include `LEVELUP_KEY`, `SKILLUP_KEY`, `COURSERA_USER_NAME`,
+and `HARVARD_SFTP_USER_NAME`. Legacy names `LEVELUP_API_KEY`, `SKILLUP_API_KEY`,
+`COURSERA_USERNAME`, and `HARVARD_SFTP_USERNAME` remain supported. If both names
+are provided in the same source, the Azure name wins; avoid configuring both.
+
+`HARVARD_API_USER_NAME` and `HARVARD_API_PASSWORD` are shared fallback credentials
+for the existing HMM/Spark Basic OAuth clients. Explicit `HARVARD_HMM_CLIENT_ID`,
+`HARVARD_HMM_CLIENT_SECRET`, `HARVARD_SPARK_CLIENT_ID`, and
+`HARVARD_SPARK_CLIENT_SECRET` take precedence in the same source, including empty
+values. Omit these fields when using the shared pair. Confirm that the shared
+account has access to both catalogs; the code does not grant vendor permissions.
+Keep the separate HMM/Spark organization keys configured.
+
+`LINKEDIN_GRANT_TYPE` is read from settings and defaults to `client_credentials`.
+Other grant types are rejected because the client implements only this OAuth flow.
+The existing DataCamp token, Coursera password, LinkedIn client credentials and
+Harvard SFTP host/port/password names already match Azure. Vendor base URLs, other
+required credentials (including FAMS and LevelUP login), storage and application
+settings must still be configured separately. Tests use dummy values; loading
+these names successfully is not a live Azure/vendor authentication check.
+
 Python 3.11+ is required.
 
 ```bash

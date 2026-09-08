@@ -45,7 +45,7 @@ class LinkedInClient:
                 "Content-Type": "application/x-www-form-urlencoded",
             },
             data={
-                "grant_type": "client_credentials",
+                "grant_type": self.settings.linkedin_grant_type,
                 "client_id": self.settings.linkedin_client_id.get_secret_value(),
                 "client_secret": (
                     self.settings.linkedin_client_secret.get_secret_value()
