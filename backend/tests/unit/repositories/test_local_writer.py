@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import csv
 import hashlib
+import io
 import json
 import logging
 from datetime import UTC, datetime
@@ -12,6 +14,28 @@ import pytest
 
 from app.models import BinaryFileWrite, PageWrite
 from app.repositories import LocalBronzeWriter
+
+
+def _exported_records(payload: str) -> list[dict[str, str]]:
+    return list(csv.DictReader(io.StringIO(payload)))
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        ({"items": [{"id": "skillup"}]}, [{"id": "skillup"}]),
+        ({"reports": [{"id": "assessment"}]}, [{"id": "assessment"}]),
+        ({"elements": [{"id": "coursera"}]}, [{"id": "coursera"}]),
+        ({"elements": []}, []),
+        ({"data": [{"id": "datacamp"}]}, [{"id": "datacamp"}]),
+        ([{"id": "root-list"}], [{"id": "root-list"}]),
+    ],
+)
+def test_json_export_recognizes_supported_record_containers(
+    payload: object,
+    expected: list[object],
+) -> None:
+    assert LocalBronzeWriter._json_records(payload) == expected
 
 
 @pytest.mark.asyncio
@@ -122,3 +146,89 @@ async def test_binary_writer_preserves_csv_and_sftp_manifest(
     assert "Bronze file stored vendor=harvard_hmm domain=learning_history" in messages
     assert "records_count=1" in messages
     assert "payload_bytes=" in messages
+
+
+@pytest.mark.asyncio
+async def test_csv_export_flattens_json_record_collections(tmp_path: Path) -> None:
+    writer = LocalBronzeWriter(tmp_path / "bronze")
+    fetched_at = datetime.now(UTC)
+
+    await writer.write_page(
+        PageWrite(
+            vendor="levelup",
+            data_domain="course_catalog",
+            ingestion_date="2026-09-07",
+            run_id="levelup-run",
+            offset=0,
+            raw_payload=b'{"courses":[{"id":"c1"},{"id":"c2"}],"totalItems":2}',
+            records_count=2,
+            request_parameters={},
+            fetched_at=fetched_at,
+        )
+    )
+    await writer.write_page(
+        PageWrite(
+            vendor="fams",
+            data_domain="training_data",
+            ingestion_date="2026-09-07",
+            run_id="fams-run",
+            offset=1,
+            raw_payload=(
+                b'{"success":true,"data":{"classList":[{"id":"class-1"}],'
+                b'"studentList":[{"id":"student-1"},{"id":"student-2"}]}}'
+            ),
+            records_count=3,
+            request_parameters={},
+            fetched_at=fetched_at,
+        )
+    )
+    await writer.write_page(
+        PageWrite(
+            vendor="harvard_hmm",
+            data_domain="course_catalog",
+            ingestion_date="2026-09-07",
+            run_id="harvard-run",
+            offset=0,
+            raw_payload=b'{"count":2,"list":[{"id":"h1"},{"id":"h2"}]}',
+            records_count=2,
+            request_parameters={},
+            fetched_at=fetched_at,
+        )
+    )
+    history = b"username,product_id\nuser-1,p1\nuser-2,p2\n"
+    await writer.write_file(
+        BinaryFileWrite(
+            vendor="harvard_hmm",
+            data_domain="learning_history",
+            ingestion_date="2026-09-07",
+            run_id="harvard-run",
+            raw_payload=history,
+            file_name="harvard_hmm_reporting_20260907.csv",
+            remote_path="/reports/harvard_hmm_reporting_20260907.csv",
+            file_size=len(history),
+            remote_modified_time=fetched_at,
+            downloaded_at=fetched_at,
+            records_count=2,
+        )
+    )
+
+    levelup_rows = _exported_records(await writer.export_csv(["levelup"]))
+    fams_rows = _exported_records(await writer.export_csv(["fams"]))
+    harvard_rows = _exported_records(await writer.export_csv(["harvard_hmm"]))
+
+    assert [json.loads(row["raw_record_json"])["id"] for row in levelup_rows] == [
+        "c1",
+        "c2",
+    ]
+    assert [json.loads(row["raw_record_json"])["id"] for row in fams_rows] == [
+        "class-1",
+        "student-1",
+        "student-2",
+    ]
+    assert len(harvard_rows) == 4
+    assert [
+        json.loads(row["raw_record_json"]).get("id") for row in harvard_rows[:2]
+    ] == ["h1", "h2"]
+    assert [
+        json.loads(row["raw_record_json"])["username"] for row in harvard_rows[2:]
+    ] == ["user-1", "user-2"]

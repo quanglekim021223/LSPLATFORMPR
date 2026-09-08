@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 from urllib.parse import parse_qs
 
@@ -97,9 +98,10 @@ _ASSETS = [
     asset_payload("urn:li:lyndaCourse:2", "SQL"),
     asset_payload("urn:li:lyndaCourse:3", "Data Engineering"),
 ]
+_BUILT_IN_ACTIVITY_TIME = int(datetime(2026, 8, 20, 12, tzinfo=UTC).timestamp() * 1000)
 
 _GENERATED = generated_vendor_data("linkedin")
-_ACTIVITY_REPORTS: list[dict[str, Any]] | None = None
+_ACTIVITY_REPORTS = [activity_report_payload(1, _BUILT_IN_ACTIVITY_TIME)]
 if _GENERATED is not None:
     _ASSETS = _GENERATED["assets"]
     _ACTIVITY_REPORTS = _GENERATED["activity_reports"]
@@ -220,9 +222,10 @@ async def activity_reports(
         or unit != "DAY"
     ):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid criteria")
-    records = (
-        _ACTIVITY_REPORTS
-        if _ACTIVITY_REPORTS is not None
-        else [activity_report_payload(duration, started_at)]
-    )
+    window_end = started_at + int(timedelta(days=duration).total_seconds() * 1000)
+    records = [
+        record
+        for record in _ACTIVITY_REPORTS
+        if started_at <= int(record["latestDataAt"]) < window_end
+    ]
     return _page(records, start, count, "learningActivityReports")

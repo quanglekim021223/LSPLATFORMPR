@@ -41,3 +41,15 @@ async def test_mock_server_runs_full_coursera_pipeline(
         "course_detail": 3,
         "learning_history": 3,
     }
+
+    incremental = await run_coursera_ingestion(
+        settings,  # type: ignore[arg-type]
+        transport=httpx.ASGITransport(app=mock_vendor_hub),
+        sleep=no_sleep,
+    )
+
+    assert incremental.status == RunStatus.SUCCEEDED
+    assert incremental.records_by_domain == {
+        "course_catalog": 0,
+        "learning_history": 0,
+    }
