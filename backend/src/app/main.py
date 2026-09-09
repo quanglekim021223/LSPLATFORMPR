@@ -136,12 +136,35 @@ def create_app(
         version="0.1.0",
         lifespan=lifespan,
     )
+    # application.add_middleware(
+    #     CORSMiddleware,
+    #     allow_origins=config.cors_allowed_origins,
+    #     allow_credentials=True,
+    #     allow_methods=["DELETE", "GET", "POST", "OPTIONS"],
+    #     allow_headers=["Authorization", "Content-Type"],
+    #     expose_headers=["Content-Disposition"],
+    # )
+
+    # Danh sách origin mặc định + parse từ config
+    allowed_origins = [
+        "https://fsadatalakefedev.z33.web.core.windows.net",
+        "http://localhost:3000",
+        "http://localhost:5173",
+    ]
+
+    # Xử lý tự động cắt khoảng trắng (.strip()) nếu config đọc từ biến môi trường
+    if hasattr(config, "cors_allowed_origins") and config.cors_allowed_origins:
+        if isinstance(config.cors_allowed_origins, str):
+            allowed_origins.extend([o.strip() for o in config.cors_allowed_origins.split(",") if o.strip()])
+        elif isinstance(config.cors_allowed_origins, list):
+            allowed_origins.extend([o.strip() for o in config.cors_allowed_origins])
+
     application.add_middleware(
         CORSMiddleware,
-        allow_origins=config.cors_allowed_origins,
+        allow_origins=list(set(allowed_origins)),  # Loại bỏ các origin trùng lặp
         allow_credentials=True,
-        allow_methods=["DELETE", "GET", "POST", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type"],
+        allow_methods=["*"],  # Mở rộng cho phép mọi method (bao gồm OPTIONS preflight)
+        allow_headers=["*"],  # Mở rộng cho phép mọi request header (tránh thiếu header phụ từ axios)
         expose_headers=["Content-Disposition"],
     )
  
