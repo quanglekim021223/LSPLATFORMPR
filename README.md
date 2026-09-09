@@ -3,6 +3,10 @@
 FastAPI service for scheduled ingestion of learning-vendor data into a raw Bronze layer. It
 supports LevelUP (Absorb), SkillUp (iMocha), DataCamp, Coursera, LinkedIn Learning, Harvard HMM,
 Harvard Spark, and FAMS ingestion domains.
+
+Local-only FHU/akajob → SkillUp certificate exchange is available as a separate
+[end-to-end mock demo](backend/docs/learning-exchange-demo.md). It is not part of the
+scheduled production ingestion flow; source contracts and processing rules are provisional.
  
 ## Runtime flow
  
