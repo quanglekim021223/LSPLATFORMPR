@@ -15,6 +15,38 @@ TEST_ADMIN_PASSWORD = "test-admin-password"
 
 
 @pytest.mark.asyncio
+async def test_unhandled_exception_returns_structured_500(
+    settings_factory: Callable[..., object],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    settings = settings_factory()
+    store = CheckpointStore(settings.checkpoint_db_path)  # type: ignore[attr-defined]
+    app = create_app(settings, checkpoint_store=store)  # type: ignore[arg-type]
+
+    async def fail_readiness_check() -> bool:
+        raise RuntimeError("sensitive internal failure")
+
+    async with app.router.lifespan_context(app):
+        monkeypatch.setattr(store, "is_ready", fail_readiness_check)
+        caplog.set_level("ERROR", logger="app")
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
+            base_url="http://test",
+        ) as client:
+            response = await client.get("/ready")
+
+    assert response.status_code == 500
+    assert response.json() == {
+        "errcode": 500,
+        "message": "Internal server error",
+        "detail": "An unexpected error occurred. Check application logs.",
+    }
+    assert "sensitive internal failure" not in response.text
+    assert "sensitive internal failure" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_health_ready_latest_and_scheduler_disabled_in_test(
     settings_factory: Callable[..., object]
 ) -> None:
@@ -82,6 +114,11 @@ async def test_health_ready_latest_and_scheduler_disabled_in_test(
             )
             assert unauthorized.status_code == 401
             assert bad_login.status_code == 401
+            assert bad_login.json() == {
+                "errcode": 401,
+                "message": "Unauthorized",
+                "detail": "Invalid credentials",
+            }
             assert registration.status_code == 404
             assert login.status_code == 200
             assert login.json()["token_type"] == "Bearer"
