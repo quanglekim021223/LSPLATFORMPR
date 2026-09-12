@@ -31,7 +31,7 @@ async def test_unhandled_exception_returns_structured_500(
         monkeypatch.setattr(store, "is_ready", fail_readiness_check)
         caplog.set_level("ERROR", logger="app")
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
+            transport=httpx.ASGITransport(app=app),
             base_url="http://test",
         ) as client:
             response = await client.get("/ready")
