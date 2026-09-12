@@ -66,9 +66,7 @@ class CourseraClient:
         self._token = contract.access_token.strip()
         return self._token
 
-    async def get_json(
-        self, path: str, params: Mapping[str, Any]
-    ) -> tuple[dict[str, Any], bytes]:
+    async def get_json(self, path: str, params: Mapping[str, Any]) -> tuple[dict[str, Any], bytes]:
         if self._token is None:
             await self.authenticate()
         token_used = self._token
@@ -83,9 +81,7 @@ class CourseraClient:
         try:
             payload = response.json()
         except ValueError as exc:
-            raise CourseraResponseContractError(
-                f"Expected a JSON object from {path}"
-            ) from exc
+            raise CourseraResponseContractError(f"Expected a JSON object from {path}") from exc
         if not isinstance(payload, dict):
             raise CourseraResponseContractError(f"Expected a JSON object from {path}")
         return payload, response.content
@@ -95,9 +91,7 @@ class CourseraClient:
         fields = {
             field_name
             for _, field_name, format_spec, conversion in Formatter().parse(template)
-            if field_name is not None
-            and not format_spec
-            and conversion is None
+            if field_name is not None and not format_spec and conversion is None
         }
         parsed_fields = {
             field_name
@@ -107,30 +101,23 @@ class CourseraClient:
         allowed = {"org_id", "content_id"}
         if parsed_fields != fields or not parsed_fields <= allowed:
             raise ValueError(
-                "COURSERA_CONTENT_DETAIL_PATH_TEMPLATE only supports "
-                "{org_id} and {content_id}"
+                "COURSERA_CONTENT_DETAIL_PATH_TEMPLATE only supports {org_id} and {content_id}"
             )
         if "content_id" not in parsed_fields:
-            raise ValueError(
-                "COURSERA_CONTENT_DETAIL_PATH_TEMPLATE must contain {content_id}"
-            )
+            raise ValueError("COURSERA_CONTENT_DETAIL_PATH_TEMPLATE must contain {content_id}")
         return template.format(
             org_id=quote(self.settings.coursera_org_id, safe=""),
             content_id=quote(content_id, safe=""),
         )
 
     def sensitive_values(self) -> tuple[str, ...]:
-        return self.settings.coursera_secrets() + (
-            (self._token,) if self._token else ()
-        )
+        return self.settings.coursera_secrets() + ((self._token,) if self._token else ())
 
     async def _authorized_get(
         self, path: str, params: Mapping[str, Any], token: str | None
     ) -> httpx.Response:
         if not token:
-            raise CourseraResponseContractError(
-                "Coursera authentication returned an empty token"
-            )
+            raise CourseraResponseContractError("Coursera authentication returned an empty token")
         return await self.http.request(
             "GET",
             f"{self.settings.coursera_base_url.rstrip('/')}/{path.lstrip('/')}",

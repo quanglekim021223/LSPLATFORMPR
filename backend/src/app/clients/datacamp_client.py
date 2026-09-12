@@ -36,9 +36,7 @@ class DataCampClient:
             "GET",
             f"{self.settings.datacamp_base_url.rstrip('/')}/{path.lstrip('/')}",
             headers={
-                "Authorization": (
-                    f"Bearer {self.settings.datacamp_token.get_secret_value()}"
-                ),
+                "Authorization": (f"Bearer {self.settings.datacamp_token.get_secret_value()}"),
                 "Accept": "application/json",
             },
             params=params,
@@ -47,9 +45,7 @@ class DataCampClient:
         try:
             payload = response.json()
         except ValueError as exc:
-            raise DataCampResponseContractError(
-                f"Expected valid JSON from {path}"
-            ) from exc
+            raise DataCampResponseContractError(f"Expected valid JSON from {path}") from exc
         return payload, response.content
 
     def sensitive_values(self) -> tuple[str, ...]:

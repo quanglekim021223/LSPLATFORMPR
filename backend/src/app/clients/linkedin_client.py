@@ -47,9 +47,7 @@ class LinkedInClient:
             data={
                 "grant_type": self.settings.linkedin_grant_type,
                 "client_id": self.settings.linkedin_client_id.get_secret_value(),
-                "client_secret": (
-                    self.settings.linkedin_client_secret.get_secret_value()
-                ),
+                "client_secret": (self.settings.linkedin_client_secret.get_secret_value()),
             },
         )
         response.raise_for_status()
@@ -71,9 +69,7 @@ class LinkedInClient:
         self._token = contract.access_token.strip()
         return self._token
 
-    async def get_json(
-        self, path: str, params: Mapping[str, Any]
-    ) -> tuple[dict[str, Any], bytes]:
+    async def get_json(self, path: str, params: Mapping[str, Any]) -> tuple[dict[str, Any], bytes]:
         if self._token is None:
             await self.authenticate()
         token_used = self._token
@@ -88,9 +84,7 @@ class LinkedInClient:
         try:
             payload = response.json()
         except ValueError as exc:
-            raise LinkedInResponseContractError(
-                f"Expected a JSON object from {path}"
-            ) from exc
+            raise LinkedInResponseContractError(f"Expected a JSON object from {path}") from exc
         if not isinstance(payload, dict):
             raise LinkedInResponseContractError(f"Expected a JSON object from {path}")
         return payload, response.content
@@ -98,34 +92,24 @@ class LinkedInClient:
     def asset_detail_params(self, urn: str) -> dict[str, str]:
         template = self.settings.linkedin_asset_detail_query_template
         if URN_PLACEHOLDER not in template or template.count(URN_PLACEHOLDER) != 1:
-            raise ValueError(
-                "LINKEDIN_ASSET_DETAIL_QUERY_TEMPLATE must contain {urn} exactly once"
-            )
+            raise ValueError("LINKEDIN_ASSET_DETAIL_QUERY_TEMPLATE must contain {urn} exactly once")
         remaining = template.replace(URN_PLACEHOLDER, "")
         if "{" in remaining or "}" in remaining:
-            raise ValueError(
-                "LINKEDIN_ASSET_DETAIL_QUERY_TEMPLATE only supports {urn}"
-            )
+            raise ValueError("LINKEDIN_ASSET_DETAIL_QUERY_TEMPLATE only supports {urn}")
         query = template.lstrip("?").replace(URN_PLACEHOLDER, quote_plus(urn))
         pairs = parse_qsl(query, keep_blank_values=True)
         if not pairs or len({key for key, _ in pairs}) != len(pairs):
-            raise ValueError(
-                "LINKEDIN_ASSET_DETAIL_QUERY_TEMPLATE must be a unique query string"
-            )
+            raise ValueError("LINKEDIN_ASSET_DETAIL_QUERY_TEMPLATE must be a unique query string")
         return dict(pairs)
 
     def sensitive_values(self) -> tuple[str, ...]:
-        return self.settings.linkedin_secrets() + (
-            (self._token,) if self._token else ()
-        )
+        return self.settings.linkedin_secrets() + ((self._token,) if self._token else ())
 
     async def _authorized_get(
         self, path: str, params: Mapping[str, Any], token: str | None
     ) -> httpx.Response:
         if not token:
-            raise LinkedInResponseContractError(
-                "LinkedIn authentication returned an empty token"
-            )
+            raise LinkedInResponseContractError("LinkedIn authentication returned an empty token")
         return await self.http.request(
             "GET",
             f"{self.settings.linkedin_base_url.rstrip('/')}/{path.lstrip('/')}",
