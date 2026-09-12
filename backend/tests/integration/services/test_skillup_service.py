@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 
-from app.mocks.skillup import assessment_report, skill_profile, taxonomy_item
+from tests.support.mocks.skillup import assessment_report, skill_profile, taxonomy_item
 from app.models import RunStatus
 from app.repositories import CheckpointStore
 from app.services.skillup.assessment_history import (

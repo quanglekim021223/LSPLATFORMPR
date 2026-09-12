@@ -10,7 +10,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from app.mocks.levelup import course_payload, enrollment_payload
+from tests.support.mocks.levelup import course_payload, enrollment_payload
 from app.models import RunStatus
 from app.repositories import CheckpointStore
 from app.services.levelup.service import run_levelup_ingestion

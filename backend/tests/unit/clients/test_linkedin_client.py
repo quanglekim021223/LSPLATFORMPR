@@ -8,7 +8,7 @@ import httpx
 import pytest
 
 from app.clients.linkedin_client import LinkedInClient
-from app.mocks.linkedin import token_payload
+from tests.support.mocks.linkedin import token_payload
 from tests.conftest import no_sleep, response
 
 

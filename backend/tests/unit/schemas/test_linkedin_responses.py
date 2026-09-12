@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from app.clients.linkedin_client import LinkedInResponseContractError
-from app.mocks.linkedin import activity_report_payload, asset_payload, token_payload
+from tests.support.mocks.linkedin import activity_report_payload, asset_payload, token_payload
 from app.schemas.linkedin import (
     extra_field_paths,
     validate_activity_reports,

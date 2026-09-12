@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 
-from app.mocks.linkedin import activity_report_payload, asset_payload, token_payload
+from tests.support.mocks.linkedin import activity_report_payload, asset_payload, token_payload
 from app.models import RunStatus
 from app.repositories import CheckpointStore
 from app.services.linkedin.course_catalog import CATALOG_DOMAIN

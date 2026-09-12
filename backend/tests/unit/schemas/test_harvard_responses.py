@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.mocks.harvard import catalog_item, history_csv, token_payload
+from tests.support.mocks.harvard import catalog_item, history_csv, token_payload
 from app.schemas.harvard import (
     HarvardResponseContractError,
     extra_field_paths,

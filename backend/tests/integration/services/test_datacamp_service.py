@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 
-from app.mocks.datacamp import course_payload, event_payload
+from tests.support.mocks.datacamp import course_payload, event_payload
 from app.models import RunStatus
 from app.repositories import CheckpointStore
 from app.services.datacamp.learning_history import (

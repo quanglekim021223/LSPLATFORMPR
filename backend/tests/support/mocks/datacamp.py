@@ -6,8 +6,8 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Header, HTTPException, Query, status
 
-from app.mocks.generated_data import generated_vendor_data
-from app.mocks.settings import get_mock_settings
+from tests.support.mocks.generated_data import generated_vendor_data
+from tests.support.mocks.settings import get_mock_settings
 
 router = APIRouter(tags=["DataCamp"])
 
@@ -33,9 +33,7 @@ def course_payload(
         "technology": technology,
         "instructors": [{"fullName": "DataCamp Instructor"}] if live else [],
         "timeNeededInHours": 1,
-        "topic": (
-            {"name": "Programming", "description": None} if live else None
-        ),
+        "topic": ({"name": "Programming", "description": None} if live else None),
         "updatedAt": "2026-08-20T18:00:19.100Z",
         "live": live,
         "chapters": (
@@ -79,11 +77,7 @@ _LIVE_COURSES = {
     ]
 }
 _ARCHIVED_COURSES = {
-    "data": [
-        course_payload(
-            "course-1032", "Redacted DataCamp Course", live=False, technology=None
-        )
-    ]
+    "data": [course_payload("course-1032", "Redacted DataCamp Course", live=False, technology=None)]
 }
 _EVENTS = [event_payload(1), event_payload(2), event_payload(3)]
 

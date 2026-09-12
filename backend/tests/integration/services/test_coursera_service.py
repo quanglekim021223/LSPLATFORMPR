@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 
-from app.mocks.coursera import course_payload, enrollment_payload, token_payload
+from tests.support.mocks.coursera import course_payload, enrollment_payload, token_payload
 from app.models import RunStatus
 from app.repositories import CheckpointStore
 from app.services.coursera.course_catalog import CATALOG_DOMAIN

@@ -9,7 +9,7 @@ import pytest
 
 from app.clients.harvard_catalog_client import HarvardCatalogClient
 from app.core.config import Settings
-from app.mocks.harvard import token_payload
+from tests.support.mocks.harvard import token_payload
 from app.models.harvard import vendor_config
 from tests.conftest import no_sleep, response
 

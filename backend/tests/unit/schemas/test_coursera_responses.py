@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from app.clients.coursera_client import CourseraResponseContractError
-from app.mocks.coursera import course_payload, enrollment_payload, token_payload
+from tests.support.mocks.coursera import course_payload, enrollment_payload, token_payload
 from app.schemas.coursera import (
     extra_field_paths,
     validate_course_detail,

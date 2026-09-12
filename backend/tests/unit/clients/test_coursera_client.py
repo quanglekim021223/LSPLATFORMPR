@@ -8,7 +8,7 @@ import httpx
 import pytest
 
 from app.clients.coursera_client import CourseraClient
-from app.mocks.coursera import token_payload
+from tests.support.mocks.coursera import token_payload
 from tests.conftest import no_sleep, response
 
 

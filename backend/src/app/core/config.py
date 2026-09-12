@@ -143,8 +143,6 @@ class Settings(BaseSettings):
     harvard_sftp_poll_interval_seconds: int = Field(default=300, ge=1)
     harvard_sftp_max_wait_seconds: int = Field(default=7200, ge=0)
     harvard_sftp_max_retries: int = Field(default=3, ge=0, le=10)
-    harvard_sftp_mock_enabled: bool = False
-
     fams_base_url: str = "https://fams.fa.edu.vn"
     fams_token: SecretStr = Field(default=SecretStr(""))
     fams_load_mode: Literal["full", "filtered"] = "full"
