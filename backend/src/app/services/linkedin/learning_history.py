@@ -37,9 +37,7 @@ async def ingest_learning_history(
     weekly_sync_watermark: str | None = None,
     full_sync_watermark: str | None = None,
 ) -> None:
-    history_start = history_start or parse_history_start(
-        settings.linkedin_history_start_time
-    )
+    history_start = history_start or parse_history_start(settings.linkedin_history_start_time)
     history_end = history_end or datetime.now(UTC)
     if history_start > history_end:
         raise ValueError("LINKEDIN_HISTORY_START_TIME must not be in the future")
@@ -76,8 +74,7 @@ async def ingest_learning_history(
 
 def _window_duration_days(window_start: datetime, history_end: datetime) -> int:
     remaining_days = math.ceil(
-        (history_end - window_start).total_seconds()
-        / timedelta(days=1).total_seconds()
+        (history_end - window_start).total_seconds() / timedelta(days=1).total_seconds()
     )
     return min(MAX_WINDOW_DAYS, max(1, remaining_days))
 
@@ -108,9 +105,7 @@ async def _ingest_window(
             "count": settings.linkedin_page_size,
         }
         try:
-            payload, raw_payload = await client.get_json(
-                "/learningActivityReports", params
-            )
+            payload, raw_payload = await client.get_json("/learningActivityReports", params)
             contract = validate_activity_reports(
                 payload,
                 expected_start=start,
@@ -120,8 +115,7 @@ async def _ingest_window(
             extras = extra_field_paths(contract)
             if extras:
                 logger.warning(
-                    "LinkedIn response contains new contract fields "
-                    "domain=%s fields=%s",
+                    "LinkedIn response contains new contract fields domain=%s fields=%s",
                     DOMAIN,
                     ",".join(extras),
                 )
@@ -138,9 +132,7 @@ async def _ingest_window(
                     fetched_at=datetime.now(UTC),
                 )
             )
-            await checkpoints.record_completed_page(
-                run_id, DOMAIN, page_sequence, len(elements)
-            )
+            await checkpoints.record_completed_page(run_id, DOMAIN, page_sequence, len(elements))
             following_start = next_start(payload, start)
         except Exception as exc:
             await _record_failure(checkpoints, client, run_id, page_sequence, exc)
@@ -169,8 +161,6 @@ async def _record_failure(
         "retryable_failed" if retryable else "terminal_failed",
         message,
     )
-
-
 
 
 def parse_history_start(value: str) -> datetime:
