@@ -1,8 +1,8 @@
 from __future__ import annotations
- 
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
- 
+
 from app.auth.dependencies import AdminDependency
 from app.services.ingestion_coordinator import (
     IngestionAlreadyRunning,
@@ -10,12 +10,12 @@ from app.services.ingestion_coordinator import (
     IngestionState,
     VendorsNotConfigured,
 )
- 
- 
+
+
 class StartIngestionRequest(BaseModel):
     vendors: list[str] = Field(min_length=1)
- 
- 
+
+
 def build_ingestion_router(
     coordinator: IngestionCoordinator,
     require_admin: AdminDependency,
@@ -25,7 +25,7 @@ def build_ingestion_router(
         tags=["ingestions"],
         dependencies=[Depends(require_admin)],
     )
- 
+
     @router.post("", status_code=status.HTTP_202_ACCEPTED)
     async def start_ingestion(request: StartIngestionRequest) -> IngestionState:
         try:
@@ -45,7 +45,7 @@ def build_ingestion_router(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=str(exc),
             ) from exc
- 
+
     @router.get("/{job_id}")
     async def ingestion_status(job_id: str) -> IngestionState:
         state = await coordinator.get(job_id)
@@ -55,5 +55,5 @@ def build_ingestion_router(
                 detail="Ingestion job not found",
             )
         return state
- 
+
     return router

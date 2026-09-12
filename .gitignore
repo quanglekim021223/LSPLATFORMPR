@@ -25,6 +25,9 @@ __azurite_db_*.json
 __blobstorage__/
 __queuestorage__/
 __tablestorage__/
+
+# Local generated reports and inspection artifacts
+/outputs/
 # Azure Functions local settings
 local.settings.json
 
