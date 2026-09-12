@@ -56,9 +56,7 @@ async def test_exports_persisted_bronze_and_confirmed_cleanup(
             )
             assert exported.status_code == 200
             date = datetime.now(UTC).date().isoformat()
-            assert exported.headers["access-control-expose-headers"] == (
-                "Content-Disposition"
-            )
+            assert exported.headers["access-control-expose-headers"] == ("Content-Disposition")
             assert exported.headers["content-disposition"] == (
                 f'attachment; filename="bronze-levelup-{date}.csv"'
             )
@@ -74,16 +72,12 @@ async def test_exports_persisted_bronze_and_confirmed_cleanup(
             )
 
             await store.acquire_lock("levelup", page.run_id, 3600)
-            refused = await client.request(
-                "DELETE", "/bronze", json={"vendors": ["levelup"]}
-            )
+            refused = await client.request("DELETE", "/bronze", json={"vendors": ["levelup"]})
             assert refused.status_code == 409
             assert any(settings.bronze_local_path.rglob("offset=*.json"))  # type: ignore[attr-defined]
             await store.release_lock("levelup", page.run_id)
 
-            cleared = await client.request(
-                "DELETE", "/bronze", json={"vendors": ["levelup"]}
-            )
+            cleared = await client.request("DELETE", "/bronze", json={"vendors": ["levelup"]})
             assert cleared.status_code == 200
             assert cleared.json()["runs_deleted"] == 1
             assert not (settings.bronze_local_path / "levelup").exists()  # type: ignore[attr-defined]
