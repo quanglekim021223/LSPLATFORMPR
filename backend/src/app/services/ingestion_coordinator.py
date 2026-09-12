@@ -159,9 +159,7 @@ class IngestionCoordinator:
         state.status = IngestionStatus.RUNNING
         state.started_at = datetime.now(UTC)
         try:
-            await asyncio.gather(
-                *(self._run_vendor(vendor) for vendor in state.vendor_runs)
-            )
+            await asyncio.gather(*(self._run_vendor(vendor) for vendor in state.vendor_runs))
             state.total_records = sum(vendor.total_records for vendor in state.vendor_runs)
             statuses = {vendor.status for vendor in state.vendor_runs}
             if statuses == {IngestionStatus.SUCCEEDED}:
@@ -185,9 +183,7 @@ class IngestionCoordinator:
             if self._active_job_id == state.job_id:
                 self._active_job_id = None
 
-    async def _run_vendor(
-        self, vendor_state: VendorIngestionState
-    ) -> None:
+    async def _run_vendor(self, vendor_state: VendorIngestionState) -> None:
         vendor_state.status = IngestionStatus.RUNNING
         vendor_state.started_at = datetime.now(UTC)
         try:

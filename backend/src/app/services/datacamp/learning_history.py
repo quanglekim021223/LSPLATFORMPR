@@ -73,15 +73,11 @@ async def ingest_learning_history(
                     fetched_at=datetime.now(UTC),
                 )
             )
-            await checkpoints.record_completed_page(
-                run_id, DOMAIN, page, records_count
-            )
+            await checkpoints.record_completed_page(run_id, DOMAIN, page, records_count)
         except Exception as exc:
             message = sanitize_text(exc, client.sensitive_values())
             retryable = is_retryable_error(exc)
-            await checkpoints.record_failed_page(
-                run_id, DOMAIN, page, message, retryable=retryable
-            )
+            await checkpoints.record_failed_page(run_id, DOMAIN, page, message, retryable=retryable)
             await checkpoints.mark_domain(
                 run_id,
                 DOMAIN,
@@ -124,4 +120,3 @@ def _event_params(
     }
     params.update({key: value for key, value in optional.items() if value is not None})
     return params
-
