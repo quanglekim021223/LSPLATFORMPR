@@ -42,8 +42,7 @@ _MOCK_ENV = {
     "MOCK_HARVARD_SFTP_USERNAME": "mock-harvard-sftp-user",
     "MOCK_HARVARD_SFTP_PASSWORD": "mock-harvard-sftp-password",
     "MOCK_HARVARD_SFTP_HOST_KEY": (
-        "ssh-ed25519 "
-        "AAAAC3NzaC1lZDI1NTE5AAAAIANeqwMmZ87//cJ6mwB8qeyF+egQrDQhkRrsyhymF8UO"
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIANeqwMmZ87//cJ6mwB8qeyF+egQrDQhkRrsyhymF8UO"
     ),
     "MOCK_FAMS_TOKEN": "mock-fams-key",
 }
@@ -89,9 +88,7 @@ def settings_factory(tmp_path: Path) -> Callable[..., Settings]:
             "coursera_username": "test-coursera-user",
             "coursera_password": "test-coursera-password",
             "coursera_org_id": "test-org",
-            "coursera_content_detail_path_template": (
-                "/{org_id}/contents/{content_id}/detail"
-            ),
+            "coursera_content_detail_path_template": ("/{org_id}/contents/{content_id}/detail"),
             "coursera_page_size": 2,
             "coursera_max_concurrency": 2,
             "coursera_history_daily_overlap_days": 3,
@@ -105,9 +102,7 @@ def settings_factory(tmp_path: Path) -> Callable[..., Settings]:
             "linkedin_history_daily_lookback_days": 3,
             "linkedin_history_lookback_days": 90,
             "linkedin_max_concurrency": 2,
-            "linkedin_asset_detail_query_template": (
-                "q=criteria&assetFilteringCriteria.urn={urn}"
-            ),
+            "linkedin_asset_detail_query_template": ("q=criteria&assetFilteringCriteria.urn={urn}"),
             "harvard_catalog_base_url": "https://harvard.test/v1",
             "harvard_page_size": 2,
             "harvard_hmm_client_id": "test-hmm-client",
