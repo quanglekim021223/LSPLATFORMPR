@@ -1,7 +1,7 @@
 from __future__ import annotations
- 
+
 from fastapi import APIRouter
- 
+
 from app.api.v1.endpoints.auth import build_auth_router
 from app.api.v1.endpoints.bronze import build_bronze_router
 from app.api.v1.endpoints.health import build_health_router
@@ -11,8 +11,8 @@ from app.auth.dependencies import build_admin_dependency
 from app.core.config import Settings
 from app.repositories import BronzeWriter, CheckpointStore
 from app.services.ingestion_coordinator import IngestionCoordinator
- 
- 
+
+
 def build_api_router(
     checkpoints: CheckpointStore,
     settings: Settings,

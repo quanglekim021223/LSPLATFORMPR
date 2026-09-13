@@ -42,9 +42,7 @@ class SkillUpClient:
         try:
             payload = response.json()
         except ValueError as exc:
-            raise SkillUpResponseContractError(
-                f"Expected a JSON object from {path}"
-            ) from exc
+            raise SkillUpResponseContractError(f"Expected a JSON object from {path}") from exc
         if not isinstance(payload, dict):
             raise SkillUpResponseContractError(f"Expected a JSON object from {path}")
         return payload, response.content

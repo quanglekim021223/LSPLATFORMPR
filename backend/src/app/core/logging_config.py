@@ -10,8 +10,7 @@ def configure_application_logging(level: str) -> None:
         return
 
     uvicorn_handlers = (
-        logging.getLogger("uvicorn.error").handlers
-        or logging.getLogger("uvicorn").handlers
+        logging.getLogger("uvicorn.error").handlers or logging.getLogger("uvicorn").handlers
     )
     if uvicorn_handlers:
         app_logger.handlers = list(uvicorn_handlers)

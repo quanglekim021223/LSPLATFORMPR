@@ -56,9 +56,9 @@ class LevelUpJob:
         try:
             await self.checkpoints.start_run(current_run_id, "levelup")
             await self.client.authenticate()
-            ingestion_date = datetime.now(
-                ZoneInfo(self.settings.ingestion_timezone)
-            ).date().isoformat()
+            ingestion_date = (
+                datetime.now(ZoneInfo(self.settings.ingestion_timezone)).date().isoformat()
+            )
 
             if not await self.checkpoints.is_catalog_completed(current_run_id):
                 await ingest_course_catalog(
@@ -99,9 +99,7 @@ class LevelUpJob:
             return await self.checkpoints.finish_run(current_run_id, RunStatus.SUCCEEDED)
         except asyncio.CancelledError:
             if self._heartbeat_error is not None:
-                message = sanitize_text(
-                    self._heartbeat_error, self.client.sensitive_values()
-                )
+                message = sanitize_text(self._heartbeat_error, self.client.sensitive_values())
                 logger.error(
                     "LevelUP lock heartbeat failed run_id=%s error=%s",
                     current_run_id,
@@ -117,9 +115,7 @@ class LevelUpJob:
             raise
         except Exception as exc:
             message = sanitize_text(exc, self.client.sensitive_values())
-            logger.error(
-                "LevelUP ingestion failed run_id=%s error=%s", current_run_id, message
-            )
+            logger.error("LevelUP ingestion failed run_id=%s error=%s", current_run_id, message)
             return await self.checkpoints.finish_run(
                 current_run_id,
                 RunStatus.FAILED,
@@ -164,9 +160,7 @@ async def run_levelup_ingestion(
     store = checkpoint_store or CheckpointStore(settings.checkpoint_db_path)
     writer = bronze_writer or LocalBronzeWriter(settings.bronze_local_path)
     await store.initialize()
-    purged_runs = await store.purge_old_runs(
-        "levelup", settings.checkpoint_retention_days
-    )
+    purged_runs = await store.purge_old_runs("levelup", settings.checkpoint_retention_days)
     if purged_runs:
         logger.info("Purged %d expired LevelUP checkpoint run(s)", purged_runs)
     timeout = httpx.Timeout(

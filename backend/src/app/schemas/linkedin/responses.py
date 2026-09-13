@@ -107,9 +107,9 @@ class LinkedInClassification(LinkedInContractModel):
 
 
 class LinkedInUrls(LinkedInContractModel):
-    sso_launch: StrictStr
-    web_launch: StrictStr
-    aicc_launch: StrictStr
+    sso_launch: StrictStr | None = None
+    web_launch: StrictStr | None = None
+    aicc_launch: StrictStr | None = None
 
 
 class LinkedInAuthorDetails(LinkedInContractModel):
@@ -260,9 +260,7 @@ def validate_learning_asset_detail(
 def validate_activity_reports(
     payload: Any, *, expected_start: int, expected_count: int
 ) -> LinkedInActivityReportsResponse:
-    contract = _validate(
-        payload, LinkedInActivityReportsResponse, "Learning Activity Reports"
-    )
+    contract = _validate(payload, LinkedInActivityReportsResponse, "Learning Activity Reports")
     _validate_paging(
         contract.paging,
         len(contract.elements),
@@ -287,10 +285,7 @@ def _collect_extra_field_paths(value: object, prefix: str) -> list[str]:
     if not isinstance(value, LinkedInContractModel):
         return []
 
-    paths = [
-        f"{prefix}.{name}" if prefix else name
-        for name in (value.model_extra or {})
-    ]
+    paths = [f"{prefix}.{name}" if prefix else name for name in (value.model_extra or {})]
     for name, field in type(value).model_fields.items():
         field_value = getattr(value, name)
         alias = field.alias or name
@@ -314,13 +309,11 @@ def _validate_paging(
         )
     if expected_start is not None and paging.start != expected_start:
         raise LinkedInResponseContractError(
-            f"LinkedIn {contract_name} contract validation failed: "
-            "paging.start:mismatch"
+            f"LinkedIn {contract_name} contract validation failed: paging.start:mismatch"
         )
     if expected_count is not None and paging.count != expected_count:
         raise LinkedInResponseContractError(
-            f"LinkedIn {contract_name} contract validation failed: "
-            "paging.count:mismatch"
+            f"LinkedIn {contract_name} contract validation failed: paging.count:mismatch"
         )
 
 

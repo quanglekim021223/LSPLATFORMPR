@@ -22,9 +22,7 @@ CONTENT_FINGERPRINT_SCOPE = "content_fingerprint"
 logger = logging.getLogger(__name__)
 
 
-def _content_fingerprint(
-    class_list: list[Any], student_list: list[Any]
-) -> str:
+def _content_fingerprint(class_list: list[Any], student_list: list[Any]) -> str:
     def canonical_record(value: Any) -> str:
         return json.dumps(
             value,
@@ -73,12 +71,10 @@ async def ingest_training_data(
         payload, raw_payload = await client.get_training_data(filters)
         contract = validate_training_data(payload)
         class_list = [
-            item.model_dump(mode="json", by_alias=True)
-            for item in contract.data.class_list
+            item.model_dump(mode="json", by_alias=True) for item in contract.data.class_list
         ]
         student_list = [
-            item.model_dump(mode="json", by_alias=True)
-            for item in contract.data.student_list
+            item.model_dump(mode="json", by_alias=True) for item in contract.data.student_list
         ]
         class_count = len(class_list)
         student_count = len(student_list)

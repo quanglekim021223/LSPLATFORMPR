@@ -5,6 +5,7 @@ import io
 from typing import Annotated, Any, NoReturn, TypeVar
 
 from pydantic import (
+    AliasChoices,
     BaseModel,
     ConfigDict,
     Field,
@@ -78,7 +79,9 @@ class HarvardHMMHistoryRow(HarvardCSVModel):
     email: StrictStr = Field(alias="Email")
     event_name: StrictStr = Field(alias="EventName")
     title: StrictStr = Field(alias="Title")
-    product: StrictStr = Field(alias="Product")
+    product: StrictStr = Field(
+        alias="Product", validation_alias=AliasChoices("Product", "Product ID")
+    )
 
 
 class HarvardSparkHistoryRow(HarvardCSVModel):
@@ -94,9 +97,7 @@ class HarvardSparkHistoryRow(HarvardCSVModel):
     product_id: StrictStr = Field(alias="Product ID")
     skills: StrictStr = Field(alias="Skills")
     duration: StrictStr = Field(alias="Duration")
-    registration_date: StrictStr = Field(
-        alias="Registration Date", pattern=r"^\d{4}-\d{2}-\d{2}$"
-    )
+    registration_date: StrictStr = Field(alias="Registration Date", pattern=r"^\d{4}-\d{2}-\d{2}$")
 
 
 def validate_token(payload: Any) -> HarvardTokenResponse:
@@ -129,6 +130,8 @@ def validate_history_csv(payload: bytes, vendor: str) -> int:
         ) from exc
     reader = csv.DictReader(io.StringIO(text, newline=""))
     expected_headers = [field.alias or name for name, field in model.model_fields.items()]
+    if vendor == "harvard_hmm" and reader.fieldnames == [*expected_headers[:-1], "Product ID"]:
+        expected_headers[-1] = "Product ID"
     if reader.fieldnames != expected_headers:
         raise HarvardResponseContractError(
             "Harvard Learning History contract validation failed: CSV headers mismatch"
@@ -162,10 +165,7 @@ def _collect_extra_field_paths(value: object, prefix: str) -> list[str]:
         ]
     if not isinstance(value, HarvardContractModel):
         return []
-    paths = [
-        f"{prefix}.{name}" if prefix else name
-        for name in (value.model_extra or {})
-    ]
+    paths = [f"{prefix}.{name}" if prefix else name for name in (value.model_extra or {})]
     for name, field in type(value).model_fields.items():
         alias = field.alias or name
         child_prefix = f"{prefix}.{alias}" if prefix else alias
@@ -188,4 +188,3 @@ def _raise_contract_error(exc: ValidationError, contract_name: str) -> NoReturn:
     raise HarvardResponseContractError(
         f"Harvard {contract_name} contract validation failed: {details}"
     ) from None
-

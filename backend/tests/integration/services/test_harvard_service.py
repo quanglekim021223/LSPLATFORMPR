@@ -16,20 +16,20 @@ import pytest
 
 from app.clients.harvard_sftp_client import AsyncSSHSFTPTransport
 from app.core.config import Settings
-from app.mocks.harvard import (
-    GeneratedMockHarvardSFTPTransport,
-    MockHarvardSFTPTransport,
-    catalog_item,
-    history_csv,
-    token_payload,
-)
-from app.mocks.settings import get_mock_settings
 from app.models import RunStatus
 from app.models.harvard import RemoteFile, RemoteFileMetadata
 from app.repositories import CheckpointStore
 from app.services.harvard.hmm_service import run_harvard_hmm_ingestion
 from app.services.harvard.spark_service import run_harvard_spark_ingestion
 from tests.conftest import no_sleep, response
+from tests.support.mocks.harvard import (
+    GeneratedMockHarvardSFTPTransport,
+    MockHarvardSFTPTransport,
+    catalog_item,
+    history_csv,
+    token_payload,
+)
+from tests.support.mocks.settings import get_mock_settings
 
 NOW = datetime(2026, 8, 23, 5, 0, tzinfo=ZoneInfo("Asia/Ho_Chi_Minh"))
 
@@ -139,18 +139,14 @@ async def test_full_pipeline_paginates_and_preserves_catalog_and_csv(
     assert starts == [0, 2]
     assert sftp.calls == [remote_path, remote_path, remote_path]
     catalog_page = next(
-        settings.bronze_local_path.glob(
-            f"{vendor}/course_catalog/**/offset=000000.json"
-        )
+        settings.bronze_local_path.glob(f"{vendor}/course_catalog/**/offset=000000.json")
     )
     assert catalog_page.read_bytes() == raw_first_page
     catalog_manifest_text = (catalog_page.parent / "manifest.json").read_text()
     assert "catalog-token" not in catalog_manifest_text
     assert "test-hmm-secret" not in catalog_manifest_text
     assert "test-spark-secret" not in catalog_manifest_text
-    csv_path = next(
-        settings.bronze_local_path.glob(f"{vendor}/learning_history/**/{file_name}")
-    )
+    csv_path = next(settings.bronze_local_path.glob(f"{vendor}/learning_history/**/{file_name}"))
     assert csv_path.read_bytes() == raw_csv
     manifest = json.loads((csv_path.parent / "manifest.json").read_text())
     assert manifest["remote_path"] == remote_path
@@ -190,7 +186,6 @@ async def test_local_mock_mode_validates_sftp_credentials_and_host_key(
         encoding="utf-8",
     )
     settings = settings_factory(
-        harvard_sftp_mock_enabled=True,
         harvard_sftp_host=mock.mock_harvard_sftp_host,
         harvard_sftp_username=mock.mock_harvard_sftp_username.get_secret_value(),
         harvard_sftp_password=mock.mock_harvard_sftp_password.get_secret_value(),
@@ -210,15 +205,14 @@ async def test_local_mock_mode_validates_sftp_credentials_and_host_key(
     summary = await runner(
         settings,
         transport=httpx.MockTransport(handler),
+        sftp_transport=GeneratedMockHarvardSFTPTransport(settings, now=lambda: NOW),
         sleep=no_sleep,
         now=lambda: NOW,
     )
 
     assert summary.status == RunStatus.SUCCEEDED
     csv_path = next(
-        settings.bronze_local_path.glob(
-            f"{vendor}/learning_history/**/{prefix}20260822.csv"
-        )
+        settings.bronze_local_path.glob(f"{vendor}/learning_history/**/{prefix}20260822.csv")
     )
     assert b"mock-" in csv_path.read_bytes()
 
@@ -232,7 +226,6 @@ async def test_local_sftp_mock_rejects_wrong_password_and_untrusted_host(
     untrusted = tmp_path / "known_hosts"
     untrusted.write_text("other-host ssh-ed25519 other-key\n", encoding="utf-8")
     wrong_password = settings_factory(
-        harvard_sftp_mock_enabled=True,
         harvard_sftp_host=mock.mock_harvard_sftp_host,
         harvard_sftp_username=mock.mock_harvard_sftp_username.get_secret_value(),
         harvard_sftp_password="wrong",
@@ -243,7 +236,6 @@ async def test_local_sftp_mock_rejects_wrong_password_and_untrusted_host(
             pass
 
     valid_password = settings_factory(
-        harvard_sftp_mock_enabled=True,
         harvard_sftp_host=mock.mock_harvard_sftp_host,
         harvard_sftp_username=mock.mock_harvard_sftp_username.get_secret_value(),
         harvard_sftp_password=mock.mock_harvard_sftp_password.get_secret_value(),
@@ -367,9 +359,7 @@ async def test_backfill_keeps_successful_files_and_retries_only_missing_file(
 
     day_20 = remote("20260820")
     day_22 = remote("20260822")
-    first_sftp = MockHarvardSFTPTransport(
-        {day_20.remote_path: day_20, day_22.remote_path: day_22}
-    )
+    first_sftp = MockHarvardSFTPTransport({day_20.remote_path: day_20, day_22.remote_path: day_22})
     first = await run_harvard_hmm_ingestion(
         settings,
         transport=httpx.MockTransport(handler),
@@ -378,13 +368,16 @@ async def test_backfill_keeps_successful_files_and_retries_only_missing_file(
         now=lambda: NOW,
     )
     assert first.status == RunStatus.PARTIAL_FAILURE
-    assert len(
-        list(
-            settings.bronze_local_path.glob(
-                f"harvard_hmm/learning_history/**/run_id={first.run_id}/*.csv"
+    assert (
+        len(
+            list(
+                settings.bronze_local_path.glob(
+                    f"harvard_hmm/learning_history/**/run_id={first.run_id}/*.csv"
+                )
             )
         )
-    ) == 2
+        == 2
+    )
 
     day_21 = remote("20260821")
     retry_sftp = MockHarvardSFTPTransport({day_21.remote_path: day_21})
@@ -488,9 +481,7 @@ async def test_catalog_uses_successful_watermark_with_one_day_overlap(
     assert second.status == RunStatus.SUCCEEDED
     assert "startDate" not in catalog_params[0]
     assert catalog_params[1]["startDate"] == "20260822"
-    assert await store.get_watermark("harvard_hmm", "course_catalog") == (
-        "2026-08-24"
-    )
+    assert await store.get_watermark("harvard_hmm", "course_catalog") == ("2026-08-24")
 
 
 @pytest.mark.asyncio
@@ -601,9 +592,7 @@ async def test_invalid_catalog_contract_is_not_written_and_causes_partial_failur
 
     assert summary.status == RunStatus.PARTIAL_FAILURE
     assert not list(
-        settings.bronze_local_path.glob(
-            "harvard_hmm/course_catalog/**/offset=000000.json"
-        )
+        settings.bronze_local_path.glob("harvard_hmm/course_catalog/**/offset=000000.json")
     )
 
 
@@ -642,11 +631,7 @@ async def test_invalid_history_contract_is_not_written_and_causes_partial_failur
     )
 
     assert summary.status == RunStatus.PARTIAL_FAILURE
-    assert not list(
-        settings.bronze_local_path.glob(
-            "harvard_hmm/learning_history/**/*.csv"
-        )
-    )
+    assert not list(settings.bronze_local_path.glob("harvard_hmm/learning_history/**/*.csv"))
 
 
 @pytest.mark.asyncio
@@ -676,9 +661,7 @@ async def test_missing_sftp_file_causes_partial_failure_and_redacts_secrets(
             return []
 
         async def fetch(self, _remote_path: str) -> RemoteFile | None:
-            raise RuntimeError(
-                "failed with test-sftp-user test-sftp-password test-hmm-secret"
-            )
+            raise RuntimeError("failed with test-sftp-user test-sftp-password test-hmm-secret")
 
     summary = await run_harvard_hmm_ingestion(
         settings,
@@ -731,11 +714,7 @@ async def test_missing_catalog_configuration_only_fails_catalog_branch(
     )
 
     assert summary.status == RunStatus.PARTIAL_FAILURE
-    assert list(
-        settings.bronze_local_path.glob(
-            "harvard_hmm/learning_history/**/*.csv"
-        )
-    )
+    assert list(settings.bronze_local_path.glob("harvard_hmm/learning_history/**/*.csv"))
 
 
 def test_sftp_transport_requires_known_hosts(
@@ -887,9 +866,7 @@ async def test_sftp_connection_reset_reopens_session_and_retries(
         SFTPConnectionLost=type("SFTPConnectionLost", (Exception,), {}),
     )
     monkeypatch.setitem(sys.modules, "asyncssh", fake_asyncssh)
-    transport = AsyncSSHSFTPTransport(
-        settings, sleep=record_sleep, jitter=lambda: 0.0
-    )
+    transport = AsyncSSHSFTPTransport(settings, sleep=record_sleep, jitter=lambda: 0.0)
 
     result = await transport.fetch("/reports/report.csv")
 

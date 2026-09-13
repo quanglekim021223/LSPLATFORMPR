@@ -22,9 +22,7 @@ class AsyncSSHSFTPTransport:
         jitter: Callable[[], float] = random.random,
     ) -> None:
         if settings.harvard_sftp_known_hosts is None:
-            raise ValueError(
-                "HARVARD_SFTP_KNOWN_HOSTS is required for host-key verification"
-            )
+            raise ValueError("HARVARD_SFTP_KNOWN_HOSTS is required for host-key verification")
         self.settings = settings
         self._stack: AsyncExitStack | None = None
         self._sftp: Any = None
@@ -63,9 +61,7 @@ class AsyncSSHSFTPTransport:
                     known_hosts=str(self.settings.harvard_sftp_known_hosts),
                 )
             )
-            self._sftp = await stack.enter_async_context(
-                connection.start_sftp_client()
-            )
+            self._sftp = await stack.enter_async_context(connection.start_sftp_client())
         except BaseException:
             await stack.aclose()
             raise
@@ -126,9 +122,7 @@ class AsyncSSHSFTPTransport:
                 await self._close_session()
         raise AssertionError("Harvard SFTP list retry loop exhausted")
 
-    async def _list_from_open_session(
-        self, remote_dir: str
-    ) -> list[RemoteFileMetadata]:
+    async def _list_from_open_session(self, remote_dir: str) -> list[RemoteFileMetadata]:
         entries = await self._sftp.readdir(remote_dir)
         files: list[RemoteFileMetadata] = []
         for entry in entries:

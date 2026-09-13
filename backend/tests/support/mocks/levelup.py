@@ -7,17 +7,20 @@ from typing import Annotated
 from fastapi import APIRouter, Header, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
-from app.mocks.generated_data import generated_vendor_data
-from app.mocks.settings import get_mock_settings
+from tests.support.mocks.generated_data import generated_vendor_data
+from tests.support.mocks.settings import get_mock_settings
 
 router = APIRouter(tags=["LevelUP"])
 _DATE_EDITED_FILTER = re.compile(r"dateEdited gt '([^']+)'")
 MOCK_EDITED_AT = "2026-08-24T04:00:00"
 
 
-def course_payload(
-    course_id: str, name: str, vendor: str | None
-) -> dict[str, object]:
+def _date_edited(item: dict[str, object]) -> str:
+    value = item.get("dateEdited")
+    return value if isinstance(value, str) else ""
+
+
+def course_payload(course_id: str, name: str, vendor: str | None) -> dict[str, object]:
     return {
         "id": course_id,
         "courseType": "OnlineCourse",
@@ -52,9 +55,7 @@ def course_payload(
     }
 
 
-def enrollment_payload(
-    enrollment_id: str, course_id: str, user_id: str
-) -> dict[str, object]:
+def enrollment_payload(enrollment_id: str, course_id: str, user_id: str) -> dict[str, object]:
     return {
         "id": enrollment_id,
         "courseId": course_id,
@@ -86,15 +87,13 @@ _COURSES = [
     course_payload("linkedin-course", "LinkedIn Course", "LinkedIn Learning"),
     course_payload("data-engineering", "Data Engineering", "LevelUP"),
 ]
-_ENROLLMENTS = {
+_ENROLLMENTS: dict[str, list[dict[str, object]]] = {
     "python-basic": [
         enrollment_payload("e1", "python-basic", "user-01"),
         enrollment_payload("e2", "python-basic", "user-02"),
         enrollment_payload("e3", "python-basic", "user-03"),
     ],
-    "linkedin-course": [
-        enrollment_payload("ignored", "linkedin-course", "user-04")
-    ],
+    "linkedin-course": [enrollment_payload("ignored", "linkedin-course", "user-04")],
     "data-engineering": [],
 }
 
@@ -134,12 +133,12 @@ def _apply_incremental_filter(
     if match is None:
         return items
     watermark = _parse_timestamp(match.group(1))
-    return [
-        item
-        for item in items
-        if isinstance(item.get("dateEdited"), str)
-        and _parse_timestamp(str(item["dateEdited"])) > watermark
-    ]
+    return [item for item in items if _edited_after(item, watermark)]
+
+
+def _edited_after(item: dict[str, object], watermark: datetime) -> bool:
+    edited_at = item.get("dateEdited")
+    return isinstance(edited_at, str) and _parse_timestamp(edited_at) > watermark
 
 
 def _parse_timestamp(value: str) -> datetime:
@@ -160,8 +159,7 @@ async def authenticate(
     if (
         credentials.username != settings.mock_levelup_username.get_secret_value()
         or credentials.password != settings.mock_levelup_password.get_secret_value()
-        or credentials.private_key
-        != settings.mock_levelup_api_key.get_secret_value()
+        or credentials.private_key != settings.mock_levelup_api_key.get_secret_value()
     ):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid mock login")
     return settings.mock_levelup_access_token.get_secret_value()
@@ -180,8 +178,9 @@ async def courses(
     _validate_token(authorization, api_key, api_version)
     filtered = _apply_incremental_filter(_COURSES, filter_value)
     if sort_value == "dateEdited":
-        filtered = sorted(filtered, key=lambda item: str(item["dateEdited"]))
-    page = filtered[offset : offset + limit]
+        filtered = sorted(filtered, key=_date_edited)
+    start = offset * limit
+    page = filtered[start : start + limit]
     return {
         "totalItems": len(filtered),
         "returnedItems": len(page),
@@ -212,9 +211,10 @@ async def enrollments(
     if sort_value == "dateEdited":
         all_enrollments = sorted(
             all_enrollments,
-            key=lambda item: str(item["dateEdited"]),
+            key=_date_edited,
         )
-    page = all_enrollments[offset : offset + limit]
+    start = offset * limit
+    page = all_enrollments[start : start + limit]
     return {
         "totalItems": len(all_enrollments),
         "returnedItems": len(page),

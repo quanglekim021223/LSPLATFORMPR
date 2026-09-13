@@ -60,7 +60,7 @@ class CourseraInstructor(CourseraContractModel):
 
 class CourseraPartner(CourseraContractModel):
     name: StrictStr
-    logo_url: StrictStr
+    logo_url: StrictStr | None = None
 
 
 class CourseraProgram(CourseraContractModel):
@@ -91,10 +91,10 @@ class CourseraDomainType(CourseraContractModel):
 
 
 class CourseraMetadataDefinition(CourseraContractModel):
-    skills: list[CourseraSkill]
-    estimated_learning_time: NonNegativeInt
+    skills: list[CourseraSkill] = Field(default_factory=list)
+    estimated_learning_time: NonNegativeInt | None = None
     promo_photo: StrictStr
-    domain_types: list[CourseraDomainType]
+    domain_types: list[CourseraDomainType] = Field(default_factory=list)
 
 
 class CourseraExtraMetadata(CourseraContractModel):
@@ -109,8 +109,8 @@ class CourseraContentChange(CourseraContractModel):
 
 class CourseraContent(CourseraContractModel):
     subtitle_language_codes: list[StrictStr]
-    last_updated_at: NonNegativeInt
-    difficulty_level: StrictStr
+    last_updated_at: NonNegativeInt | None = None
+    difficulty_level: StrictStr | None = None
     content_id: StrictStr
     description: StrictStr
     language_code: StrictStr
@@ -151,7 +151,7 @@ class CourseraEnrollment(CourseraContractModel):
     is_completed: StrictBool
     completed_at: NonNegativeInt | None = None
     grade: StrictNumber | None = None
-    last_activity_at: NonNegativeInt
+    last_activity_at: NonNegativeInt | None = None
     membership_state: StrictStr
     enrolled_at: NonNegativeInt
     overall_progress: StrictNumber
@@ -190,18 +190,16 @@ def validate_course_list(payload: Any) -> CourseraContentResponse:
     return _validate(payload, CourseraContentResponse, "Course List")
 
 
-def validate_course_detail(
-    payload: Any, *, expected_content_id: str
-) -> CourseraContentResponse:
+def validate_course_detail(payload: Any, *, expected_id: str) -> CourseraContentResponse:
     contract = _validate(payload, CourseraContentResponse, "Course Detail")
     if len(contract.elements) != 1:
         raise CourseraResponseContractError(
             "Coursera Course Detail contract validation failed: elements must "
             "contain exactly one course"
         )
-    if contract.elements[0].content_id != expected_content_id:
+    if contract.elements[0].id != expected_id:
         raise CourseraResponseContractError(
-            "Coursera Course Detail contract validation failed: contentId:mismatch"
+            "Coursera Course Detail contract validation failed: id:mismatch"
         )
     return contract
 
@@ -224,10 +222,7 @@ def _collect_extra_field_paths(value: object, prefix: str) -> list[str]:
     if not isinstance(value, CourseraContractModel):
         return []
 
-    paths = [
-        f"{prefix}.{name}" if prefix else name
-        for name in (value.model_extra or {})
-    ]
+    paths = [f"{prefix}.{name}" if prefix else name for name in (value.model_extra or {})]
     for name, field in type(value).model_fields.items():
         field_value = getattr(value, name)
         alias = field.alias or name

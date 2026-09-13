@@ -123,7 +123,7 @@ class FAMSClassTraining(FAMSContractModel):
 
 
 class FAMSStudentInfo(FAMSContractModel):
-    account: StrictStr
+    account: StrictStr | None
     name: StrictStr
     university: StrictStr | None = None
     faculty: StrictStr | None = None
@@ -134,7 +134,7 @@ class FAMSStudentInfo(FAMSContractModel):
     phone: StrictStr | None = None
     address: StrictStr | None = None
     facebook: StrictStr | None = None
-    university_graduation_date: StrictInt | None = None
+    university_graduation_date: StrictStr | StrictInt | None = None
     full_time_working_available_date: StrictStr | None = None
     site: StrictStr
     course_code: StrictStr
@@ -145,7 +145,7 @@ class FAMSStudentInfo(FAMSContractModel):
     status_in_class: StrictStr
     final_grade: StrictStr | None = None
     completion_level: StrictStr | None = None
-    eng_toeic_score: StrictNumber | None = None
+    eng_toeic_score: StrictNumber | StrictStr | None = None
     eng_communication_skill: StrictStr | None = None
     certificate_id: StrictStr | None = None
     allocation_status: StrictStr | None = None
@@ -183,7 +183,7 @@ class FAMSTrainingData(FAMSContractModel):
 class FAMSTrainingDataResponse(FAMSContractModel):
     success: StrictBool
     message: StrictStr
-    error_code: StrictStr | None
+    error_code: StrictStr | None = None
     data: FAMSTrainingData
 
     @field_validator("success")
@@ -212,10 +212,7 @@ def _collect_extra_field_paths(value: object, prefix: str) -> list[str]:
     if not isinstance(value, FAMSContractModel):
         return []
 
-    paths = [
-        f"{prefix}.{name}" if prefix else name
-        for name in (value.model_extra or {})
-    ]
+    paths = [f"{prefix}.{name}" if prefix else name for name in (value.model_extra or {})]
     for name, field in type(value).model_fields.items():
         field_value = getattr(value, name)
         alias = field.alias or name

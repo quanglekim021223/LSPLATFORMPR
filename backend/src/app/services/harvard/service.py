@@ -60,9 +60,7 @@ class HarvardJob:
         owner_task = asyncio.current_task()
         if owner_task is None:
             raise RuntimeError("Harvard ingestion must run inside an asyncio task")
-        await self.checkpoints.acquire_lock(
-            self.vendor.vendor, current_run_id, LOCK_TTL_SECONDS
-        )
+        await self.checkpoints.acquire_lock(self.vendor.vendor, current_run_id, LOCK_TTL_SECONDS)
         stop_heartbeat = asyncio.Event()
         heartbeat_task = asyncio.create_task(
             self._heartbeat_loop(current_run_id, stop_heartbeat, owner_task)
@@ -73,18 +71,14 @@ class HarvardJob:
             run_now = self.now()
             ingestion_date = run_now.date().isoformat()
             tasks = [
-                self._run_catalog_branch(
-                    current_run_id, ingestion_date, start_date
-                ),
+                self._run_catalog_branch(current_run_id, ingestion_date, start_date),
                 self._run_history_branch(current_run_id, ingestion_date),
             ]
             results = await asyncio.gather(*tasks, return_exceptions=True)
             errors = [result for result in results if isinstance(result, BaseException)]
             if errors:
                 status = (
-                    RunStatus.FAILED
-                    if len(errors) == len(tasks)
-                    else RunStatus.PARTIAL_FAILURE
+                    RunStatus.FAILED if len(errors) == len(tasks) else RunStatus.PARTIAL_FAILURE
                 )
                 return await self.checkpoints.finish_run(
                     current_run_id,
@@ -102,9 +96,7 @@ class HarvardJob:
                     message,
                 )
                 await asyncio.shield(
-                    self.checkpoints.finish_run(
-                        current_run_id, RunStatus.FAILED, message
-                    )
+                    self.checkpoints.finish_run(current_run_id, RunStatus.FAILED, message)
                 )
             raise
         except Exception as exc:
@@ -115,9 +107,7 @@ class HarvardJob:
                 current_run_id,
                 message,
             )
-            return await self.checkpoints.finish_run(
-                current_run_id, RunStatus.FAILED, message
-            )
+            return await self.checkpoints.finish_run(current_run_id, RunStatus.FAILED, message)
         finally:
             stop_heartbeat.set()
             with suppress(asyncio.CancelledError):
@@ -166,9 +156,7 @@ class HarvardJob:
             self.vendor.vendor, CATALOG_DOMAIN, ingestion_date, run_id
         )
 
-    async def _run_history_branch(
-        self, run_id: str, ingestion_date: str
-    ) -> None:
+    async def _run_history_branch(self, run_id: str, ingestion_date: str) -> None:
         try:
             sftp = self._build_sftp_transport()
         except Exception as exc:
@@ -176,9 +164,7 @@ class HarvardJob:
             await self.checkpoints.record_failed_page(
                 run_id, LEARNING_HISTORY, 1, message, retryable=False
             )
-            await self.checkpoints.mark_domain(
-                run_id, LEARNING_HISTORY, "terminal_failed", message
-            )
+            await self.checkpoints.mark_domain(run_id, LEARNING_HISTORY, "terminal_failed", message)
             raise
         entered = False
         try:
@@ -215,10 +201,6 @@ class HarvardJob:
         self.settings.validate_harvard_sftp_runtime()
         if self.sftp_transport is not None:
             return self.sftp_transport
-        if self.settings.harvard_sftp_mock_enabled:
-            from app.mocks.harvard import GeneratedMockHarvardSFTPTransport
-
-            return GeneratedMockHarvardSFTPTransport(self.settings, now=self.now)
         return AsyncSSHSFTPTransport(self.settings, sleep=self.sleep)
 
     def sensitive_values(self) -> tuple[str, ...]:
@@ -243,9 +225,7 @@ class HarvardJob:
                 return
             except TimeoutError:
                 try:
-                    await self.checkpoints.heartbeat_lock(
-                        self.vendor.vendor, run_id
-                    )
+                    await self.checkpoints.heartbeat_lock(self.vendor.vendor, run_id)
                 except Exception as exc:
                     self._heartbeat_error = exc
                     owner_task.cancel()
@@ -268,9 +248,7 @@ async def run_harvard_ingestion(
     store = checkpoint_store or CheckpointStore(settings.checkpoint_db_path)
     writer = bronze_writer or LocalBronzeWriter(settings.bronze_local_path)
     await store.initialize()
-    purged_runs = await store.purge_old_runs(
-        vendor.vendor, settings.checkpoint_retention_days
-    )
+    purged_runs = await store.purge_old_runs(vendor.vendor, settings.checkpoint_retention_days)
     if purged_runs:
         logger.info(
             "Purged %d expired %s checkpoint run(s)",
@@ -285,9 +263,7 @@ async def run_harvard_ingestion(
     )
     clock = now or (lambda: datetime.now(ZoneInfo(settings.ingestion_timezone)))
     async with httpx.AsyncClient(timeout=timeout, transport=transport) as http_client:
-        catalog_client = HarvardCatalogClient(
-            settings, vendor, http_client, sleep=sleep
-        )
+        catalog_client = HarvardCatalogClient(settings, vendor, http_client, sleep=sleep)
         job = HarvardJob(
             settings,
             vendor,

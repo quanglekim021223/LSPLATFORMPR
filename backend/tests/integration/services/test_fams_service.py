@@ -210,7 +210,7 @@ async def test_filtered_mode_without_filters_fails_before_http_request(
     [
         ({"fams_status": "UNKNOWN"}, "FAMS_STATUS"),
         ({"fams_site": "HN,,HCM"}, "FAMS_SITE"),
-        ({"fams_actual_start_date_from": "2026-01-01"}, "YYYYMMDD"),
+        ({"fams_actual_start_date_from": "2026-02-30"}, "YYYYMMDD"),
         (
             {
                 "fams_actual_start_date_from": "20260824",
@@ -256,9 +256,7 @@ async def test_filtered_configuration_errors_are_saved_in_latest_run(
                     "password": TEST_ADMIN_PASSWORD,
                 },
             )
-            client.headers["Authorization"] = (
-                f"Bearer {login.json()['access_token']}"
-            )
+            client.headers["Authorization"] = f"Bearer {login.json()['access_token']}"
             latest = await client.get("/jobs/fams/latest")
     assert latest.status_code == 200
     assert latest.json()["run_id"] == summary.run_id
@@ -359,13 +357,16 @@ async def test_unchanged_full_response_is_not_written_twice(
     assert second.status == RunStatus.SUCCEEDED
     assert second.records_by_domain == {"training_data": 0}
     assert calls == 2
-    assert len(
-        list(
-            settings.bronze_local_path.rglob(  # type: ignore[attr-defined]
-                "offset=000001.json"
+    assert (
+        len(
+            list(
+                settings.bronze_local_path.rglob(  # type: ignore[attr-defined]
+                    "offset=000001.json"
+                )
             )
         )
-    ) == 1
+        == 1
+    )
 
 
 @pytest.mark.asyncio
@@ -400,13 +401,16 @@ async def test_changed_full_response_creates_new_bronze_snapshot(
     assert first.status == RunStatus.SUCCEEDED
     assert second.status == RunStatus.SUCCEEDED
     assert second.records_by_domain == {"training_data": 5}
-    assert len(
-        list(
-            settings.bronze_local_path.rglob(  # type: ignore[attr-defined]
-                "offset=000001.json"
+    assert (
+        len(
+            list(
+                settings.bronze_local_path.rglob(  # type: ignore[attr-defined]
+                    "offset=000001.json"
+                )
             )
         )
-    ) == 2
+        == 2
+    )
 
 
 @pytest.mark.asyncio

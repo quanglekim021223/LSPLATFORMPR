@@ -26,9 +26,7 @@ async def test_skillup_client_sends_api_key_and_reuses_retry(
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
         client = SkillUpClient(settings, http_client, sleep=no_sleep)  # type: ignore[arg-type]
-        payload, _ = await client.get_json(
-            "https://skillup-intelligence.test", "/taxonomy", {}
-        )
+        payload, _ = await client.get_json("https://skillup-intelligence.test", "/taxonomy", {})
 
     assert payload == {"items": [], "hasNextPage": False}
     assert attempts == 2

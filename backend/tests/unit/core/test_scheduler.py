@@ -6,7 +6,7 @@ from app.config.scheduler import build_scheduler
 
 
 def test_scheduler_defaults_to_single_daily_0500_job(
-    settings_factory: Callable[..., object]
+    settings_factory: Callable[..., object],
 ) -> None:
     settings = settings_factory()
 

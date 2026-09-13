@@ -7,7 +7,7 @@ from collections.abc import Callable
 import httpx
 import pytest
 
-from app.clients.levelup_client import LevelUpClient
+from app.clients.levelup_client import LevelUpClient, is_retryable_error
 from tests.conftest import no_sleep, response
 
 
@@ -66,9 +66,7 @@ async def test_401_refreshes_token_once(settings_factory: Callable[..., object])
 
 
 @pytest.mark.asyncio
-async def test_401_is_not_refreshed_more_than_once(
-    settings_factory: Callable[..., object]
-) -> None:
+async def test_401_is_not_refreshed_more_than_once(settings_factory: Callable[..., object]) -> None:
     settings = settings_factory()
     calls = {"auth": 0, "get": 0}
 
@@ -84,3 +82,14 @@ async def test_401_is_not_refreshed_more_than_once(
         with pytest.raises(httpx.HTTPStatusError):
             await client.get_json("/courses", {})
     assert calls == {"auth": 2, "get": 2}
+
+
+def test_401_is_retryable_after_client_refresh_is_exhausted() -> None:
+    request = httpx.Request("GET", "https://rest.myabsorb.eu/courses/c1/enrollments")
+    error = httpx.HTTPStatusError(
+        "unauthorized",
+        request=request,
+        response=httpx.Response(401, request=request),
+    )
+
+    assert is_retryable_error(error)

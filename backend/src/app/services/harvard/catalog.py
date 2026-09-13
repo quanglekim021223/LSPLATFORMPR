@@ -50,8 +50,7 @@ async def ingest_catalog(
             extras = extra_field_paths(contract)
             if extras:
                 logger.warning(
-                    "Harvard Catalog contains new contract fields "
-                    "vendor=%s fields=%s",
+                    "Harvard Catalog contains new contract fields vendor=%s fields=%s",
                     vendor.vendor,
                     ",".join(extras),
                 )
@@ -68,9 +67,7 @@ async def ingest_catalog(
                     fetched_at=datetime.now(UTC),
                 )
             )
-            await checkpoints.record_completed_page(
-                run_id, DOMAIN, start, records_count
-            )
+            await checkpoints.record_completed_page(run_id, DOMAIN, start, records_count)
             received += records_count
             reached_total = received >= contract.count
         except Exception as exc:

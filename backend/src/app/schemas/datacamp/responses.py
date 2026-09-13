@@ -90,7 +90,7 @@ class DataCampCatalogResponse(DataCampContractModel):
 
 class DataCampEventUser(DataCampContractModel):
     email: StrictStr
-    nameid: StrictStr
+    nameid: StrictStr | None = None
     lms_username: StrictStr | None
 
 
@@ -124,10 +124,7 @@ class DataCampEventsResponse(DataCampContractModel):
     def validate_page_size(self) -> DataCampEventsResponse:
         if len(self.data) > self.meta.page_size:
             raise ValueError("events data must not exceed meta.pageSize")
-        if (
-            self.meta.number_of_pages > 0
-            and self.meta.page > self.meta.number_of_pages
-        ):
+        if self.meta.number_of_pages > 0 and self.meta.page > self.meta.number_of_pages:
             raise ValueError("meta.page must not be greater than meta.numberOfPages")
         return self
 
@@ -179,10 +176,7 @@ def _collect_extra_field_paths(value: object, prefix: str) -> list[str]:
     if not isinstance(value, DataCampContractModel):
         return []
 
-    paths = [
-        f"{prefix}.{name}" if prefix else name
-        for name in (value.model_extra or {})
-    ]
+    paths = [f"{prefix}.{name}" if prefix else name for name in (value.model_extra or {})]
     for name, field in type(value).model_fields.items():
         field_value = getattr(value, name)
         alias = field.alias or name
@@ -191,9 +185,7 @@ def _collect_extra_field_paths(value: object, prefix: str) -> list[str]:
     return paths
 
 
-def _validate(
-    payload: Any, model: type[ModelT], contract_name: str
-) -> ModelT:
+def _validate(payload: Any, model: type[ModelT], contract_name: str) -> ModelT:
     try:
         return model.model_validate(payload)
     except ValidationError as exc:

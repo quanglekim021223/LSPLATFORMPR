@@ -3,7 +3,6 @@ from __future__ import annotations
 import pytest
 
 from app.clients.linkedin_client import LinkedInResponseContractError
-from app.mocks.linkedin import activity_report_payload, asset_payload, token_payload
 from app.schemas.linkedin import (
     extra_field_paths,
     validate_activity_reports,
@@ -11,6 +10,7 @@ from app.schemas.linkedin import (
     validate_learning_assets,
     validate_token,
 )
+from tests.support.mocks.linkedin import activity_report_payload, asset_payload, token_payload
 
 
 def _paging(start: int, count: int, total: int) -> dict[str, object]:
@@ -49,9 +49,7 @@ def test_learning_assets_contract_accepts_recursive_contents() -> None:
         "elements": [asset],
     }
 
-    contract = validate_learning_assets(
-        payload, expected_start=0, expected_count=100
-    )
+    contract = validate_learning_assets(payload, expected_start=0, expected_count=100)
 
     assert contract.elements[0].contents[0].asset.type == "CHAPTER"
 
@@ -64,9 +62,7 @@ def test_asset_detail_requires_requested_urn() -> None:
     }
 
     with pytest.raises(LinkedInResponseContractError, match="urn:mismatch"):
-        validate_learning_asset_detail(
-            payload, expected_urn="urn:li:lyndaCourse:other"
-        )
+        validate_learning_asset_detail(payload, expected_urn="urn:li:lyndaCourse:other")
 
 
 def test_learning_activity_report_contract() -> None:
@@ -75,9 +71,7 @@ def test_learning_activity_report_contract() -> None:
         "elements": [activity_report_payload(1, 1_787_122_740_000)],
     }
 
-    contract = validate_activity_reports(
-        payload, expected_start=0, expected_count=1000
-    )
+    contract = validate_activity_reports(payload, expected_start=0, expected_count=1000)
 
     assert contract.elements[0].learner_details.name == "Learner 1"
     assert contract.elements[0].activities[0].engagement_value == 1
@@ -117,9 +111,7 @@ def test_learning_activity_report_accepts_optional_null_and_missing_fields() -> 
         ],
     }
 
-    contract = validate_activity_reports(
-        payload, expected_start=0, expected_count=100
-    )
+    contract = validate_activity_reports(payload, expected_start=0, expected_count=100)
 
     assert contract.elements[0].activities[0].engagement_value is None
     assert contract.elements[1].learner_details is None
@@ -148,9 +140,7 @@ def test_additive_fields_are_reported_by_path() -> None:
         "newEnvelopeField": True,
     }
 
-    contract = validate_learning_assets(
-        payload, expected_start=0, expected_count=100
-    )
+    contract = validate_learning_assets(payload, expected_start=0, expected_count=100)
 
     assert extra_field_paths(contract) == [
         "elements.0.details.vendorNewField",
