@@ -4,10 +4,18 @@ import logging
 import tempfile
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
+<<<<<<< HEAD
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+=======
+from http import HTTPStatus
+
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+>>>>>>> develop
 
 from app.api.v1.router import build_api_router
 from app.config.scheduler import ScheduledJob, build_scheduler
@@ -171,6 +179,44 @@ def create_app(
         expose_headers=["Content-Disposition"],
     )
 
+    @application.exception_handler(HTTPException)
+    async def http_exception_handler(
+        _: Request,
+        exc: HTTPException,
+    ) -> JSONResponse:
+        try:
+            message = HTTPStatus(exc.status_code).phrase
+        except ValueError:
+            message = "HTTP error"
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={
+                "errcode": exc.status_code,
+                "message": message,
+                "detail": exc.detail,
+            },
+            headers=exc.headers,
+        )
+
+    @application.exception_handler(Exception)
+    async def unhandled_exception_handler(
+        request: Request,
+        exc: Exception,
+    ) -> JSONResponse:
+        logger.exception(
+            "Unhandled request error method=%s path=%s",
+            request.method,
+            request.url.path,
+        )
+        return JSONResponse(
+            status_code=500,
+            content={
+                "errcode": 500,
+                "message": "Internal server error",
+                "detail": "An unexpected error occurred. Check application logs.",
+            },
+        )
+ 
     application.include_router(build_api_router(store, config, writer, coordinator))
 
     return application
