@@ -8,6 +8,8 @@ from http import HTTPStatus
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.middleware.base import RequestResponseEndpoint
+from starlette.responses import Response
 
 from app.api.v1.router import build_api_router
 from app.config.scheduler import ScheduledJob, build_scheduler
@@ -166,15 +168,15 @@ def create_app(
             headers=exc.headers,
         )
 
-    @application.exception_handler(Exception)
-    async def unhandled_exception_handler(
+    def unhandled_exception_handler(
         request: Request,
         exc: Exception,
     ) -> JSONResponse:
-        logger.exception(
+        logger.error(
             "Unhandled request error method=%s path=%s",
             request.method,
             request.url.path,
+            exc_info=(type(exc), exc, exc.__traceback__),
         )
         return JSONResponse(
             status_code=500,
@@ -184,9 +186,19 @@ def create_app(
                 "detail": "An unexpected error occurred. Check application logs.",
             },
         )
+
+    @application.middleware("http")
+    async def catch_unhandled_exceptions(
+        request: Request,
+        call_next: RequestResponseEndpoint,
+    ) -> Response:
+        try:
+            return await call_next(request)
+        except Exception as exc:
+            return unhandled_exception_handler(request, exc)
  
     application.include_router(build_api_router(store, config, writer, coordinator))
- 
+    
     return application
  
  
