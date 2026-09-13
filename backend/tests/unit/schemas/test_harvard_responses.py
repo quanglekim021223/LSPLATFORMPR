@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import pytest
 
-from app.mocks.harvard import catalog_item, history_csv, token_payload
 from app.schemas.harvard import (
     HarvardResponseContractError,
     extra_field_paths,
@@ -10,6 +9,7 @@ from app.schemas.harvard import (
     validate_history_csv,
     validate_token,
 )
+from tests.support.mocks.harvard import catalog_item, history_csv, token_payload
 
 
 def test_token_contract() -> None:

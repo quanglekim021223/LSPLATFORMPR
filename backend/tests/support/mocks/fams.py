@@ -4,8 +4,8 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Header, HTTPException, Query, status
 
-from app.mocks.generated_data import generated_vendor_data
-from app.mocks.settings import get_mock_settings
+from tests.support.mocks.generated_data import generated_vendor_data
+from tests.support.mocks.settings import get_mock_settings
 
 router = APIRouter(tags=["FAMS"])
 _FAMS_COURSE_1_NAME = "FAMS Course 1"

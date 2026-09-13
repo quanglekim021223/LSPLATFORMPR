@@ -8,8 +8,8 @@ import httpx
 import pytest
 
 from app.clients.coursera_client import CourseraClient
-from app.mocks.coursera import token_payload
 from tests.conftest import no_sleep, response
+from tests.support.mocks.coursera import token_payload
 
 
 @pytest.mark.asyncio
@@ -19,9 +19,7 @@ async def test_coursera_authentication_contract_and_secrets_not_logged(
     settings = settings_factory()
 
     def handler(request: httpx.Request) -> httpx.Response:
-        expected = base64.b64encode(
-            b"test-coursera-user:test-coursera-password"
-        ).decode()
+        expected = base64.b64encode(b"test-coursera-user:test-coursera-password").decode()
         assert request.headers["Authorization"] == f"Basic {expected}"
         assert request.headers["Accept"] == "application/json"
         assert request.content == b"grant_type=client_credentials"
@@ -46,9 +44,7 @@ async def test_401_refreshes_once_and_retries_get_once(
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/oauth2/client_credentials/token":
             calls["auth"] += 1
-            return response(
-                request, 200, token_payload(f"token-{calls['auth']}")
-            )
+            return response(request, 200, token_payload(f"token-{calls['auth']}"))
         calls["get"] += 1
         expected = "token-1" if calls["get"] == 1 else "token-2"
         assert request.headers["Authorization"] == f"Bearer {expected}"
@@ -73,9 +69,7 @@ async def test_second_401_is_not_retried(
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/oauth2/client_credentials/token":
             calls["auth"] += 1
-            return response(
-                request, 200, token_payload(f"token-{calls['auth']}")
-            )
+            return response(request, 200, token_payload(f"token-{calls['auth']}"))
         calls["get"] += 1
         return response(request, 401, {})
 
@@ -111,13 +105,13 @@ def test_detail_template_only_accepts_supported_fields(
     settings_factory: Callable[..., object],
 ) -> None:
     settings = settings_factory(
-        coursera_content_detail_path_template="/{org_id}/items/{content_id}"
+        coursera_content_detail_path_template="/{org_id}/items/{id}"
     )
     client = CourseraClient(settings, httpx.AsyncClient())  # type: ignore[arg-type]
     assert client.content_detail_path("course/1") == "/test-org/items/course%2F1"
 
     invalid = settings_factory(
-        coursera_content_detail_path_template="/{org_id}/{unknown}/{content_id}"
+        coursera_content_detail_path_template="/{org_id}/{unknown}/{id}"
     )
     invalid_client = CourseraClient(invalid, httpx.AsyncClient())  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="only supports"):

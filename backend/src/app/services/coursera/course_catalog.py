@@ -6,7 +6,11 @@ from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import quote
 
-from app.clients.coursera_client import CourseraClient, is_retryable_error
+from app.clients.coursera_client import (
+    COURSE_DETAIL_CONTENT_TYPES,
+    CourseraClient,
+    is_retryable_error,
+)
 from app.core.config import Settings
 from app.core.security import sanitize_text
 from app.models import CourseResult, PageWrite
@@ -36,6 +40,33 @@ async def ingest_catalog_pipeline(
     modified_since_timestamp: int | None = None,
     sync_watermark: str | None = None,
 ) -> list[CourseResult]:
+    if settings.fabric_enabled:
+        from app.fabric_catalog import ingest_raw_catalog
+
+        await ingest_raw_catalog(
+            settings,
+            client,
+            checkpoints,
+            writer,
+            run_id,
+            ingestion_date,
+            VENDOR,
+            modified_since=modified_since_timestamp,
+            sync_watermark=None,
+        )
+        course_ids = await checkpoints.courses_to_process(run_id)
+        results = await ingest_course_details(
+            settings,
+            client,
+            checkpoints,
+            writer,
+            run_id,
+            ingestion_date,
+            course_ids,
+        )
+        if sync_watermark is not None and all(result.succeeded for result in results):
+            await checkpoints.set_watermark(VENDOR, CATALOG_DOMAIN, sync_watermark, run_id)
+        return results
     try:
         await ingest_course_list(
             settings,
@@ -114,10 +145,8 @@ async def ingest_course_list(
                     fetched_at=datetime.now(UTC),
                 )
             )
-            await checkpoints.record_completed_page(
-                run_id, CATALOG_DOMAIN, start, len(elements)
-            )
-            await checkpoints.add_courses(run_id, _content_ids(elements))
+            await checkpoints.record_completed_page(run_id, CATALOG_DOMAIN, start, len(elements))
+            await checkpoints.add_courses(run_id, _content_route_ids(elements))
             following_start = next_start(payload, start)
         except Exception as exc:
             message = sanitize_text(exc, client.sensitive_values())
@@ -195,9 +224,7 @@ async def ingest_course_detail(
     try:
         path = client.content_detail_path(content_id)
         payload, raw_payload = await client.get_json(path, {})
-        contract = validate_course_detail(
-            payload, expected_content_id=content_id
-        )
+        contract = validate_course_detail(payload, expected_id=content_id)
         elements = contract.elements
         extras = extra_field_paths(contract)
         if extras:
@@ -219,9 +246,7 @@ async def ingest_course_detail(
                 fetched_at=datetime.now(UTC),
             )
         )
-        await checkpoints.record_completed_page(
-            run_id, DETAIL_DOMAIN, 1, len(elements), content_id
-        )
+        await checkpoints.record_completed_page(run_id, DETAIL_DOMAIN, 1, len(elements), content_id)
         await checkpoints.mark_course(run_id, content_id, "completed")
         result.records_count = len(elements)
     except Exception as exc:
@@ -251,10 +276,10 @@ async def ingest_course_detail(
     return result
 
 
-def _content_ids(elements: list[CourseraContent]) -> list[str]:
+def _content_route_ids(elements: list[CourseraContent]) -> list[str]:
     return [
-        element.content_id
+        element.id
         for element in elements
-        if not element.changes
-        or any(change.change_type != "REMOVED" for change in element.changes)
+        if element.id.partition("~")[0] in COURSE_DETAIL_CONTENT_TYPES
+        if not element.changes or any(change.change_type != "REMOVED" for change in element.changes)
     ]

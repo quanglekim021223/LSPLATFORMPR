@@ -71,9 +71,9 @@ class DataCampJob:
         try:
             await self.checkpoints.start_run(current_run_id, VENDOR)
             await self.checkpoints.add_domains(current_run_id, list(DOMAINS))
-            ingestion_date = datetime.now(
-                ZoneInfo(self.settings.ingestion_timezone)
-            ).date().isoformat()
+            ingestion_date = (
+                datetime.now(ZoneInfo(self.settings.ingestion_timezone)).date().isoformat()
+            )
             (
                 history_from,
                 history_to,
@@ -131,18 +131,14 @@ class DataCampJob:
             return await self.checkpoints.finish_run(current_run_id, RunStatus.SUCCEEDED)
         except asyncio.CancelledError:
             if self._heartbeat_error is not None:
-                message = sanitize_text(
-                    self._heartbeat_error, self.client.sensitive_values()
-                )
+                message = sanitize_text(self._heartbeat_error, self.client.sensitive_values())
                 logger.error(
                     "DataCamp lock heartbeat failed run_id=%s error=%s",
                     current_run_id,
                     message,
                 )
                 await asyncio.shield(
-                    self.checkpoints.finish_run(
-                        current_run_id, RunStatus.FAILED, message
-                    )
+                    self.checkpoints.finish_run(current_run_id, RunStatus.FAILED, message)
                 )
             raise
         except Exception as exc:
@@ -152,9 +148,7 @@ class DataCampJob:
                 current_run_id,
                 message,
             )
-            return await self.checkpoints.finish_run(
-                current_run_id, RunStatus.FAILED, message
-            )
+            return await self.checkpoints.finish_run(current_run_id, RunStatus.FAILED, message)
         finally:
             stop_heartbeat.set()
             with suppress(asyncio.CancelledError):
@@ -190,7 +184,7 @@ class DataCampJob:
                 run_end,
                 run_end,
             )
-        if _monthly_sync_due(
+        if self.settings.history_periodic_resync_enabled and _monthly_sync_due(
             last_full_sync,
             now,
             self.settings.ingestion_timezone,
@@ -208,7 +202,9 @@ class DataCampJob:
             LEARNING_HISTORY,
             WEEKLY_SYNC_SCOPE,
         )
-        if _sync_due(last_weekly_sync, now, WEEKLY_SYNC_INTERVAL_DAYS):
+        if self.settings.history_periodic_resync_enabled and _sync_due(
+            last_weekly_sync, now, WEEKLY_SYNC_INTERVAL_DAYS
+        ):
             lookback_start = max(
                 _parse_utc(self.settings.datacamp_events_start_time),
                 now - timedelta(days=self.settings.datacamp_events_lookback_days),

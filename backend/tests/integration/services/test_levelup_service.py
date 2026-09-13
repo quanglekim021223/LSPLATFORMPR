@@ -10,11 +10,11 @@ from pathlib import Path
 import httpx
 import pytest
 
-from app.mocks.levelup import course_payload, enrollment_payload
 from app.models import RunStatus
 from app.repositories import CheckpointStore
 from app.services.levelup.service import run_levelup_ingestion
 from tests.conftest import no_sleep, response
+from tests.support.mocks.levelup import course_payload, enrollment_payload
 
 
 def course(course_id: str, vendor: str | None = "LevelUP") -> dict[str, object]:
@@ -87,7 +87,7 @@ async def test_catalog_pagination_filter_and_course_list_reuse(
             return response(
                 request,
                 200,
-                course_page([course("c2", "Other")], total=3, offset=2),
+                course_page([course("c2", "Other")], total=3, offset=1),
             )
         if request.url.path in {"/courses/c1/enrollments", "/courses/c2/enrollments"}:
             return response(
@@ -157,13 +157,10 @@ async def test_second_run_pulls_only_levelup_changes_and_keeps_failed_watermark(
         assert request.url.params["_sort"] == "dateEdited"
         if request.url.path == "/courses":
             assert request.url.params["_filter"] == (
-                "vendor ne 'LinkedIn Learning' and "
-                "dateEdited gt '2026-08-24T04:00:00Z'"
+                "vendor ne 'LinkedIn Learning' and dateEdited gt '2026-08-24T04:00:00Z'"
             )
             return response(request, 200, course_page([]))
-        assert request.url.params["_filter"] == (
-            "dateEdited gt '2026-08-24T04:30:00Z'"
-        )
+        assert request.url.params["_filter"] == ("dateEdited gt '2026-08-24T04:30:00Z'")
         return response(request, 200, enrollment_page([changed_enrollment]))
 
     second = await run_levelup_ingestion(
@@ -188,9 +185,7 @@ async def test_second_run_pulls_only_levelup_changes_and_keeps_failed_watermark(
             return response(request, 200, "token-3")
         if request.url.path == "/courses":
             return response(request, 200, course_page([]))
-        assert request.url.params["_filter"] == (
-            "dateEdited gt '2026-08-25T05:00:00Z'"
-        )
+        assert request.url.params["_filter"] == ("dateEdited gt '2026-08-25T05:00:00Z'")
         return response(request, 500, {"error": "temporary"})
 
     third = await run_levelup_ingestion(
@@ -200,15 +195,12 @@ async def test_second_run_pulls_only_levelup_changes_and_keeps_failed_watermark(
     )
     assert third.status == RunStatus.PARTIAL_FAILURE
     store = CheckpointStore(settings.checkpoint_db_path)  # type: ignore[attr-defined]
-    assert (
-        await store.get_watermark("levelup", "learning_history", "c1")
-        == "2026-08-25T05:00:00Z"
-    )
+    assert await store.get_watermark("levelup", "learning_history", "c1") == "2026-08-25T05:00:00Z"
 
 
 @pytest.mark.asyncio
 async def test_enrollment_pagination_and_empty_course_are_successful(
-    settings_factory: Callable[..., object]
+    settings_factory: Callable[..., object],
 ) -> None:
     settings = settings_factory()
     offsets: list[tuple[str, int]] = []
@@ -259,12 +251,38 @@ async def test_enrollment_pagination_and_empty_course_are_successful(
     assert summary.status == RunStatus.SUCCEEDED
     assert summary.enrollment_records == 3
     assert summary.courses_succeeded == 2
-    assert sorted(offsets) == [("empty", 0), ("with-data", 0), ("with-data", 2)]
+    assert sorted(offsets) == [("empty", 0), ("with-data", 0), ("with-data", 1)]
+
+
+@pytest.mark.asyncio
+async def test_enrollment_accepts_null_score_and_job_title(
+    settings_factory: Callable[..., object],
+) -> None:
+    settings = settings_factory()
+    row = enrollment("e1", "c1")
+    row["score"] = None
+    row["jobTitle"] = None
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/authenticate":
+            return response(request, 200, "token")
+        if request.url.path == "/courses":
+            return response(request, 200, course_page([course("c1")]))
+        return response(request, 200, enrollment_page([row]))
+
+    summary = await run_levelup_ingestion(
+        settings,  # type: ignore[arg-type]
+        transport=httpx.MockTransport(handler),
+        sleep=no_sleep,
+    )
+
+    assert summary.status == RunStatus.SUCCEEDED
+    assert summary.enrollment_records == 1
 
 
 @pytest.mark.asyncio
 async def test_course_concurrency_never_exceeds_setting(
-    settings_factory: Callable[..., object]
+    settings_factory: Callable[..., object],
 ) -> None:
     settings = settings_factory(levelup_page_size=10, levelup_max_concurrency=2)
     active = 0
@@ -303,7 +321,7 @@ async def test_course_concurrency_never_exceeds_setting(
 
 @pytest.mark.asyncio
 async def test_one_course_failure_does_not_stop_other_courses(
-    settings_factory: Callable[..., object]
+    settings_factory: Callable[..., object],
 ) -> None:
     settings = settings_factory()
     called: list[str] = []
@@ -385,14 +403,12 @@ async def test_removed_course_is_deactivated_and_not_retried(
     assert second.status == RunStatus.SUCCEEDED
     assert history_calls["/courses/removed-course/enrollments"] == 1
     assert history_calls["/courses/active-course/enrollments"] == 2
-    assert await store.entity_keys("levelup", "course_catalog") == [
-        "active-course"
-    ]
+    assert await store.entity_keys("levelup", "course_catalog") == ["active-course"]
 
 
 @pytest.mark.asyncio
 async def test_request_failure_does_not_create_raw_page(
-    settings_factory: Callable[..., object]
+    settings_factory: Callable[..., object],
 ) -> None:
     settings = settings_factory()
 
@@ -412,7 +428,7 @@ async def test_request_failure_does_not_create_raw_page(
 
 @pytest.mark.asyncio
 async def test_next_ingestion_starts_new_run_after_failure(
-    settings_factory: Callable[..., object]
+    settings_factory: Callable[..., object],
 ) -> None:
     settings = settings_factory()
     first_calls: Counter[str] = Counter()
@@ -483,7 +499,7 @@ async def test_next_ingestion_starts_new_run_after_failure(
     assert second.enrollment_records == 4
     assert second.courses_succeeded == 1
     assert second.courses_failed == 0
-    assert second_offsets == [0, 2]
+    assert second_offsets == [0, 1]
     assert second_calls["/courses"] == 1
 
 

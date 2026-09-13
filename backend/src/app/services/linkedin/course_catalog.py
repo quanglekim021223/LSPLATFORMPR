@@ -35,6 +35,22 @@ async def ingest_catalog_pipeline(
     last_modified_after: int | None = None,
     sync_watermark: str | None = None,
 ) -> list[CourseResult]:
+    if settings.fabric_enabled:
+        from app.fabric_catalog import ingest_raw_catalog
+
+        await ingest_raw_catalog(
+            settings,
+            client,
+            checkpoints,
+            writer,
+            run_id,
+            ingestion_date,
+            VENDOR,
+            modified_since=last_modified_after,
+            sync_watermark=sync_watermark,
+        )
+        await checkpoints.mark_domain(run_id, DETAIL_DOMAIN, "completed")
+        return []
     try:
         await ingest_course_catalog(
             settings,
@@ -108,9 +124,7 @@ async def ingest_course_catalog(
                     fetched_at=datetime.now(UTC),
                 )
             )
-            await checkpoints.record_completed_page(
-                run_id, CATALOG_DOMAIN, start, len(elements)
-            )
+            await checkpoints.record_completed_page(run_id, CATALOG_DOMAIN, start, len(elements))
             await checkpoints.add_courses(run_id, _urns(elements))
             following_start = next_start(payload, start)
         except Exception as exc:
@@ -201,9 +215,7 @@ async def ingest_asset_detail(
                 fetched_at=datetime.now(UTC),
             )
         )
-        await checkpoints.record_completed_page(
-            run_id, DETAIL_DOMAIN, 1, len(elements), urn
-        )
+        await checkpoints.record_completed_page(run_id, DETAIL_DOMAIN, 1, len(elements), urn)
         await checkpoints.mark_course(run_id, urn, "completed")
         result.records_count = len(elements)
     except Exception as exc:

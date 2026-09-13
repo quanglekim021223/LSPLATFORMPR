@@ -54,33 +54,17 @@ class MockSettings(BaseSettings):
             "MOCK_LEVELUP_USERNAME": self.mock_levelup_username.get_secret_value(),
             "MOCK_LEVELUP_PASSWORD": self.mock_levelup_password.get_secret_value(),
             "MOCK_LEVELUP_API_KEY": self.mock_levelup_api_key.get_secret_value(),
-            "MOCK_LEVELUP_ACCESS_TOKEN": (
-                self.mock_levelup_access_token.get_secret_value()
-            ),
+            "MOCK_LEVELUP_ACCESS_TOKEN": (self.mock_levelup_access_token.get_secret_value()),
             "MOCK_SKILLUP_API_KEY": self.mock_skillup_api_key.get_secret_value(),
             "MOCK_DATACAMP_TOKEN": self.mock_datacamp_token.get_secret_value(),
-            "MOCK_COURSERA_USERNAME": (
-                self.mock_coursera_username.get_secret_value()
-            ),
-            "MOCK_COURSERA_PASSWORD": (
-                self.mock_coursera_password.get_secret_value()
-            ),
+            "MOCK_COURSERA_USERNAME": (self.mock_coursera_username.get_secret_value()),
+            "MOCK_COURSERA_PASSWORD": (self.mock_coursera_password.get_secret_value()),
             "MOCK_COURSERA_ORG_ID": self.mock_coursera_org_id,
-            "MOCK_COURSERA_ACCESS_TOKEN": (
-                self.mock_coursera_access_token.get_secret_value()
-            ),
-            "MOCK_LINKEDIN_CLIENT_ID": (
-                self.mock_linkedin_client_id.get_secret_value()
-            ),
-            "MOCK_LINKEDIN_CLIENT_SECRET": (
-                self.mock_linkedin_client_secret.get_secret_value()
-            ),
-            "MOCK_LINKEDIN_ACCESS_TOKEN": (
-                self.mock_linkedin_access_token.get_secret_value()
-            ),
-            "MOCK_HARVARD_HMM_CLIENT_ID": (
-                self.mock_harvard_hmm_client_id.get_secret_value()
-            ),
+            "MOCK_COURSERA_ACCESS_TOKEN": (self.mock_coursera_access_token.get_secret_value()),
+            "MOCK_LINKEDIN_CLIENT_ID": (self.mock_linkedin_client_id.get_secret_value()),
+            "MOCK_LINKEDIN_CLIENT_SECRET": (self.mock_linkedin_client_secret.get_secret_value()),
+            "MOCK_LINKEDIN_ACCESS_TOKEN": (self.mock_linkedin_access_token.get_secret_value()),
+            "MOCK_HARVARD_HMM_CLIENT_ID": (self.mock_harvard_hmm_client_id.get_secret_value()),
             "MOCK_HARVARD_HMM_CLIENT_SECRET": (
                 self.mock_harvard_hmm_client_secret.get_secret_value()
             ),
@@ -88,9 +72,7 @@ class MockSettings(BaseSettings):
             "MOCK_HARVARD_HMM_ACCESS_TOKEN": (
                 self.mock_harvard_hmm_access_token.get_secret_value()
             ),
-            "MOCK_HARVARD_SPARK_CLIENT_ID": (
-                self.mock_harvard_spark_client_id.get_secret_value()
-            ),
+            "MOCK_HARVARD_SPARK_CLIENT_ID": (self.mock_harvard_spark_client_id.get_secret_value()),
             "MOCK_HARVARD_SPARK_CLIENT_SECRET": (
                 self.mock_harvard_spark_client_secret.get_secret_value()
             ),
@@ -99,12 +81,8 @@ class MockSettings(BaseSettings):
                 self.mock_harvard_spark_access_token.get_secret_value()
             ),
             "MOCK_HARVARD_SFTP_HOST": self.mock_harvard_sftp_host,
-            "MOCK_HARVARD_SFTP_USERNAME": (
-                self.mock_harvard_sftp_username.get_secret_value()
-            ),
-            "MOCK_HARVARD_SFTP_PASSWORD": (
-                self.mock_harvard_sftp_password.get_secret_value()
-            ),
+            "MOCK_HARVARD_SFTP_USERNAME": (self.mock_harvard_sftp_username.get_secret_value()),
+            "MOCK_HARVARD_SFTP_PASSWORD": (self.mock_harvard_sftp_password.get_secret_value()),
             "MOCK_HARVARD_SFTP_HOST_KEY": self.mock_harvard_sftp_host_key,
             "MOCK_FAMS_TOKEN": self.mock_fams_token.get_secret_value(),
         }

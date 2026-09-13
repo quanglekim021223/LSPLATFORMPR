@@ -39,39 +39,18 @@ async def ingest_learning_history(
     current = now()
     if current.tzinfo is None:
         raise ValueError("Harvard SFTP clock must be timezone-aware")
-    last_report_date = current.date() - timedelta(
-        days=settings.harvard_report_date_offset_days
+    last_report_date = current.date() - timedelta(days=settings.harvard_report_date_offset_days)
+    first_report_date = await _validated_start_date(
+        settings, vendor, checkpoints, run_id, last_report_date
     )
-    try:
-        first_report_date = _history_start_date(settings, vendor, last_report_date)
-    except ValueError as exc:
-        message = sanitize_text(exc, settings.harvard_secrets(vendor.vendor))
-        await checkpoints.record_failed_page(
-            run_id, DOMAIN, 0, message, retryable=False
-        )
-        await checkpoints.mark_domain(run_id, DOMAIN, "terminal_failed", message)
-        raise
-
-    try:
-        listed_files = await transport.list_files(settings.harvard_sftp_remote_dir)
-    except Exception as exc:
-        message = sanitize_text(exc, settings.harvard_secrets(vendor.vendor))
-        retryable = not isinstance(exc, (PermissionError, TypeError, ValueError))
-        await checkpoints.record_failed_page(
-            run_id, DOMAIN, 0, message, retryable=retryable
-        )
-        await checkpoints.mark_domain(
-            run_id,
-            DOMAIN,
-            "retryable_failed" if retryable else "terminal_failed",
-            message,
-        )
-        raise
+    listed_files = await _listed_files(settings, vendor, transport, checkpoints, run_id)
     metadata_by_path = {item.remote_path: item for item in listed_files}
 
     failures: list[tuple[str, bool]] = []
-    report_date = first_report_date
-    while report_date <= last_report_date:
+    report_dates = _report_dates(
+        settings, vendor, listed_files, first_report_date, last_report_date
+    )
+    for report_date in report_dates:
         failure = await _ingest_report_date(
             settings,
             vendor,
@@ -88,7 +67,6 @@ async def ingest_learning_history(
         )
         if failure is not None:
             failures.append(failure)
-        report_date += timedelta(days=1)
 
     if failures:
         retryable = any(item[1] for item in failures)
@@ -101,6 +79,91 @@ async def ingest_learning_history(
         )
         raise HarvardHistoryIngestionError(message)
     await checkpoints.mark_domain(run_id, DOMAIN, "completed")
+
+
+async def _validated_start_date(
+    settings: Settings,
+    vendor: HarvardVendorConfig,
+    checkpoints: CheckpointStore,
+    run_id: str,
+    last_report_date: date,
+) -> date:
+    try:
+        return _history_start_date(settings, vendor, last_report_date)
+    except ValueError as exc:
+        message = sanitize_text(exc, settings.harvard_secrets(vendor.vendor))
+        await checkpoints.record_failed_page(run_id, DOMAIN, 0, message, retryable=False)
+        await checkpoints.mark_domain(run_id, DOMAIN, "terminal_failed", message)
+        raise
+
+
+async def _listed_files(
+    settings: Settings,
+    vendor: HarvardVendorConfig,
+    transport: SFTPTransport,
+    checkpoints: CheckpointStore,
+    run_id: str,
+) -> list[RemoteFileMetadata]:
+    try:
+        return await transport.list_files(settings.harvard_sftp_remote_dir)
+    except Exception as exc:
+        message = sanitize_text(exc, settings.harvard_secrets(vendor.vendor))
+        retryable = not isinstance(exc, (PermissionError, TypeError, ValueError))
+        await checkpoints.record_failed_page(run_id, DOMAIN, 0, message, retryable=retryable)
+        status = "retryable_failed" if retryable else "terminal_failed"
+        await checkpoints.mark_domain(run_id, DOMAIN, status, message)
+        raise
+
+
+def _report_dates(
+    settings: Settings,
+    vendor: HarvardVendorConfig,
+    listed_files: list[RemoteFileMetadata],
+    first_report_date: date,
+    last_report_date: date,
+) -> list[date]:
+    if not settings.fabric_enabled:
+        return [
+            first_report_date + timedelta(days=offset)
+            for offset in range((last_report_date - first_report_date).days + 1)
+        ]
+    return _available_report_dates(
+        settings, vendor, listed_files, first_report_date, last_report_date
+    )
+
+
+def _available_report_dates(
+    settings: Settings,
+    vendor: HarvardVendorConfig,
+    listed_files: list[RemoteFileMetadata],
+    first_report_date: date,
+    last_report_date: date,
+) -> list[date]:
+    # Live SFTP has gaps/retention; scan available files, including edited older files.
+    dates: set[date] = set()
+    prefix = vendor.report_filename_prefix
+    explicit_start = (
+        settings.harvard_hmm_history_start_date
+        if vendor.vendor == "harvard_hmm"
+        else settings.harvard_spark_history_start_date
+    )
+    for item in listed_files:
+        name = posixpath.basename(item.remote_path)
+        candidate = _report_date(name, prefix)
+        if candidate is None or candidate > last_report_date:
+            continue
+        if not explicit_start or candidate >= first_report_date:
+            dates.add(candidate)
+    return sorted(dates)
+
+
+def _report_date(file_name: str, prefix: str) -> date | None:
+    if not file_name.startswith(prefix) or not file_name.endswith(".csv"):
+        return None
+    try:
+        return datetime.strptime(file_name[len(prefix) : -4], "%Y%m%d").date()
+    except ValueError:
+        return None
 
 
 async def _ingest_report_date(
@@ -166,9 +229,7 @@ async def _ingest_report_date(
             exc,
             (FileNotFoundError, HarvardResponseContractError, TypeError, ValueError),
         )
-        await checkpoints.record_failed_page(
-            run_id, DOMAIN, offset, message, retryable=retryable
-        )
+        await checkpoints.record_failed_page(run_id, DOMAIN, offset, message, retryable=retryable)
         return message, retryable
 
 
@@ -179,9 +240,7 @@ async def _source_file_is_current(
     metadata: RemoteFileMetadata | None,
 ) -> bool:
     if metadata is None:
-        return await checkpoints.source_file_completed(
-            vendor.vendor, DOMAIN, remote_path
-        )
+        return await checkpoints.source_file_completed(vendor.vendor, DOMAIN, remote_path)
     return await checkpoints.source_file_unchanged(
         vendor.vendor,
         DOMAIN,
@@ -204,9 +263,7 @@ def _history_start_date(
     try:
         first_report_date = date.fromisoformat(raw_value)
     except ValueError as exc:
-        raise ValueError(
-            f"{vendor.vendor.upper()}_HISTORY_START_DATE must use YYYY-MM-DD"
-        ) from exc
+        raise ValueError(f"{vendor.vendor.upper()}_HISTORY_START_DATE must use YYYY-MM-DD") from exc
     if first_report_date > last_report_date:
         raise ValueError(
             f"{vendor.vendor.upper()}_HISTORY_START_DATE must not be after "
@@ -231,24 +288,17 @@ async def _fetch_report(
     deadline = datetime.combine(current.date(), time(hour=7), current.tzinfo)
     seconds_until_deadline = max(0.0, (deadline - current).total_seconds())
     max_wait = (
-        min(float(settings.harvard_sftp_max_wait_seconds), seconds_until_deadline)
-        if poll
-        else 0.0
+        min(float(settings.harvard_sftp_max_wait_seconds), seconds_until_deadline) if poll else 0.0
     )
     elapsed = 0.0
     while True:
         remote_file = await transport.fetch(remote_path)
         if remote_file is not None:
-            if (
-                remote_file.file_name != file_name
-                or remote_file.remote_path != remote_path
-            ):
+            if remote_file.file_name != file_name or remote_file.remote_path != remote_path:
                 raise ValueError("Harvard SFTP transport returned an unexpected file")
             return remote_file
         if elapsed >= max_wait:
             raise FileNotFoundError(f"Harvard report file was not available: {file_name}")
-        wait_seconds = min(
-            float(settings.harvard_sftp_poll_interval_seconds), max_wait - elapsed
-        )
+        wait_seconds = min(float(settings.harvard_sftp_poll_interval_seconds), max_wait - elapsed)
         await sleep(wait_seconds)
         elapsed += wait_seconds

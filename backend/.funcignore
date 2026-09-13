@@ -4,7 +4,6 @@
 local.settings*.json
 tests/
 data/
-scripts/
 .sonar/
 .pytest_cache/
 .mypy_cache/

@@ -9,7 +9,6 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 
-from app.mocks.linkedin import activity_report_payload, asset_payload, token_payload
 from app.models import RunStatus
 from app.repositories import CheckpointStore
 from app.services.linkedin.course_catalog import CATALOG_DOMAIN
@@ -24,6 +23,7 @@ from app.services.linkedin.service import (
     run_linkedin_ingestion,
 )
 from tests.conftest import no_sleep, response
+from tests.support.mocks.linkedin import activity_report_payload, asset_payload, token_payload
 
 
 def _page(
@@ -109,12 +109,8 @@ async def test_full_pipeline_windows_pagination_raw_and_concurrency(
                     ),
                 )
             start = int(request.url.params["start"])
-            assert request.url.params[
-                "assetFilteringCriteria.assetTypes[0]"
-            ] == "COURSE"
-            assert request.url.params[
-                "assetRetrievalCriteria.includeRetired"
-            ] == "true"
+            assert request.url.params["assetFilteringCriteria.assetTypes[0]"] == "COURSE"
+            assert request.url.params["assetRetrievalCriteria.includeRetired"] == "true"
             assert "assetFilteringCriteria.lastModifiedAfter" not in request.url.params
             catalog_starts.append(start)
             if start == 0:
@@ -271,9 +267,7 @@ async def test_failed_asset_detail_does_not_advance_catalog_watermark(
     store = CheckpointStore(settings.checkpoint_db_path)  # type: ignore[attr-defined]
     await store.initialize()
     old_watermark = "1787000000000"
-    await store.set_watermark(
-        "linkedin", CATALOG_DOMAIN, old_watermark, "old-run"
-    )
+    await store.set_watermark("linkedin", CATALOG_DOMAIN, old_watermark, "old-run")
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/oauth/v2/accessToken":
@@ -402,9 +396,7 @@ async def test_history_plan_uses_daily_weekly_and_monthly_ranges(
     assert weekly_plan[:2] == (now - timedelta(days=90), now)
     assert weekly_plan[2:] == (current_watermark, current_watermark, None)
 
-    previous_month = str(
-        int(datetime(2026, 7, 31, 5, tzinfo=UTC).timestamp() * 1000)
-    )
+    previous_month = str(int(datetime(2026, 7, 31, 5, tzinfo=UTC).timestamp() * 1000))
     await store.set_watermark(
         "linkedin", "learning_history", previous_month, "run", FULL_SYNC_SCOPE
     )

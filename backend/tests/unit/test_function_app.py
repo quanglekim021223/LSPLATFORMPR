@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -9,18 +10,16 @@ import pytest
 import function_app
 from app.core.config import Settings
 from app.main import build_ingestion_jobs
+from app.models import RunStatus, RunSummary
 
 
 def test_function_app_registers_asgi_and_timer_triggers() -> None:
     functions = {
-        function.get_function_name(): function
-        for function in function_app.app.get_functions()
+        function.get_function_name(): function for function in function_app.app.get_functions()
     }
 
     assert "http_app_func" in functions
-    timer_binding = functions["scheduled_vendor_ingestion"].get_dict_repr()["bindings"][
-        0
-    ]
+    timer_binding = functions["scheduled_vendor_ingestion"].get_dict_repr()["bindings"][0]
     assert timer_binding["schedule"] == "%INGESTION_TIMER_SCHEDULE%"
     assert timer_binding["runOnStartup"] is False
     assert timer_binding["useMonitor"] is True
@@ -117,9 +116,22 @@ async def test_timer_logs_when_invocation_is_past_due(
     monkeypatch.setattr(function_app, "run_configured_ingestions", run_ingestions)
 
     with caplog.at_level("WARNING"):
-        await function_app.scheduled_vendor_ingestion(
-            SimpleNamespace(past_due=True)
-        )
+        await function_app.scheduled_vendor_ingestion(SimpleNamespace(past_due=True))
 
     run_ingestions.assert_awaited_once()
     assert "Azure ingestion timer is past due" in caplog.text
+
+
+@pytest.mark.parametrize("status", [RunStatus.PARTIAL_FAILURE, RunStatus.FAILED])
+async def test_timer_rejects_unsuccessful_summary(monkeypatch, status):
+    monkeypatch.setattr(function_app.checkpoint_store, "initialize", AsyncMock())
+    summary = RunSummary(run_id="failed-run", status=status, started_at=datetime.now(UTC))
+    monkeypatch.setattr(
+        function_app,
+        "build_ingestion_jobs",
+        lambda *_: {
+            "levelup": AsyncMock(return_value=summary),
+        },
+    )
+    with pytest.raises(RuntimeError, match="levelup"):
+        await function_app.run_configured_ingestions()

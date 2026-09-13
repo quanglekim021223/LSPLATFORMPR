@@ -50,7 +50,10 @@ class Settings(BaseSettings):
     levelup_base_url: str = ""
     levelup_auth_path: str = "/authenticate"
     levelup_courses_path: str = "/courses"
-    levelup_username: SecretStr = Field(default=SecretStr(""))
+    levelup_username: SecretStr = Field(
+        default=SecretStr(""),
+        validation_alias=AliasChoices("LEVELUP_USER_NAME", "LEVELUP_USERNAME", "levelup_username"),
+    )
     levelup_password: SecretStr = Field(default=SecretStr(""))
     levelup_api_key: SecretStr = Field(
         default=SecretStr(""),
@@ -87,8 +90,15 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("COURSERA_USER_NAME", "coursera_username"),
     )
     coursera_password: SecretStr = Field(default=SecretStr(""))
-    coursera_org_id: str = ""
-    coursera_content_detail_path_template: str = ""
+    coursera_org_id: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "COURSERA_ORG_ID",
+            "COURSERA_ORGID",
+            "coursera_org_id",
+        ),
+    )
+    coursera_content_detail_path_template: str = "/{org_id}/contents/{id}"
     coursera_page_size: int = Field(default=100, ge=1, le=1000)
     coursera_max_concurrency: int = Field(default=5, ge=1, le=5)
     coursera_history_daily_overlap_days: int = Field(default=3, ge=0)
@@ -118,7 +128,14 @@ class Settings(BaseSettings):
         default=SecretStr(""),
         validation_alias=AliasChoices("harvard_hmm_client_secret", "HARVARD_API_PASSWORD"),
     )
-    harvard_hmm_org_key: str = ""
+    harvard_hmm_org_key: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "HARVARD_HMM_ORG_KEY",
+            "HARVARD_ORGID",
+            "harvard_hmm_org_key",
+        ),
+    )
     harvard_hmm_history_start_date: str = ""
     harvard_spark_client_id: SecretStr = Field(
         default=SecretStr(""),
@@ -128,7 +145,14 @@ class Settings(BaseSettings):
         default=SecretStr(""),
         validation_alias=AliasChoices("harvard_spark_client_secret", "HARVARD_API_PASSWORD"),
     )
-    harvard_spark_org_key: str = ""
+    harvard_spark_org_key: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "HARVARD_SPARK_ORG_KEY",
+            "HARVARD_ORGID",
+            "harvard_spark_org_key",
+        ),
+    )
     harvard_spark_history_start_date: str = ""
     harvard_sftp_host: str = "transfer.hbsp.harvard.edu"
     harvard_sftp_port: int = Field(default=22, ge=1, le=65535)
@@ -143,8 +167,6 @@ class Settings(BaseSettings):
     harvard_sftp_poll_interval_seconds: int = Field(default=300, ge=1)
     harvard_sftp_max_wait_seconds: int = Field(default=7200, ge=0)
     harvard_sftp_max_retries: int = Field(default=3, ge=0, le=10)
-    harvard_sftp_mock_enabled: bool = False
-
     fams_base_url: str = "https://fams.fa.edu.vn"
     fams_token: SecretStr = Field(default=SecretStr(""))
     fams_load_mode: Literal["full", "filtered"] = "full"
@@ -165,6 +187,54 @@ class Settings(BaseSettings):
     adls_base_path: str = ""
     checkpoint_db_path: Path = Path("./data/state/ingestion.db")
     checkpoint_retention_days: int = Field(default=30, ge=1)
+    history_periodic_resync_enabled: bool = True
+
+    # Function runtime reads app settings directly from its environment.
+    fabric_enabled: bool = False
+    fabric_workspace_id: str = ""
+    fabric_lakehouse_id: str = ""
+    fabric_schema: str = "dbo"
+    fabric_state_account_url: str = ""
+    fabric_state_container: str = "fabric-ingestion-state"
+    fabric_managed_identity_client_id: str = ""
+    fabric_allow_initial_pull: bool = False
+    fabric_vendors: list[str] = Field(
+        default_factory=lambda: [
+            "levelup",
+            "skillup",
+            "datacamp",
+            "coursera",
+            "linkedin",
+            "harvard_hmm",
+            "harvard_spark",
+            "fams",
+        ]
+    )
+    fabric_max_concurrent_vendors: int = Field(default=1, ge=1, le=8)
+
+    def validate_fabric_runtime(self) -> None:
+        import re
+        from urllib.parse import urlsplit
+        from uuid import UUID
+
+        from app.fabric_contract import DATASETS
+
+        for value in (self.fabric_workspace_id, self.fabric_lakehouse_id):
+            UUID(value)
+        if not re.fullmatch(r"[a-z][a-z0-9_]*", self.fabric_schema):
+            raise ValueError("Invalid FABRIC_SCHEMA")
+        url = urlsplit(self.fabric_state_account_url)
+        if (
+            url.scheme != "https"
+            or not url.hostname
+            or not url.hostname.endswith(".blob.core.windows.net")
+            or url.path not in {"", "/"}
+            or url.query
+            or url.fragment
+        ):
+            raise ValueError("FABRIC_STATE_ACCOUNT_URL must be an Azure Blob account URL")
+        if not self.fabric_vendors or set(self.fabric_vendors) - {v for v, _ in DATASETS}:
+            raise ValueError("FABRIC_VENDORS contains missing or unsupported vendors")
 
     @field_validator("ingestion_time")
     @classmethod
@@ -281,9 +351,7 @@ class Settings(BaseSettings):
 
     def harvard_secrets(self, vendor: str) -> tuple[str, ...]:
         client_id = (
-            self.harvard_hmm_client_id
-            if vendor == "harvard_hmm"
-            else self.harvard_spark_client_id
+            self.harvard_hmm_client_id if vendor == "harvard_hmm" else self.harvard_spark_client_id
         )
         client_secret = (
             self.harvard_hmm_client_secret
@@ -372,9 +440,7 @@ class Settings(BaseSettings):
             "COURSERA_USERNAME": self.coursera_username.get_secret_value(),
             "COURSERA_PASSWORD": self.coursera_password.get_secret_value(),
             "COURSERA_ORG_ID": self.coursera_org_id,
-            "COURSERA_CONTENT_DETAIL_PATH_TEMPLATE": (
-                self.coursera_content_detail_path_template
-            ),
+            "COURSERA_CONTENT_DETAIL_PATH_TEMPLATE": self.coursera_content_detail_path_template,
         }
         return [name for name, value in values.items() if not value]
 
@@ -391,7 +457,9 @@ class Settings(BaseSettings):
             "LINKEDIN_CLIENT_SECRET": self.linkedin_client_secret.get_secret_value(),
             "LINKEDIN_HISTORY_START_TIME": self.linkedin_history_start_time,
             "LINKEDIN_ASSET_DETAIL_QUERY_TEMPLATE": (
-                self.linkedin_asset_detail_query_template
+                "unused-for-fabric"
+                if self.fabric_enabled
+                else self.linkedin_asset_detail_query_template
             ),
         }
         return [name for name, value in values.items() if not value]
@@ -401,25 +469,19 @@ class Settings(BaseSettings):
         missing = self._missing_harvard_configuration(short_name)
         if missing:
             display_name = "Harvard HMM" if short_name == "hmm" else "Harvard Spark"
-            raise ValueError(
-                f"Missing {display_name} configuration: {', '.join(missing)}"
-            )
+            raise ValueError(f"Missing {display_name} configuration: {', '.join(missing)}")
 
     def validate_harvard_catalog_runtime(self, vendor: str) -> None:
         short_name = "hmm" if vendor == "harvard_hmm" else "spark"
         missing = self._missing_harvard_catalog_configuration(short_name)
         if missing:
             display_name = "Harvard HMM" if short_name == "hmm" else "Harvard Spark"
-            raise ValueError(
-                f"Missing {display_name} Catalog configuration: {', '.join(missing)}"
-            )
+            raise ValueError(f"Missing {display_name} Catalog configuration: {', '.join(missing)}")
 
     def validate_harvard_sftp_runtime(self) -> None:
         missing = self._missing_harvard_sftp_configuration()
         if missing:
-            raise ValueError(
-                f"Missing Harvard SFTP configuration: {', '.join(missing)}"
-            )
+            raise ValueError(f"Missing Harvard SFTP configuration: {', '.join(missing)}")
 
     def validate_fams_runtime(self) -> None:
         missing = self._missing_fams_configuration()
@@ -444,9 +506,7 @@ class Settings(BaseSettings):
             self.fams_actual_start_date_to,
         )
         if not any(value.strip() for value in filters):
-            raise ValueError(
-                "FAMS_LOAD_MODE=filtered requires at least one non-empty filter"
-            )
+            raise ValueError("FAMS_LOAD_MODE=filtered requires at least one non-empty filter")
         self._validate_fams_status()
         self._validate_fams_site()
         self._validate_fams_dates()
@@ -456,9 +516,7 @@ class Settings(BaseSettings):
             return
         statuses = [value.strip() for value in self.fams_status.split(",")]
         if any(not value or value not in FAMS_ALLOWED_STATUSES for value in statuses):
-            raise ValueError(
-                "FAMS_STATUS contains invalid or empty comma-separated values"
-            )
+            raise ValueError("FAMS_STATUS contains invalid or empty comma-separated values")
 
     def _validate_fams_site(self) -> None:
         if not self.fams_site:
@@ -468,48 +526,41 @@ class Settings(BaseSettings):
             raise ValueError("FAMS_SITE contains an empty comma-separated value")
 
     def _validate_fams_dates(self) -> None:
+        parsed: dict[str, datetime] = {}
         for name, value in (
             ("FAMS_ACTUAL_START_DATE_FROM", self.fams_actual_start_date_from),
             ("FAMS_ACTUAL_START_DATE_TO", self.fams_actual_start_date_to),
         ):
             if value:
                 try:
-                    datetime.strptime(value, "%Y%m%d")
+                    parsed[name] = datetime.strptime(
+                        value, "%Y-%m-%d" if "-" in value else "%Y%m%d"
+                    )
                 except ValueError as exc:
-                    raise ValueError(f"{name} must use YYYYMMDD") from exc
+                    raise ValueError(f"{name} must use YYYYMMDD or YYYY-MM-DD") from exc
 
         if (
             self.fams_actual_start_date_from
             and self.fams_actual_start_date_to
-            and self.fams_actual_start_date_from > self.fams_actual_start_date_to
+            and parsed["FAMS_ACTUAL_START_DATE_FROM"] > parsed["FAMS_ACTUAL_START_DATE_TO"]
         ):
             raise ValueError(
-                "FAMS_ACTUAL_START_DATE_FROM must not be after "
-                "FAMS_ACTUAL_START_DATE_TO"
+                "FAMS_ACTUAL_START_DATE_FROM must not be after FAMS_ACTUAL_START_DATE_TO"
             )
 
     def _missing_harvard_configuration(self, vendor: str) -> list[str]:
-        return self._missing_harvard_catalog_configuration(
-            vendor
-        ) + self._missing_harvard_sftp_configuration()
+        return (
+            self._missing_harvard_catalog_configuration(vendor)
+            + self._missing_harvard_sftp_configuration()
+        )
 
     def _missing_harvard_catalog_configuration(self, vendor: str) -> list[str]:
         prefix = "HARVARD_HMM" if vendor == "hmm" else "HARVARD_SPARK"
-        client_id = (
-            self.harvard_hmm_client_id
-            if vendor == "hmm"
-            else self.harvard_spark_client_id
-        )
+        client_id = self.harvard_hmm_client_id if vendor == "hmm" else self.harvard_spark_client_id
         client_secret = (
-            self.harvard_hmm_client_secret
-            if vendor == "hmm"
-            else self.harvard_spark_client_secret
+            self.harvard_hmm_client_secret if vendor == "hmm" else self.harvard_spark_client_secret
         )
-        org_key = (
-            self.harvard_hmm_org_key
-            if vendor == "hmm"
-            else self.harvard_spark_org_key
-        )
+        org_key = self.harvard_hmm_org_key if vendor == "hmm" else self.harvard_spark_org_key
         values: dict[str, object] = {
             "HARVARD_CATALOG_BASE_URL": self.harvard_catalog_base_url,
             f"{prefix}_CLIENT_ID": client_id.get_secret_value(),

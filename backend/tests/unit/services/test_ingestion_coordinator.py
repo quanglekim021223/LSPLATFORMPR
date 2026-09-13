@@ -25,9 +25,7 @@ def summary(vendor: str, status: RunStatus, records: int = 1) -> RunSummary:
     )
 
 
-async def wait_for_terminal(
-    coordinator: IngestionCoordinator, job_id: str
-) -> IngestionStatus:
+async def wait_for_terminal(coordinator: IngestionCoordinator, job_id: str) -> IngestionStatus:
     for _ in range(100):
         state = await coordinator.get(job_id)
         assert state is not None

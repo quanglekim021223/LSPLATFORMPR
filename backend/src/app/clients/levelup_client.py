@@ -52,9 +52,7 @@ class LevelUpClient:
         self._token = token
         return token
 
-    async def get_json(
-        self, path: str, params: Mapping[str, Any]
-    ) -> tuple[Any, bytes]:
+    async def get_json(self, path: str, params: Mapping[str, Any]) -> tuple[Any, bytes]:
         if self._token is None:
             await self.authenticate()
         token_used = self._token
@@ -115,7 +113,7 @@ class LevelUpClient:
 def is_retryable_error(exc: Exception) -> bool:
     if isinstance(exc, httpx.HTTPStatusError):
         status_code = exc.response.status_code
-        return status_code == 408 or status_code == 429 or status_code >= 500
+        return status_code in {401, 408, 429} or status_code >= 500
     if isinstance(exc, (ResponseContractError, ValueError)):
         return False
     return True

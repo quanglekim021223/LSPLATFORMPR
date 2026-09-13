@@ -7,8 +7,8 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Header, HTTPException, Query, status
 
-from app.mocks.generated_data import generated_vendor_data
-from app.mocks.settings import get_mock_settings
+from tests.support.mocks.generated_data import generated_vendor_data
+from tests.support.mocks.settings import get_mock_settings
 
 router = APIRouter(tags=["SkillUp"])
 INFORMATION_TECHNOLOGY = "Information Technology"
@@ -122,6 +122,44 @@ _SKILL_PROFILES: list[dict[str, Any]] = [
         "skills": [],
     },
 ]
+_LEARNING_RESOURCES: list[dict[str, Any]] = [
+    {
+        "learningMaterialId": 501,
+        "externalMaterialId": "course-501",
+        "title": "Python Foundations",
+        "url": "https://example.test/learning/501",
+        "recommendationType": 1,
+        "issuer": {"id": 10, "name": "Example Learning"},
+        "learningMaterialType": {"id": 20, "name": "Course"},
+        "skills": [
+            {
+                "taxonomySkillId": 97915,
+                "skillName": "Python",
+                "description": "Python programming language",
+                "explanation": None,
+                "proficiency": 2,
+                "source": 1,
+            }
+        ],
+    }
+]
+_CERTIFICATES: list[dict[str, Any]] = [
+    {
+        "certificateId": 601,
+        "title": "Python Certificate",
+        "issuer": "Example Learning",
+        "certificateStatus": 1,
+        "skills": [
+            {
+                "taxonomySkillId": 97915,
+                "skillName": "Python",
+                "description": "Python programming language",
+                "explanation": None,
+                "proficiency": 2,
+            }
+        ],
+    }
+]
 _REPORTS: list[dict[str, Any]] = [
     {
         "candidateFullName": "An Nguyen",
@@ -214,12 +252,10 @@ if _GENERATED is not None:
     _SKILL_PROFILES = _GENERATED["skill_profiles"]
     _REPORTS = _GENERATED["reports"]
     _TAXONOMY_MODIFIED_ON = {
-        int(key): value
-        for key, value in _GENERATED["taxonomy_modified_on"].items()
+        int(key): value for key, value in _GENERATED["taxonomy_modified_on"].items()
     }
     _SKILL_PROFILE_MODIFIED_ON = {
-        int(key): value
-        for key, value in _GENERATED["skill_profile_modified_on"].items()
+        int(key): value for key, value in _GENERATED["skill_profile_modified_on"].items()
     }
 
 
@@ -233,6 +269,14 @@ def skill_profile(index: int = 0) -> dict[str, Any]:
 
 def assessment_report(index: int = 0) -> dict[str, Any]:
     return deepcopy(_REPORTS[index])
+
+
+def learning_resource(index: int = 0) -> dict[str, Any]:
+    return deepcopy(_LEARNING_RESOURCES[index])
+
+
+def certificate(index: int = 0) -> dict[str, Any]:
+    return deepcopy(_CERTIFICATES[index])
 
 
 def _validate_api_key(api_key: str | None) -> None:
@@ -277,8 +321,7 @@ async def taxonomy(
         records = [
             record
             for record in records
-            if _TAXONOMY_MODIFIED_ON[int(record["taxonomySkillId"])]
-            > last_modified_on
+            if _TAXONOMY_MODIFIED_ON[int(record["taxonomySkillId"])] > last_modified_on
         ]
     items, total_pages = _page(records, page_number, page_size)
     return {
@@ -307,16 +350,11 @@ async def skill_inventory(
         records = [
             record
             for record in records
-            if _SKILL_PROFILE_MODIFIED_ON[int(record["employeeId"])]
-            > skill_profile_modified_since
+            if _SKILL_PROFILE_MODIFIED_ON[int(record["employeeId"])] > skill_profile_modified_since
         ]
     if search_text:
         query = search_text.casefold()
-        records = [
-            record
-            for record in records
-            if query in str(record["fullName"]).casefold()
-        ]
+        records = [record for record in records if query in str(record["fullName"]).casefold()]
     items, total_pages = _page(records, page_number, page_size)
     return {
         "items": items,
@@ -326,6 +364,52 @@ async def skill_inventory(
         "hasPreviousPage": page_number > 1,
         "hasNextPage": page_number < total_pages,
     }
+
+
+def _snapshot_page(
+    records: list[dict[str, Any]],
+    page_number: int,
+    page_size: int,
+) -> dict[str, Any]:
+    items, total_pages = _page(records, page_number, page_size)
+    return {
+        "items": items,
+        "pageNumber": page_number,
+        "totalPages": total_pages,
+        "totalCount": len(records),
+        "hasPreviousPage": page_number > 1,
+        "hasNextPage": page_number < total_pages,
+    }
+
+
+@router.get("/learning/materials")
+async def learning_materials(
+    page_number: Annotated[int, Query(alias="PageNumber", ge=1)] = 1,
+    page_size: Annotated[int, Query(alias="PageSize", ge=1, le=100)] = 100,
+    include_skills: Annotated[bool, Query(alias="IncludeSkills")] = True,
+    api_key: Annotated[str | None, Header(alias="x-api-key")] = None,
+) -> dict[str, Any]:
+    _validate_api_key(api_key)
+    if not include_skills:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "IncludeSkills is required")
+    return _snapshot_page(_LEARNING_RESOURCES, page_number, page_size)
+
+
+@router.get("/certificates")
+async def certificates(
+    page_number: Annotated[int, Query(alias="PageNumber", ge=1)] = 1,
+    page_size: Annotated[int, Query(alias="PageSize", ge=1, le=100)] = 100,
+    include_skills: Annotated[bool, Query(alias="IncludeSkills")] = True,
+    active_only: Annotated[bool, Query(alias="activeOnly")] = False,
+    api_key: Annotated[str | None, Header(alias="x-api-key")] = None,
+) -> dict[str, Any]:
+    _validate_api_key(api_key)
+    if not include_skills or active_only:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Full certificate snapshot required",
+        )
+    return _snapshot_page(_CERTIFICATES, page_number, page_size)
 
 
 @router.get("/v3/reports")
@@ -348,8 +432,7 @@ async def assessment_history(
     reports, total_pages = _page(records, page_number, page_size)
     if not include_sections:
         reports = [
-            {key: value for key, value in report.items() if key != "sections"}
-            for report in reports
+            {key: value for key, value in report.items() if key != "sections"} for report in reports
         ]
     return {
         "reports": reports,

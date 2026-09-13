@@ -11,12 +11,13 @@ from urllib.parse import parse_qs
 from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 
 from app.core.config import Settings
-from app.mocks.generated_data import generated_vendor_data
-from app.mocks.settings import MockSettings, get_mock_settings
 from app.models.harvard import RemoteFile, RemoteFileMetadata
+from tests.support.mocks.generated_data import generated_vendor_data
+from tests.support.mocks.settings import MockSettings, get_mock_settings
 
 router = APIRouter(tags=["Harvard Catalog"])
 INVALID_MOCK_CREDENTIALS = "Invalid mock credentials"
+
 
 def token_payload(token_value: str) -> dict[str, str | int]:
     return {"access_token": token_value, "expires_in": 3600}
@@ -57,8 +58,7 @@ def history_csv(vendor: str, report_date: str = "2026-08-22") -> bytes:
                 for row in rows
             )
             return (
-                "EventDate,Username,FirstName,LastName,Email,EventName,Title,Product\n"
-                + body
+                "EventDate,Username,FirstName,LastName,Email,EventName,Title,Product\n" + body
             ).encode()
         if vendor == "harvard_spark":
             body = "".join(
@@ -69,8 +69,7 @@ def history_csv(vendor: str, report_date: str = "2026-08-22") -> bytes:
             )
             return (
                 "Event Date,Username,First Name,Last Name,Email,Role,Event Name,"
-                "Title,Asset Type,Product ID,Skills,Duration,Registration Date\n"
-                + body
+                "Title,Asset Type,Product ID,Skills,Duration,Registration Date\n" + body
             ).encode()
     if vendor == "harvard_hmm":
         compact_date = report_date.replace("-", "")
@@ -206,10 +205,7 @@ class GeneratedMockHarvardSFTPTransport:
             )
             report_date = first_report_date
             while report_date <= last_report_date:
-                remote_path = str(
-                    PurePosixPath(remote_dir)
-                    / f"{prefix}{report_date:%Y%m%d}.csv"
-                )
+                remote_path = str(PurePosixPath(remote_dir) / f"{prefix}{report_date:%Y%m%d}.csv")
                 remote_file = self._file(remote_path)
                 if remote_file is not None:
                     files.append(
@@ -268,9 +264,7 @@ class GeneratedMockHarvardSFTPTransport:
         known_hosts = self.settings.harvard_sftp_known_hosts
         if known_hosts is None or not known_hosts.is_file():
             raise ValueError("Mock Harvard SFTP known-hosts file is required")
-        expected_entry = (
-            f"{mock.mock_harvard_sftp_host} {mock.mock_harvard_sftp_host_key}"
-        )
+        expected_entry = f"{mock.mock_harvard_sftp_host} {mock.mock_harvard_sftp_host_key}"
         trusted_entries = {
             line.strip()
             for line in known_hosts.read_text(encoding="utf-8").splitlines()
@@ -292,9 +286,7 @@ async def token(
         credentials = base64.b64decode(authorization.removeprefix("Basic ")).decode()
         client_id, client_secret = credentials.split(":", 1)
     except ValueError:
-        raise HTTPException(
-            status.HTTP_401_UNAUTHORIZED, INVALID_MOCK_CREDENTIALS
-        ) from None
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, INVALID_MOCK_CREDENTIALS) from None
     clients = {
         settings.mock_harvard_hmm_client_id.get_secret_value(): (
             settings.mock_harvard_hmm_client_secret.get_secret_value(),
@@ -353,8 +345,7 @@ async def catalog(
         records = [
             item
             for item in records
-            if datetime.strptime(item["LastModifiedDate"], "%Y-%m-%d").date()
-            > cutoff
+            if datetime.strptime(item["LastModifiedDate"], "%Y-%m-%d").date() > cutoff
         ]
     return {
         "count": len(records),

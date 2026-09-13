@@ -6,10 +6,11 @@ from urllib.parse import parse_qs
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 
-from app.mocks.generated_data import generated_vendor_data
-from app.mocks.settings import get_mock_settings
+from tests.support.mocks.generated_data import generated_vendor_data
+from tests.support.mocks.settings import get_mock_settings
 
 router = APIRouter(tags=["Coursera"])
+
 
 def token_payload(token_value: str | None = None) -> dict[str, Any]:
     token = token_value or get_mock_settings().mock_coursera_access_token.get_secret_value()
@@ -75,9 +76,7 @@ def course_payload(content_id: str, name: str) -> dict[str, Any]:
     }
 
 
-def enrollment_payload(
-    enrollment_id: str, content_id: str, *, completed: bool
-) -> dict[str, Any]:
+def enrollment_payload(enrollment_id: str, content_id: str, *, completed: bool) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "id": enrollment_id,
         "programId": "mock-program",
@@ -160,10 +159,7 @@ async def token(
     password = settings.mock_coursera_password.get_secret_value()
     expected = base64.b64encode(f"{username}:{password}".encode()).decode()
     form = parse_qs((await request.body()).decode())
-    if (
-        authorization != f"Basic {expected}"
-        or form.get("grant_type") != ["client_credentials"]
-    ):
+    if authorization != f"Basic {expected}" or form.get("grant_type") != ["client_credentials"]:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid mock credentials")
     return token_payload()
 
@@ -210,15 +206,9 @@ async def enrollment_reports(
     start: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1)] = 100,
     include_s12n: Annotated[bool, Query(alias="includeS12n")] = True,
-    include_deleted_members: Annotated[
-        bool, Query(alias="includeDeletedMembers")
-    ] = False,
-    include_expired_contracts: Annotated[
-        bool, Query(alias="includeExpiredContracts")
-    ] = False,
-    last_activity_after: Annotated[
-        int | None, Query(alias="lastActivityAfter", ge=0)
-    ] = None,
+    include_deleted_members: Annotated[bool, Query(alias="includeDeletedMembers")] = False,
+    include_expired_contracts: Annotated[bool, Query(alias="includeExpiredContracts")] = False,
+    last_activity_after: Annotated[int | None, Query(alias="lastActivityAfter", ge=0)] = None,
     authorization: Annotated[str | None, Header()] = None,
 ) -> dict[str, Any]:
     del include_s12n, include_deleted_members, include_expired_contracts
@@ -226,9 +216,5 @@ async def enrollment_reports(
     _validate_bearer(authorization)
     records = _ENROLLMENTS
     if last_activity_after is not None:
-        records = [
-            item
-            for item in records
-            if item["lastActivityAt"] > last_activity_after
-        ]
+        records = [item for item in records if item["lastActivityAt"] > last_activity_after]
     return _page(records, start, limit)

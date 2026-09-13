@@ -197,10 +197,7 @@ async def test_adls_binary_writer_preserves_csv_and_manifest(
         )
     )
 
-    directory = (
-        "raw/harvard_hmm/learning_history/ingestion_date=2026-08-28/"
-        "run_id=run-2"
-    )
+    directory = "raw/harvard_hmm/learning_history/ingestion_date=2026-08-28/run_id=run-2"
     output_path = f"{directory}/harvard_hmm_reporting_20260828.csv"
     manifest = json.loads(file_system.files[f"{directory}/manifest.json"])
 
@@ -267,4 +264,3 @@ async def test_adls_binary_writer_handles_existing_identical_and_modified_file(
     )
     res3 = await writer.write_file(req2)
     assert res3.sha256 == hashlib.sha256(raw2).hexdigest()
-

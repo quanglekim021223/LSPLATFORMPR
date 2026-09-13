@@ -67,9 +67,7 @@ async def ingest_live_courses(
     except Exception as exc:
         message = sanitize_text(exc, client.sensitive_values())
         retryable = is_retryable_error(exc)
-        await checkpoints.record_failed_page(
-            run_id, DOMAIN, 1, message, retryable=retryable
-        )
+        await checkpoints.record_failed_page(run_id, DOMAIN, 1, message, retryable=retryable)
         await checkpoints.mark_domain(
             run_id,
             DOMAIN,

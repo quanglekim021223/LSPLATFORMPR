@@ -6,10 +6,11 @@ from urllib.parse import parse_qs
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 
-from app.mocks.generated_data import generated_vendor_data
-from app.mocks.settings import get_mock_settings
+from tests.support.mocks.generated_data import generated_vendor_data
+from tests.support.mocks.settings import get_mock_settings
 
 router = APIRouter(tags=["LinkedIn Learning"])
+
 
 def token_payload(token_value: str | None = None) -> dict[str, str | int]:
     token = token_value or get_mock_settings().mock_linkedin_access_token.get_secret_value()
@@ -65,10 +66,7 @@ def activity_report_payload(index: int, started_at: int) -> dict[str, Any]:
             "name": f"Learner {index}",
             "enterpriseGroups": ["OFFICIAL"],
             "entity": {
-                "profileUrn": (
-                    "urn:li:enterpriseProfile:(urn:li:enterpriseAccount:1,"
-                    f"{index})"
-                )
+                "profileUrn": (f"urn:li:enterpriseProfile:(urn:li:enterpriseAccount:1,{index})")
             },
             "email": f"learner{index}@example.test",
             "customAttributes": {},
@@ -113,9 +111,7 @@ def _validate_bearer(authorization: str | None) -> None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid mock token")
 
 
-def _page(
-    records: list[dict[str, Any]], start: int, count: int, endpoint: str
-) -> dict[str, Any]:
+def _page(records: list[dict[str, Any]], start: int, count: int, endpoint: str) -> dict[str, Any]:
     elements = records[start : start + count]
     next_offset = start + count
     links: list[dict[str, str]] = []
@@ -159,18 +155,12 @@ async def learning_assets(
     q: Annotated[str, Query()] = "criteria",
     start: Annotated[int, Query(ge=0)] = 0,
     count: Annotated[int, Query(ge=1, le=100)] = 100,
-    asset_type: Annotated[
-        str | None, Query(alias="assetFilteringCriteria.assetTypes[0]")
-    ] = None,
+    asset_type: Annotated[str | None, Query(alias="assetFilteringCriteria.assetTypes[0]")] = None,
     last_modified_after: Annotated[
         int | None, Query(alias="assetFilteringCriteria.lastModifiedAfter", ge=0)
     ] = None,
-    include_retired: Annotated[
-        bool, Query(alias="assetRetrievalCriteria.includeRetired")
-    ] = False,
-    asset_urn: Annotated[
-        str | None, Query(alias="assetFilteringCriteria.urn")
-    ] = None,
+    include_retired: Annotated[bool, Query(alias="assetRetrievalCriteria.includeRetired")] = False,
+    asset_urn: Annotated[str | None, Query(alias="assetFilteringCriteria.urn")] = None,
     authorization: Annotated[str | None, Header()] = None,
 ) -> dict[str, Any]:
     _validate_bearer(authorization)
@@ -187,9 +177,7 @@ async def learning_assets(
     matches = _ASSETS
     if last_modified_after is not None:
         matches = [
-            asset
-            for asset in matches
-            if asset["details"]["lastUpdatedAt"] > last_modified_after
+            asset for asset in matches if asset["details"]["lastUpdatedAt"] > last_modified_after
         ]
     return _page(matches, start, count, "learningAssets")
 
@@ -197,12 +185,8 @@ async def learning_assets(
 @router.get("/learningActivityReports")
 async def activity_reports(
     q: Annotated[str, Query()],
-    primary_aggregation: Annotated[
-        str, Query(alias="aggregationCriteria.primary")
-    ],
-    secondary_aggregation: Annotated[
-        str, Query(alias="aggregationCriteria.secondary")
-    ],
+    primary_aggregation: Annotated[str, Query(alias="aggregationCriteria.primary")],
+    secondary_aggregation: Annotated[str, Query(alias="aggregationCriteria.secondary")],
     asset_type: Annotated[str, Query(alias="assetType")],
     content_source: Annotated[str, Query(alias="contentSource")],
     started_at: Annotated[int, Query(alias="startedAt")],

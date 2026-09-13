@@ -69,9 +69,7 @@ async def ingest_learning_history(
                     fetched_at=datetime.now(UTC),
                 )
             )
-            await checkpoints.record_completed_page(
-                run_id, DOMAIN, start, len(elements)
-            )
+            await checkpoints.record_completed_page(run_id, DOMAIN, start, len(elements))
             following_start = next_start(payload, start)
         except Exception as exc:
             message = sanitize_text(exc, client.sensitive_values())

@@ -46,7 +46,7 @@ class LevelUpCourse(LevelUpContractModel):
     id: StrictStr
     course_type: StrictStr
     name: StrictStr
-    description: StrictStr
+    description: StrictStr | None
     notes: Any | None
     external_id: Any | None
     access_date: Any | None
@@ -62,7 +62,7 @@ class LevelUpCourse(LevelUpContractModel):
     prerequisite_course_ids: list[StrictStr]
     post_enrollment_course_ids: list[StrictStr]
     allow_course_evaluation: StrictBool
-    category_id: StrictStr
+    category_id: StrictStr | None
     certificate_url: StrictStr | None
     audience: Any | None
     goals: Any | None
@@ -86,12 +86,12 @@ class LevelUpEnrollment(LevelUpContractModel):
     course_id: StrictStr
     course_name: StrictStr
     progress: StrictFloat
-    score: StrictFloat
+    score: StrictFloat | None
     status: StrictInt
     date_completed: StrictStr | None
     date_expires: StrictStr | None
     full_name: StrictStr
-    job_title: StrictStr
+    job_title: StrictStr | None
     course_version_id: Any | None
     user_id: StrictStr
     accepted_terms_and_conditions: StrictBool

@@ -60,9 +60,7 @@ class HarvardCatalogClient:
         try:
             payload = response.json()
         except ValueError as exc:
-            raise HarvardCatalogContractError(
-                "Harvard token response must be valid JSON"
-            ) from exc
+            raise HarvardCatalogContractError("Harvard token response must be valid JSON") from exc
         contract = validate_token(payload)
         extras = extra_field_paths(contract)
         if extras:
@@ -73,9 +71,7 @@ class HarvardCatalogClient:
         self._token = contract.access_token.strip()
         return self._token
 
-    async def get_json(
-        self, path: str, params: Mapping[str, Any]
-    ) -> tuple[dict[str, Any], bytes]:
+    async def get_json(self, path: str, params: Mapping[str, Any]) -> tuple[dict[str, Any], bytes]:
         if self._token is None:
             await self.authenticate()
         token_used = self._token
@@ -90,25 +86,19 @@ class HarvardCatalogClient:
         try:
             payload = response.json()
         except ValueError as exc:
-            raise HarvardCatalogContractError(
-                f"Expected a JSON object from {path}"
-            ) from exc
+            raise HarvardCatalogContractError(f"Expected a JSON object from {path}") from exc
         if not isinstance(payload, dict):
             raise HarvardCatalogContractError(f"Expected a JSON object from {path}")
         return payload, response.content
 
     def sensitive_values(self) -> tuple[str, ...]:
-        return self.vendor.sensitive_values() + (
-            (self._token,) if self._token else ()
-        )
+        return self.vendor.sensitive_values() + ((self._token,) if self._token else ())
 
     async def _authorized_get(
         self, path: str, params: Mapping[str, Any], token: str | None
     ) -> httpx.Response:
         if not token:
-            raise HarvardCatalogContractError(
-                "Harvard authentication returned an empty token"
-            )
+            raise HarvardCatalogContractError("Harvard authentication returned an empty token")
         return await self.http.request(
             "GET",
             self._url(path),
@@ -127,8 +117,6 @@ def is_retryable_error(exc: BaseException) -> bool:
     if isinstance(exc, httpx.HTTPStatusError):
         status_code = exc.response.status_code
         return status_code == 408 or status_code == 429 or status_code >= 500
-    if isinstance(
-        exc, (HarvardCatalogContractError, HarvardResponseContractError, ValueError)
-    ):
+    if isinstance(exc, (HarvardCatalogContractError, HarvardResponseContractError, ValueError)):
         return False
     return True

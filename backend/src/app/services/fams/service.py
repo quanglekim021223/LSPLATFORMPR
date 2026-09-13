@@ -68,9 +68,9 @@ class FAMSJob:
             await self.checkpoints.start_run(run_id, VENDOR)
             await self.checkpoints.add_domains(run_id, list(DOMAINS))
             self.settings.validate_fams_runtime()
-            ingestion_date = datetime.now(
-                ZoneInfo(self.settings.ingestion_timezone)
-            ).date().isoformat()
+            ingestion_date = (
+                datetime.now(ZoneInfo(self.settings.ingestion_timezone)).date().isoformat()
+            )
             await ingest_training_data(
                 self.client,
                 self.checkpoints,

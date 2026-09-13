@@ -86,24 +86,22 @@ async def ingest_course(
 ) -> CourseResult:
     page_size = settings.levelup_page_size
     watermark = await checkpoints.get_watermark(VENDOR, DOMAIN, course_id)
-    offset = await checkpoints.next_offset(
-        run_id, DOMAIN, page_size, course_id
-    )
+    # Absorb's `_offset` is a zero-based page index, not a row offset.
+    offset = await checkpoints.next_offset(run_id, DOMAIN, 1, course_id)
+    # A non-zero offset continues the same snapshot. Applying a completed-course
+    # watermark here changes the result set and makes the page index invalid.
+    if offset > 0:
+        watermark = None
     result = CourseResult(course_id=course_id)
     received_timestamps: list[str] = []
     try:
         while True:
             params = _enrollment_params(page_size, offset, watermark)
             safe_course_id = quote(course_id, safe="-_.")
-            path = (
-                f"{settings.levelup_courses_path.rstrip('/')}"
-                f"/{safe_course_id}/enrollments"
-            )
+            path = f"{settings.levelup_courses_path.rstrip('/')}/{safe_course_id}/enrollments"
             payload, raw_payload = await client.get_json(path, params)
             if not isinstance(payload, dict):
-                raise ResponseContractError(
-                    "LevelUP Enrollments response must be a JSON object"
-                )
+                raise ResponseContractError("LevelUP Enrollments response must be a JSON object")
             contract = validate_enrollments(payload)
             enrollments = payload.get("enrollments")
             records_count = len(enrollments) if isinstance(enrollments, list) else 0
@@ -137,10 +135,8 @@ async def ingest_course(
             result.records_count += records_count
             if is_last_page(payload, records_count, offset, page_size):
                 break
-            offset += page_size
-        await _complete_course(
-            checkpoints, run_id, course_id, received_timestamps
-        )
+            offset += 1
+        await _complete_course(checkpoints, run_id, course_id, received_timestamps)
         return result
     except Exception as exc:
         if await _deactivate_missing_course(checkpoints, run_id, course_id, exc):
@@ -185,14 +181,10 @@ async def _complete_course(
     await checkpoints.mark_course(run_id, course_id, "completed")
     next_watermark = latest_timestamp(received_timestamps)
     if next_watermark is not None:
-        await checkpoints.set_watermark(
-            VENDOR, DOMAIN, next_watermark, run_id, course_id
-        )
+        await checkpoints.set_watermark(VENDOR, DOMAIN, next_watermark, run_id, course_id)
 
 
-def _enrollment_params(
-    page_size: int, offset: int, watermark: str | None
-) -> dict[str, int | str]:
+def _enrollment_params(page_size: int, offset: int, watermark: str | None) -> dict[str, int | str]:
     params: dict[str, int | str] = {
         "_limit": page_size,
         "_offset": offset,

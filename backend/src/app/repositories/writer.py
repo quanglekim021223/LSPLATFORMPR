@@ -61,9 +61,7 @@ def merge_page_manifest(
         "sha256": sha256,
     }
     manifest["pages"] = [pages[offset] for offset in sorted(pages)]
-    manifest["records_count"] = sum(
-        int(item.get("records_count", 0)) for item in pages.values()
-    )
+    manifest["records_count"] = sum(int(item.get("records_count", 0)) for item in pages.values())
     manifest["updated_at"] = page.fetched_at.isoformat()
     return manifest
 

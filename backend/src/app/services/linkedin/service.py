@@ -68,12 +68,13 @@ class LinkedInJob:
             await self.checkpoints.start_run(current_run_id, VENDOR)
             await self.checkpoints.add_domains(current_run_id, list(DOMAINS))
             self.settings.validate_linkedin_runtime()
-            self.client.asset_detail_params("urn:li:learningAsset:configuration-check")
+            if not self.settings.fabric_enabled:
+                self.client.asset_detail_params("urn:li:learningAsset:configuration-check")
             await self.client.authenticate()
             now = datetime.now(UTC)
-            ingestion_date = now.astimezone(
-                ZoneInfo(self.settings.ingestion_timezone)
-            ).date().isoformat()
+            ingestion_date = (
+                now.astimezone(ZoneInfo(self.settings.ingestion_timezone)).date().isoformat()
+            )
             previous_catalog_watermark = await self.checkpoints.get_watermark(
                 VENDOR,
                 CATALOG_DOMAIN,
@@ -94,9 +95,7 @@ class LinkedInJob:
                     self.writer,
                     current_run_id,
                     ingestion_date,
-                    last_modified_after=_parse_catalog_watermark(
-                        previous_catalog_watermark
-                    ),
+                    last_modified_after=_parse_catalog_watermark(previous_catalog_watermark),
                     sync_watermark=catalog_watermark,
                 ),
                 ingest_learning_history(
@@ -113,44 +112,32 @@ class LinkedInJob:
                     full_sync_watermark=full_sync_watermark,
                 ),
             ]
-            catalog_result, history_result = await asyncio.gather(
-                *tasks, return_exceptions=True
-            )
+            catalog_result, history_result = await asyncio.gather(*tasks, return_exceptions=True)
             results = (catalog_result, history_result)
             errors = [result for result in results if isinstance(result, BaseException)]
             failed_details: list[CourseResult] = []
             if isinstance(catalog_result, list):
-                failed_details = [
-                    result for result in catalog_result if not result.succeeded
-                ]
+                failed_details = [result for result in catalog_result if not result.succeeded]
             if errors or failed_details:
                 status = (
-                    RunStatus.FAILED
-                    if len(errors) == len(tasks)
-                    else RunStatus.PARTIAL_FAILURE
+                    RunStatus.FAILED if len(errors) == len(tasks) else RunStatus.PARTIAL_FAILURE
                 )
                 message = (
                     f"{len(errors)} LinkedIn domain pipeline(s) and "
                     f"{len(failed_details)} asset detail request(s) failed"
                 )
-                return await self.checkpoints.finish_run(
-                    current_run_id, status, message
-                )
+                return await self.checkpoints.finish_run(current_run_id, status, message)
             return await self.checkpoints.finish_run(current_run_id, RunStatus.SUCCEEDED)
         except asyncio.CancelledError:
             if self._heartbeat_error is not None:
-                message = sanitize_text(
-                    self._heartbeat_error, self.client.sensitive_values()
-                )
+                message = sanitize_text(self._heartbeat_error, self.client.sensitive_values())
                 logger.error(
                     "LinkedIn lock heartbeat failed run_id=%s error=%s",
                     current_run_id,
                     message,
                 )
                 await asyncio.shield(
-                    self.checkpoints.finish_run(
-                        current_run_id, RunStatus.FAILED, message
-                    )
+                    self.checkpoints.finish_run(current_run_id, RunStatus.FAILED, message)
                 )
             raise
         except Exception as exc:
@@ -160,9 +147,7 @@ class LinkedInJob:
                 current_run_id,
                 message,
             )
-            return await self.checkpoints.finish_run(
-                current_run_id, RunStatus.FAILED, message
-            )
+            return await self.checkpoints.finish_run(current_run_id, RunStatus.FAILED, message)
         finally:
             stop_heartbeat.set()
             with suppress(asyncio.CancelledError):
@@ -173,9 +158,7 @@ class LinkedInJob:
         self,
         now: datetime,
     ) -> tuple[datetime, datetime, str, str | None, str | None]:
-        configured_start = parse_history_start(
-            self.settings.linkedin_history_start_time
-        )
+        configured_start = parse_history_start(self.settings.linkedin_history_start_time)
         sync_watermark = str(int(now.timestamp() * 1000))
         last_full_sync = await self.checkpoints.get_watermark(
             VENDOR,
@@ -190,7 +173,7 @@ class LinkedInJob:
                 sync_watermark,
                 sync_watermark,
             )
-        if _monthly_sync_due(
+        if self.settings.history_periodic_resync_enabled and _monthly_sync_due(
             last_full_sync,
             now,
             self.settings.ingestion_timezone,
@@ -208,7 +191,9 @@ class LinkedInJob:
             LEARNING_HISTORY,
             WEEKLY_SYNC_SCOPE,
         )
-        if _sync_due(last_weekly_sync, now, WEEKLY_SYNC_INTERVAL_DAYS):
+        if self.settings.history_periodic_resync_enabled and _sync_due(
+            last_weekly_sync, now, WEEKLY_SYNC_INTERVAL_DAYS
+        ):
             history_start = max(
                 configured_start,
                 now - timedelta(days=self.settings.linkedin_history_lookback_days),
@@ -223,8 +208,7 @@ class LinkedInJob:
         daily_anchor = _parse_epoch(last_daily_sync or last_full_sync)
         history_start = max(
             configured_start,
-            daily_anchor
-            - timedelta(days=self.settings.linkedin_history_daily_lookback_days),
+            daily_anchor - timedelta(days=self.settings.linkedin_history_daily_lookback_days),
         )
         return history_start, now, sync_watermark, None, None
 
@@ -234,9 +218,7 @@ class LinkedInJob:
         stop: asyncio.Event,
         owner_task: asyncio.Task[Any],
     ) -> None:
-        interval = min(
-            60.0, max(1.0, self.settings.linkedin_lock_ttl_seconds / 3)
-        )
+        interval = min(60.0, max(1.0, self.settings.linkedin_lock_ttl_seconds / 3))
         while not stop.is_set():
             try:
                 async with asyncio.timeout(interval):
@@ -318,6 +300,4 @@ def _monthly_sync_due(
     except (ValueError, OverflowError, OSError):
         return True
     zone = ZoneInfo(timezone)
-    return completed_at.astimezone(zone).strftime("%Y-%m") != now.astimezone(
-        zone
-    ).strftime("%Y-%m")
+    return completed_at.astimezone(zone).strftime("%Y-%m") != now.astimezone(zone).strftime("%Y-%m")
