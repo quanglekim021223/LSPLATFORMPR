@@ -8,7 +8,6 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 
-from tests.support.mocks.datacamp import course_payload, event_payload
 from app.models import RunStatus
 from app.repositories import CheckpointStore
 from app.services.datacamp.learning_history import (
@@ -18,6 +17,7 @@ from app.services.datacamp.learning_history import (
 )
 from app.services.datacamp.service import _monthly_sync_due, run_datacamp_ingestion
 from tests.conftest import no_sleep, response
+from tests.support.mocks.datacamp import course_payload, event_payload
 
 
 def events_page(
@@ -42,11 +42,7 @@ def valid_response(path: str) -> dict[str, object]:
         return {"data": [course_payload("course-live", "Live", live=True)]}
     if path == "/v1/catalog/archived-courses":
         return {
-            "data": [
-                course_payload(
-                    "course-archived", "Archived", live=False, technology=None
-                )
-            ]
+            "data": [course_payload("course-archived", "Archived", live=False, technology=None)]
         }
     if path == "/v1/events":
         return events_page([event_payload(1)])
@@ -91,11 +87,7 @@ async def test_three_domains_event_pagination_and_raw_bronze(
             assert "to" in request.url.params
             page = int(request.url.params["page"])
             pages.append(page)
-            events = (
-                [event_payload(1), event_payload(2)]
-                if page == 1
-                else [event_payload(3)]
-            )
+            events = [event_payload(1), event_payload(2)] if page == 1 else [event_payload(3)]
             return response(
                 request,
                 200,
@@ -151,18 +143,18 @@ async def test_events_backfill_then_use_daily_watermark(
         sleep=no_sleep,
     )
     assert first.status == RunStatus.SUCCEEDED
-    daily_watermark = await store.get_watermark(
-        "datacamp", "learning_history", DAILY_SYNC_SCOPE
-    )
+    daily_watermark = await store.get_watermark("datacamp", "learning_history", DAILY_SYNC_SCOPE)
     assert daily_watermark is not None
     assert event_requests[0]["from"] == "2000-01-01T00:00:00Z"
     assert event_requests[0]["to"] == daily_watermark
-    assert await store.get_watermark(
-        "datacamp", "learning_history", WEEKLY_SYNC_SCOPE
-    ) == daily_watermark
-    assert await store.get_watermark(
-        "datacamp", "learning_history", FULL_SYNC_SCOPE
-    ) == daily_watermark
+    assert (
+        await store.get_watermark("datacamp", "learning_history", WEEKLY_SYNC_SCOPE)
+        == daily_watermark
+    )
+    assert (
+        await store.get_watermark("datacamp", "learning_history", FULL_SYNC_SCOPE)
+        == daily_watermark
+    )
 
     event_requests.clear()
     second = await run_datacamp_ingestion(
@@ -172,9 +164,7 @@ async def test_events_backfill_then_use_daily_watermark(
         sleep=no_sleep,
     )
     assert second.status == RunStatus.SUCCEEDED
-    daily_start = datetime.fromisoformat(
-        event_requests[0]["from"].replace("Z", "+00:00")
-    )
+    daily_start = datetime.fromisoformat(event_requests[0]["from"].replace("Z", "+00:00"))
     assert daily_start == datetime.fromisoformat(
         daily_watermark.replace("Z", "+00:00")
     ) - timedelta(days=3)
@@ -189,9 +179,7 @@ async def test_events_weekly_sync_reads_ninety_days(
     store = CheckpointStore(settings.checkpoint_db_path)  # type: ignore[attr-defined]
     await store.initialize()
     recent_sync = datetime.now(UTC).isoformat().replace("+00:00", "Z")
-    await store.set_watermark(
-        "datacamp", "learning_history", recent_sync, "run", FULL_SYNC_SCOPE
-    )
+    await store.set_watermark("datacamp", "learning_history", recent_sync, "run", FULL_SYNC_SCOPE)
     await store.set_watermark(
         "datacamp", "learning_history", "2000-01-01T00:00:00Z", "run", WEEKLY_SYNC_SCOPE
     )
@@ -267,15 +255,9 @@ async def test_failed_events_do_not_advance_daily_watermark(
     await store.initialize()
     old_daily = "2026-08-20T00:00:00Z"
     recent_sync = datetime.now(UTC).isoformat().replace("+00:00", "Z")
-    await store.set_watermark(
-        "datacamp", "learning_history", old_daily, "run", DAILY_SYNC_SCOPE
-    )
-    await store.set_watermark(
-        "datacamp", "learning_history", recent_sync, "run", WEEKLY_SYNC_SCOPE
-    )
-    await store.set_watermark(
-        "datacamp", "learning_history", recent_sync, "run", FULL_SYNC_SCOPE
-    )
+    await store.set_watermark("datacamp", "learning_history", old_daily, "run", DAILY_SYNC_SCOPE)
+    await store.set_watermark("datacamp", "learning_history", recent_sync, "run", WEEKLY_SYNC_SCOPE)
+    await store.set_watermark("datacamp", "learning_history", recent_sync, "run", FULL_SYNC_SCOPE)
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/v1/events":
@@ -290,9 +272,7 @@ async def test_failed_events_do_not_advance_daily_watermark(
     )
 
     assert summary.status == RunStatus.PARTIAL_FAILURE
-    assert await store.get_watermark(
-        "datacamp", "learning_history", DAILY_SYNC_SCOPE
-    ) == old_daily
+    assert await store.get_watermark("datacamp", "learning_history", DAILY_SYNC_SCOPE) == old_daily
 
 
 @pytest.mark.asyncio

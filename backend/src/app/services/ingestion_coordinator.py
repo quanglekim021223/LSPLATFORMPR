@@ -42,6 +42,7 @@ class VendorIngestionState(BaseModel):
     last_progress_at: datetime | None = None
     records_by_domain: dict[str, int] = Field(default_factory=dict)
     total_records: int = 0
+    restored_records: int = 0
     error_message: str | None = None
 
 
@@ -138,6 +139,7 @@ class IngestionCoordinator:
             vendor_state.last_progress_at = summary.last_progress_at
             vendor_state.records_by_domain = summary.records_by_domain
             vendor_state.total_records = sum(summary.records_by_domain.values())
+            vendor_state.restored_records = summary.restored_records
 
     def has_active_vendor(self, vendors: Sequence[str]) -> bool:
         if self._active_job_id is None:
@@ -196,6 +198,7 @@ class IngestionCoordinator:
             vendor_state.last_progress_at = result.last_progress_at
             vendor_state.records_by_domain = result.records_by_domain
             vendor_state.total_records = sum(result.records_by_domain.values())
+            vendor_state.restored_records = result.restored_records
             vendor_state.error_message = result.error_message
             vendor_state.status = IngestionStatus(result.status.value)
         except asyncio.CancelledError:

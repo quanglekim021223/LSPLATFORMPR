@@ -110,7 +110,7 @@ class LocalBronzeWriter:
         )
 
     def _write_file(self, file: BinaryFileWrite) -> StorageWriteResult:
-        if not file.raw_payload:
+        if not file.raw_payload and file.records_count != 0:
             raise ValueError("Refusing to write an empty raw payload")
         if Path(file.file_name).name != file.file_name:
             raise ValueError("Binary Bronze file_name must not contain a path")
@@ -226,11 +226,7 @@ class LocalBronzeWriter:
                 "",
             ),
             "run_id": next(
-                (
-                    part.removeprefix("run_id=")
-                    for part in parts
-                    if part.startswith("run_id=")
-                ),
+                (part.removeprefix("run_id=") for part in parts if part.startswith("run_id=")),
                 "",
             ),
             "source_file": relative.as_posix(),
@@ -295,11 +291,7 @@ class LocalBronzeWriter:
             value = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             return {}
-        return (
-            {str(key): item for key, item in value.items()}
-            if isinstance(value, dict)
-            else {}
-        )
+        return {str(key): item for key, item in value.items()} if isinstance(value, dict) else {}
 
     @staticmethod
     def _write_manifest(path: Path, payload: bytes) -> None:
@@ -321,8 +313,7 @@ class LocalBronzeWriter:
 
                 if attempt:
                     logger.debug(
-                        "Manifest write succeeded after temporary Windows lock "
-                        "file=%s attempts=%d",
+                        "Manifest write succeeded after temporary Windows lock file=%s attempts=%d",
                         path,
                         attempt + 1,
                     )

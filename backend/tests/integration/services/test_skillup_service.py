@@ -8,7 +8,6 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 
-from tests.support.mocks.skillup import assessment_report, skill_profile, taxonomy_item
 from app.models import RunStatus
 from app.repositories import CheckpointStore
 from app.services.skillup.assessment_history import (
@@ -18,6 +17,13 @@ from app.services.skillup.assessment_history import (
 )
 from app.services.skillup.service import run_skillup_ingestion
 from tests.conftest import no_sleep, response
+from tests.support.mocks.skillup import (
+    assessment_report,
+    certificate,
+    learning_resource,
+    skill_profile,
+    taxonomy_item,
+)
 
 
 def page_payload(
@@ -45,11 +51,15 @@ def valid_response(path: str) -> dict[str, object]:
         return page_payload("items", [skill_profile()])
     if path == "/v3/reports":
         return page_payload("reports", [assessment_report()])
+    if path == "/learning/materials":
+        return page_payload("items", [learning_resource()])
+    if path == "/certificates":
+        return page_payload("items", [certificate()])
     raise AssertionError(path)
 
 
 @pytest.mark.asyncio
-async def test_skillup_three_domains_paginate_and_preserve_raw(
+async def test_skillup_five_domains_paginate_and_preserve_raw(
     settings_factory: Callable[..., object],
 ) -> None:
     settings = settings_factory()
@@ -58,6 +68,8 @@ async def test_skillup_three_domains_paginate_and_preserve_raw(
         "/taxonomy": [],
         "/employees/skills-profile": [],
         "/v3/reports": [],
+        "/learning/materials": [],
+        "/certificates": [],
     }
     first_taxonomy_page = page_payload(
         "items",
@@ -106,11 +118,7 @@ async def test_skillup_three_domains_paginate_and_preserve_raw(
         if path == "/employees/skills-profile":
             page = int(request.url.params["pageNumber"])
             pages[path].append(page)
-            items = (
-                [skill_profile(0), skill_profile(1)]
-                if page == 1
-                else [skill_profile(2)]
-            )
+            items = [skill_profile(0), skill_profile(1)] if page == 1 else [skill_profile(2)]
             return response(
                 request,
                 200,
@@ -142,6 +150,13 @@ async def test_skillup_three_domains_paginate_and_preserve_raw(
                     total_count=3,
                 ),
             )
+        if path in {"/learning/materials", "/certificates"}:
+            page = int(request.url.params["PageNumber"])
+            pages[path].append(page)
+            assert request.url.params["IncludeSkills"] == "true"
+            if path == "/certificates":
+                assert request.url.params["activeOnly"] == "false"
+            return response(request, 200, valid_response(path))
         raise AssertionError(request.url)
 
     summary = await run_skillup_ingestion(
@@ -154,6 +169,8 @@ async def test_skillup_three_domains_paginate_and_preserve_raw(
     assert summary.vendor == "skillup"
     assert summary.records_by_domain == {
         "assessment_history": 3,
+        "certificates": 1,
+        "learning_resources": 1,
         "skill_inventory": 3,
         "skill_taxonomy": 3,
     }
@@ -161,11 +178,15 @@ async def test_skillup_three_domains_paginate_and_preserve_raw(
         "/taxonomy": 2,
         "/employees/skills-profile": 2,
         "/v3/reports": 2,
+        "/learning/materials": 1,
+        "/certificates": 1,
     }
     assert pages == {
         "/taxonomy": [1, 2],
         "/employees/skills-profile": [1, 2],
         "/v3/reports": [1, 2],
+        "/learning/materials": [1],
+        "/certificates": [1],
     }
     taxonomy_page = next(
         path
@@ -194,11 +215,7 @@ async def test_skillup_uses_incremental_filters_and_daily_assessment_window(
             items = [] if "LastModifiedOn" in params else [taxonomy_item()]
             return response(request, 200, page_payload("items", items))
         if request.url.path == "/employees/skills-profile":
-            items = (
-                []
-                if "SkillProfileModifiedSince" in params
-                else [skill_profile()]
-            )
+            items = [] if "SkillProfileModifiedSince" in params else [skill_profile()]
             return response(request, 200, page_payload("items", items))
         if request.url.path == "/v3/reports":
             return response(
@@ -206,6 +223,8 @@ async def test_skillup_uses_incremental_filters_and_daily_assessment_window(
                 200,
                 page_payload("reports", [assessment_report()]),
             )
+        if request.url.path in {"/learning/materials", "/certificates"}:
+            return response(request, 200, valid_response(request.url.path))
         raise AssertionError(request.url)
 
     first = await run_skillup_ingestion(
@@ -244,25 +263,68 @@ async def test_skillup_uses_incremental_filters_and_daily_assessment_window(
 
     requests = {path: params for path, params in seen}
     assert requests["/taxonomy"]["LastModifiedOn"] == taxonomy_watermark
-    assert (
-        requests["/employees/skills-profile"]["SkillProfileModifiedSince"]
-        == inventory_watermark
-    )
+    assert requests["/employees/skills-profile"]["SkillProfileModifiedSince"] == inventory_watermark
     daily_start = datetime.fromisoformat(
         requests["/v3/reports"]["startDate"].replace("Z", "+00:00")
     )
-    daily_end = datetime.fromisoformat(
-        requests["/v3/reports"]["endDate"].replace("Z", "+00:00")
-    )
+    daily_end = datetime.fromisoformat(requests["/v3/reports"]["endDate"].replace("Z", "+00:00"))
     assert daily_end - daily_start >= timedelta(days=3)
     assert daily_start == datetime.fromisoformat(
         daily_sync_watermark.replace("Z", "+00:00")
     ) - timedelta(days=3)
     assert second.records_by_domain == {
         "assessment_history": 1,
+        "certificates": 0,
+        "learning_resources": 0,
         "skill_inventory": 0,
         "skill_taxonomy": 0,
     }
+
+
+@pytest.mark.asyncio
+async def test_skillup_snapshot_only_writes_changed_pages(
+    settings_factory: Callable[..., object],
+) -> None:
+    settings = settings_factory()
+    store = CheckpointStore(settings.checkpoint_db_path)  # type: ignore[attr-defined]
+    changed = False
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = valid_response(request.url.path)
+        if request.url.path == "/learning/materials" and changed:
+            item = payload["items"]
+            assert isinstance(item, list) and isinstance(item[0], dict)
+            item[0]["title"] = "Updated Python Foundations"
+        return response(request, 200, payload)
+
+    first = await run_skillup_ingestion(
+        settings,  # type: ignore[arg-type]
+        checkpoint_store=store,
+        transport=httpx.MockTransport(handler),
+        sleep=no_sleep,
+    )
+    assert first.status == RunStatus.SUCCEEDED
+
+    changed = True
+    second = await run_skillup_ingestion(
+        settings,  # type: ignore[arg-type]
+        checkpoint_store=store,
+        transport=httpx.MockTransport(handler),
+        sleep=no_sleep,
+    )
+
+    assert second.status == RunStatus.SUCCEEDED
+    assert second.records_by_domain["learning_resources"] == 1
+    assert second.records_by_domain["certificates"] == 0
+    changed_pages = list(
+        settings.bronze_local_path.glob(  # type: ignore[attr-defined]
+            f"skillup/learning_resources/**/run_id={second.run_id}/offset=*.json"
+        )
+    )
+    assert len(changed_pages) == 1
+    assert json.loads(changed_pages[0].read_text())["items"][0]["title"] == (
+        "Updated Python Foundations"
+    )
 
 
 @pytest.mark.asyncio
@@ -296,12 +358,11 @@ async def test_skillup_monthly_assessment_full_sync(
     assert summary.status == RunStatus.SUCCEEDED
     assert assessment_params["startDate"] == "2000-01-01T00:00:00Z"
     assert "endDate" in assessment_params
-    assert await store.get_watermark(
-        "skillup", "assessment_history", FULL_SYNC_SCOPE
-    ) != "2026-01-01T00:00:00Z"
-    assert await store.get_watermark(
-        "skillup", "assessment_history", WEEKLY_SYNC_SCOPE
-    ) is not None
+    assert (
+        await store.get_watermark("skillup", "assessment_history", FULL_SYNC_SCOPE)
+        != "2026-01-01T00:00:00Z"
+    )
+    assert await store.get_watermark("skillup", "assessment_history", WEEKLY_SYNC_SCOPE) is not None
 
 
 @pytest.mark.asyncio
@@ -346,9 +407,10 @@ async def test_skillup_weekly_assessment_reads_ninety_days(
     start = datetime.fromisoformat(assessment_params["startDate"].replace("Z", "+00:00"))
     end = datetime.fromisoformat(assessment_params["endDate"].replace("Z", "+00:00"))
     assert (end - start).days == 90
-    assert await store.get_watermark(
-        "skillup", "assessment_history", WEEKLY_SYNC_SCOPE
-    ) != "2026-01-01T00:00:00Z"
+    assert (
+        await store.get_watermark("skillup", "assessment_history", WEEKLY_SYNC_SCOPE)
+        != "2026-01-01T00:00:00Z"
+    )
 
 
 @pytest.mark.asyncio
@@ -367,6 +429,8 @@ async def test_skillup_domain_failure_does_not_stop_other_domains(
             return response(request, 200, valid_response(path))
         if path == "/v3/reports":
             return response(request, 200, valid_response(path))
+        if path in {"/learning/materials", "/certificates"}:
+            return response(request, 200, valid_response(path))
         raise AssertionError(request.url)
 
     summary = await run_skillup_ingestion(
@@ -378,18 +442,27 @@ async def test_skillup_domain_failure_does_not_stop_other_domains(
     assert summary.status == RunStatus.PARTIAL_FAILURE
     assert summary.records_by_domain == {
         "assessment_history": 1,
+        "certificates": 1,
+        "learning_resources": 1,
         "skill_inventory": 1,
     }
     assert called == {
         "/taxonomy": 1,
         "/employees/skills-profile": 1,
         "/v3/reports": 1,
+        "/learning/materials": 1,
+        "/certificates": 1,
     }
     stored_domains = {
         path.parents[2].name
         for path in settings.bronze_local_path.rglob("offset=*.json")  # type: ignore[attr-defined]
     }
-    assert stored_domains == {"skill_inventory", "assessment_history"}
+    assert stored_domains == {
+        "skill_inventory",
+        "assessment_history",
+        "learning_resources",
+        "certificates",
+    }
 
     next_summary = await run_skillup_ingestion(
         settings,  # type: ignore[arg-type]
@@ -402,6 +475,8 @@ async def test_skillup_domain_failure_does_not_stop_other_domains(
         "/taxonomy": 2,
         "/employees/skills-profile": 2,
         "/v3/reports": 2,
+        "/learning/materials": 2,
+        "/certificates": 2,
     }
 
 
@@ -420,6 +495,8 @@ async def test_skillup_optional_parameters_are_sent_only_when_provided(
             return response(request, 200, page_payload("items", []))
         if request.url.path == "/v3/reports":
             return response(request, 200, page_payload("reports", []))
+        if request.url.path in {"/learning/materials", "/certificates"}:
+            return response(request, 200, page_payload("items", []))
         raise AssertionError(request.url)
 
     summary = await run_skillup_ingestion(
@@ -452,6 +529,8 @@ async def test_skillup_optional_parameters_are_sent_only_when_provided(
         ("/taxonomy", "skill_taxonomy"),
         ("/employees/skills-profile", "skill_inventory"),
         ("/v3/reports", "assessment_history"),
+        ("/learning/materials", "learning_resources"),
+        ("/certificates", "certificates"),
     ],
 )
 async def test_contract_invalid_response_does_not_enter_bronze(
@@ -473,6 +552,8 @@ async def test_contract_invalid_response_does_not_enter_bronze(
                 "/taxonomy": "displayName",
                 "/employees/skills-profile": "externalEmployeeId",
                 "/v3/reports": "candidateFullName",
+                "/learning/materials": "learningMaterialId",
+                "/certificates": "certificateId",
             }[invalid_path]
             del record[required_field]
         return response(request, 200, payload)

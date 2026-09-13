@@ -14,6 +14,7 @@ from app.clients.base_client import RetryingHttpClient
 from app.core.config import Settings
 
 logger = logging.getLogger(__name__)
+COURSE_DETAIL_CONTENT_TYPES = frozenset({"Course", "Specialization"})
 
 
 class CourseraResponseContractError(RuntimeError):
@@ -86,7 +87,7 @@ class CourseraClient:
             raise CourseraResponseContractError(f"Expected a JSON object from {path}")
         return payload, response.content
 
-    def content_detail_path(self, content_id: str) -> str:
+    def content_detail_path(self, content_key: str) -> str:
         template = self.settings.coursera_content_detail_path_template
         fields = {
             field_name
@@ -98,16 +99,16 @@ class CourseraClient:
             for _, field_name, _, _ in Formatter().parse(template)
             if field_name is not None
         }
-        allowed = {"org_id", "content_id"}
+        allowed = {"org_id", "id"}
         if parsed_fields != fields or not parsed_fields <= allowed:
             raise ValueError(
-                "COURSERA_CONTENT_DETAIL_PATH_TEMPLATE only supports {org_id} and {content_id}"
+                "COURSERA_CONTENT_DETAIL_PATH_TEMPLATE only supports {org_id} and {id}"
             )
-        if "content_id" not in parsed_fields:
-            raise ValueError("COURSERA_CONTENT_DETAIL_PATH_TEMPLATE must contain {content_id}")
+        if "id" not in parsed_fields:
+            raise ValueError("COURSERA_CONTENT_DETAIL_PATH_TEMPLATE must contain {id}")
         return template.format(
             org_id=quote(self.settings.coursera_org_id, safe=""),
-            content_id=quote(content_id, safe=""),
+            id=quote(content_key, safe=""),
         )
 
     def sensitive_values(self) -> tuple[str, ...]:

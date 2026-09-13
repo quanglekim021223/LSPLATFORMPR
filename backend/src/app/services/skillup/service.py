@@ -25,6 +25,12 @@ from app.services.skillup.assessment_history import (
 from app.services.skillup.assessment_history import (
     DOMAIN as ASSESSMENT_HISTORY,
 )
+from app.services.skillup.catalog_snapshots import (
+    CERTIFICATES,
+    LEARNING_RESOURCES,
+    ingest_certificates,
+    ingest_learning_resources,
+)
 from app.services.skillup.skill_inventory import DOMAIN as SKILL_INVENTORY
 from app.services.skillup.skill_inventory import ingest_skill_inventory
 from app.services.skillup.taxonomy import DOMAIN as SKILL_TAXONOMY
@@ -33,7 +39,13 @@ from app.services.skillup.taxonomy import ingest_skill_taxonomy
 logger = logging.getLogger(__name__)
 
 VENDOR = "skillup"
-DOMAINS = (SKILL_TAXONOMY, SKILL_INVENTORY, ASSESSMENT_HISTORY)
+DOMAINS = (
+    SKILL_TAXONOMY,
+    SKILL_INVENTORY,
+    ASSESSMENT_HISTORY,
+    LEARNING_RESOURCES,
+    CERTIFICATES,
+)
 LOCK_TTL_SECONDS = 3600
 UTC_OFFSET = "+00:00"
 
@@ -75,9 +87,9 @@ class SkillUpJob:
         try:
             await self.checkpoints.start_run(current_run_id, VENDOR)
             await self.checkpoints.add_domains(current_run_id, list(DOMAINS))
-            ingestion_date = datetime.now(
-                ZoneInfo(self.settings.ingestion_timezone)
-            ).date().isoformat()
+            ingestion_date = (
+                datetime.now(ZoneInfo(self.settings.ingestion_timezone)).date().isoformat()
+            )
             (
                 assessment_start,
                 assessment_end,
@@ -129,6 +141,28 @@ class SkillUpJob:
                         full_sync_watermark=full_sync_watermark,
                     )
                 )
+            if LEARNING_RESOURCES in domains:
+                tasks.append(
+                    ingest_learning_resources(
+                        self.settings,
+                        self.client,
+                        self.checkpoints,
+                        self.writer,
+                        current_run_id,
+                        ingestion_date,
+                    )
+                )
+            if CERTIFICATES in domains:
+                tasks.append(
+                    ingest_certificates(
+                        self.settings,
+                        self.client,
+                        self.checkpoints,
+                        self.writer,
+                        current_run_id,
+                        ingestion_date,
+                    )
+                )
 
             results = await asyncio.gather(*tasks, return_exceptions=True)
             errors = [result for result in results if isinstance(result, BaseException)]
@@ -150,9 +184,7 @@ class SkillUpJob:
             return await self.checkpoints.finish_run(current_run_id, RunStatus.SUCCEEDED)
         except asyncio.CancelledError:
             if self._heartbeat_error is not None:
-                message = sanitize_text(
-                    self._heartbeat_error, self.client.sensitive_values()
-                )
+                message = sanitize_text(self._heartbeat_error, self.client.sensitive_values())
                 logger.error(
                     "SkillUp lock heartbeat failed run_id=%s error=%s",
                     current_run_id,
@@ -168,9 +200,7 @@ class SkillUpJob:
             raise
         except Exception as exc:
             message = sanitize_text(exc, self.client.sensitive_values())
-            logger.error(
-                "SkillUp ingestion failed run_id=%s error=%s", current_run_id, message
-            )
+            logger.error("SkillUp ingestion failed run_id=%s error=%s", current_run_id, message)
             return await self.checkpoints.finish_run(
                 current_run_id,
                 RunStatus.FAILED,
@@ -203,10 +233,13 @@ class SkillUpJob:
             ASSESSMENT_HISTORY,
             FULL_SYNC_SCOPE,
         )
-        if _monthly_sync_due(
-            last_full_sync,
-            now,
-            self.settings.ingestion_timezone,
+        if last_full_sync is None or (
+            self.settings.history_periodic_resync_enabled
+            and _monthly_sync_due(
+                last_full_sync,
+                now,
+                self.settings.ingestion_timezone,
+            )
         ):
             return (
                 self.settings.skillup_assessment_start_date,
@@ -221,7 +254,7 @@ class SkillUpJob:
             ASSESSMENT_HISTORY,
             WEEKLY_SYNC_SCOPE,
         )
-        if _sync_due(
+        if self.settings.history_periodic_resync_enabled and _sync_due(
             last_weekly_sync,
             now,
             self.settings.skillup_assessment_weekly_sync_interval_days,
@@ -345,9 +378,7 @@ def _monthly_sync_due(
     except ValueError:
         return True
     zone = ZoneInfo(timezone)
-    return completed_at.astimezone(zone).strftime("%Y-%m") != now.astimezone(
-        zone
-    ).strftime("%Y-%m")
+    return completed_at.astimezone(zone).strftime("%Y-%m") != now.astimezone(zone).strftime("%Y-%m")
 
 
 def _parse_utc(value: str | None) -> datetime:

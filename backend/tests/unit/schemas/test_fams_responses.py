@@ -53,6 +53,29 @@ def test_training_data_contract_matches_documented_response() -> None:
     assert contract.data.student_list[0].final_grade is None
 
 
+def test_live_optional_envelope_and_graduation_date_shapes() -> None:
+    payload = _payload()
+    payload.pop("error_code")
+    payload["data"]["studentList"][0]["universityGraduationDate"] = "2026"
+
+    contract = validate_training_data(payload)
+
+    assert contract.error_code is None
+    assert contract.data.student_list[0].university_graduation_date == "2026"
+
+
+def test_live_nullable_account_and_string_toeic_score() -> None:
+    payload = _payload()
+    student = payload["data"]["studentList"][0]
+    student["account"] = None
+    student["engToeicScore"] = "750"
+
+    contract = validate_training_data(payload)
+
+    assert contract.data.student_list[0].account is None
+    assert contract.data.student_list[0].eng_toeic_score == "750"
+
+
 @pytest.mark.parametrize(
     ("path", "value", "expected_error"),
     [

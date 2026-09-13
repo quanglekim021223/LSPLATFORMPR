@@ -27,6 +27,7 @@ class RunSummary(BaseModel):
     courses_succeeded: int = 0
     courses_failed: int = 0
     records_by_domain: dict[str, int] = Field(default_factory=dict)
+    restored_records: int = 0
     error_message: str | None = None
 
 

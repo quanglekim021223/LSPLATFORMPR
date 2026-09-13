@@ -10,12 +10,14 @@ from app.schemas.skillup.responses import (
     SkillTaxonomyItem,
     SkillTaxonomyResponse,
     SkillUpContractModel,
+    SkillUpSnapshotResponse,
     TaxonomyNamedEntity,
     TaxonomySkillDefinition,
     extra_field_paths,
     validate_assessment_history,
     validate_skill_inventory,
     validate_skill_taxonomy,
+    validate_snapshot_page,
 )
 
 __all__ = [
@@ -26,6 +28,7 @@ __all__ = [
     "InventorySkillDefinition",
     "SkillClassification",
     "SkillUpContractModel",
+    "SkillUpSnapshotResponse",
     "SkillInventoryItem",
     "SkillInventoryResponse",
     "SkillTaxonomyItem",
@@ -35,5 +38,6 @@ __all__ = [
     "extra_field_paths",
     "validate_assessment_history",
     "validate_skill_inventory",
+    "validate_snapshot_page",
     "validate_skill_taxonomy",
 ]

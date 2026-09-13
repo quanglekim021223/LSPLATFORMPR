@@ -35,6 +35,35 @@ async def ingest_assessment_history(
     weekly_sync_watermark: str | None = None,
     full_sync_watermark: str | None = None,
 ) -> None:
+    if settings.fabric_enabled:
+        from app.services.skillup.assessment_windows import ingest_windows
+
+        if start_date is None or end_date is None:
+            raise ValueError("Fabric assessment requires an explicit time range")
+        await ingest_windows(
+            settings,
+            client,
+            checkpoints,
+            writer,
+            run_id,
+            ingestion_date,
+            start_date,
+            end_date,
+            include_sections,
+        )
+        await store_optional_watermarks(
+            checkpoints,
+            VENDOR,
+            DOMAIN,
+            run_id,
+            (
+                (DAILY_SYNC_SCOPE, daily_sync_watermark),
+                (WEEKLY_SYNC_SCOPE, weekly_sync_watermark),
+                (FULL_SYNC_SCOPE, full_sync_watermark),
+            ),
+        )
+        await checkpoints.mark_domain(run_id, DOMAIN, "completed")
+        return
     page_number = await checkpoints.next_page_number(run_id, DOMAIN)
     while True:
         params = _report_params(
@@ -71,9 +100,7 @@ async def ingest_assessment_history(
                     fetched_at=datetime.now(UTC),
                 )
             )
-            await checkpoints.record_completed_page(
-                run_id, DOMAIN, page_number, records_count
-            )
+            await checkpoints.record_completed_page(run_id, DOMAIN, page_number, records_count)
         except Exception as exc:
             message = sanitize_text(exc, client.sensitive_values())
             retryable = is_retryable_error(exc)
@@ -120,4 +147,3 @@ def _report_params(
     }
     params.update({key: value for key, value in optional.items() if value is not None})
     return params
-

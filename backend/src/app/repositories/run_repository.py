@@ -78,9 +78,7 @@ class CheckpointStore:
                 "ingestion_watermarks",
                 "vendor_entity_keys",
             ):
-                connection.execute(
-                    f"DELETE FROM {table} WHERE vendor IN ({placeholders})", vendors
-                )
+                connection.execute(f"DELETE FROM {table} WHERE vendor IN ({placeholders})", vendors)
             return len(run_ids)
 
     def _connect(self) -> sqlite3.Connection:
@@ -169,8 +167,7 @@ class CheckpointStore:
                 """
             )
             lock_columns = {
-                str(row["name"])
-                for row in connection.execute("PRAGMA table_info(vendor_locks)")
+                str(row["name"]) for row in connection.execute("PRAGMA table_info(vendor_locks)")
             }
             if "heartbeat_at" not in lock_columns:
                 connection.execute("ALTER TABLE vendor_locks ADD COLUMN heartbeat_at TEXT")
@@ -182,9 +179,7 @@ class CheckpointStore:
             )
             source_columns = {
                 str(row["name"])
-                for row in connection.execute(
-                    "PRAGMA table_info(ingested_source_files)"
-                )
+                for row in connection.execute("PRAGMA table_info(ingested_source_files)")
             }
             if "remote_size" not in source_columns:
                 connection.execute(
@@ -192,8 +187,7 @@ class CheckpointStore:
                 )
             if "remote_modified_at" not in source_columns:
                 connection.execute(
-                    "ALTER TABLE ingested_source_files "
-                    "ADD COLUMN remote_modified_at TEXT"
+                    "ALTER TABLE ingested_source_files ADD COLUMN remote_modified_at TEXT"
                 )
             entity_columns = {
                 str(row["name"])
@@ -201,8 +195,7 @@ class CheckpointStore:
             }
             if "is_active" not in entity_columns:
                 connection.execute(
-                    "ALTER TABLE vendor_entity_keys "
-                    "ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1"
+                    "ALTER TABLE vendor_entity_keys ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1"
                 )
 
     async def is_ready(self) -> bool:
@@ -215,9 +208,7 @@ class CheckpointStore:
         with self._connect() as connection:
             return bool(connection.execute("SELECT 1").fetchone()[0] == 1)
 
-    async def acquire_lock(
-        self, vendor: str, run_id: str, ttl_seconds: int = 3600
-    ) -> None:
+    async def acquire_lock(self, vendor: str, run_id: str, ttl_seconds: int = 3600) -> None:
         await asyncio.to_thread(self._acquire_lock, vendor, run_id, ttl_seconds)
 
     def _acquire_lock(self, vendor: str, run_id: str, ttl_seconds: int) -> None:
@@ -405,9 +396,7 @@ class CheckpointStore:
             return self._summary_from_row(connection, row) if row else None
 
     @staticmethod
-    def _summary_from_row(
-        connection: sqlite3.Connection, row: sqlite3.Row
-    ) -> RunSummary:
+    def _summary_from_row(connection: sqlite3.Connection, row: sqlite3.Row) -> RunSummary:
         run_id = str(row["run_id"])
         checkpoint_totals = {
             item["data_domain"]: int(item["records_count"])
@@ -430,8 +419,7 @@ class CheckpointStore:
         ).fetchone()
         last_progress_value = (
             str(last_progress_row["last_progress_at"])
-            if last_progress_row is not None
-            and last_progress_row["last_progress_at"] is not None
+            if last_progress_row is not None and last_progress_row["last_progress_at"] is not None
             else None
         )
         course_totals = {
@@ -511,16 +499,10 @@ class CheckpointStore:
                 (run_id, run_id, data_domain, course_id, offset, now, now, records_count),
             )
 
-    async def source_file_completed(
-        self, vendor: str, data_domain: str, source_key: str
-    ) -> bool:
-        return await asyncio.to_thread(
-            self._source_file_completed, vendor, data_domain, source_key
-        )
+    async def source_file_completed(self, vendor: str, data_domain: str, source_key: str) -> bool:
+        return await asyncio.to_thread(self._source_file_completed, vendor, data_domain, source_key)
 
-    def _source_file_completed(
-        self, vendor: str, data_domain: str, source_key: str
-    ) -> bool:
+    def _source_file_completed(self, vendor: str, data_domain: str, source_key: str) -> bool:
         with self._connect() as connection:
             row = connection.execute(
                 """
@@ -573,7 +555,9 @@ class CheckpointStore:
                     remote_modified_at,
                 ),
             ).fetchone()
-            return row is not None
+            if row is None:
+                return False
+            return True
 
     async def record_completed_source_file(
         self,
@@ -860,9 +844,7 @@ class CheckpointStore:
             self._next_offset, run_id, data_domain, page_size, course_id or ""
         )
 
-    def _next_offset(
-        self, run_id: str, data_domain: str, page_size: int, course_id: str
-    ) -> int:
+    def _next_offset(self, run_id: str, data_domain: str, page_size: int, course_id: str) -> int:
         with self._connect() as connection:
             row = connection.execute(
                 """
@@ -921,9 +903,7 @@ class CheckpointStore:
         status: str,
         error_message: str | None = None,
     ) -> None:
-        await asyncio.to_thread(
-            self._mark_domain, run_id, data_domain, status, error_message
-        )
+        await asyncio.to_thread(self._mark_domain, run_id, data_domain, status, error_message)
 
     def _mark_domain(
         self,
@@ -979,6 +959,21 @@ class CheckpointStore:
                 """
                 SELECT course_id FROM run_courses
                 WHERE run_id = ? AND status IN ('pending', 'failed', 'retryable_failed')
+                ORDER BY course_id
+                """,
+                (run_id,),
+            ).fetchall()
+            return [str(row["course_id"]) for row in rows]
+
+    async def incomplete_courses(self, run_id: str) -> list[str]:
+        return await asyncio.to_thread(self._incomplete_courses, run_id)
+
+    def _incomplete_courses(self, run_id: str) -> list[str]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT course_id FROM run_courses
+                WHERE run_id = ? AND status != 'completed'
                 ORDER BY course_id
                 """,
                 (run_id,),

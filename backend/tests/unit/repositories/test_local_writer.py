@@ -226,9 +226,11 @@ async def test_csv_export_flattens_json_record_collections(tmp_path: Path) -> No
         "student-2",
     ]
     assert len(harvard_rows) == 4
-    assert [
-        json.loads(row["raw_record_json"]).get("id") for row in harvard_rows[:2]
-    ] == ["h1", "h2"]
-    assert [
-        json.loads(row["raw_record_json"])["username"] for row in harvard_rows[2:]
-    ] == ["user-1", "user-2"]
+    assert [json.loads(row["raw_record_json"]).get("id") for row in harvard_rows[:2]] == [
+        "h1",
+        "h2",
+    ]
+    assert [json.loads(row["raw_record_json"])["username"] for row in harvard_rows[2:]] == [
+        "user-1",
+        "user-2",
+    ]

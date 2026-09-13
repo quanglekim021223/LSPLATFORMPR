@@ -8,8 +8,8 @@ import httpx
 import pytest
 
 from app.clients.linkedin_client import LinkedInClient
-from tests.support.mocks.linkedin import token_payload
 from tests.conftest import no_sleep, response
+from tests.support.mocks.linkedin import token_payload
 
 
 @pytest.mark.asyncio
@@ -47,9 +47,7 @@ async def test_401_refreshes_token_and_retries_exactly_once(
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/oauth/v2/accessToken":
             calls["auth"] += 1
-            return response(
-                request, 200, token_payload(f"token-{calls['auth']}")
-            )
+            return response(request, 200, token_payload(f"token-{calls['auth']}"))
         calls["get"] += 1
         expected = "token-1" if calls["get"] == 1 else "token-2"
         assert request.headers["Authorization"] == f"Bearer {expected}"
@@ -78,9 +76,7 @@ async def test_second_401_is_not_retried(
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/oauth/v2/accessToken":
             calls["auth"] += 1
-            return response(
-                request, 200, token_payload(f"token-{calls['auth']}")
-            )
+            return response(request, 200, token_payload(f"token-{calls['auth']}"))
         calls["get"] += 1
         return response(request, 401, {})
 
@@ -115,9 +111,7 @@ async def test_authentication_reuses_http_retry(
 def test_asset_detail_query_comes_only_from_template(
     settings_factory: Callable[..., object],
 ) -> None:
-    settings = settings_factory(
-        linkedin_asset_detail_query_template="q=criteria&customUrn={urn}"
-    )
+    settings = settings_factory(linkedin_asset_detail_query_template="q=criteria&customUrn={urn}")
     client = LinkedInClient(settings, httpx.AsyncClient())  # type: ignore[arg-type]
     assert client.asset_detail_params("urn:li:course:1") == {
         "q": "criteria",

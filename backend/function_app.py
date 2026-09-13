@@ -2,16 +2,26 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import tempfile
+from collections.abc import Awaitable, Callable
+from pathlib import Path
 
 import azure.functions as func
 
 from app.core.config import get_settings
 from app.main import build_bronze_writer, build_ingestion_jobs, create_app
+from app.models import RunStatus, RunSummary
 from app.repositories import CheckpointStore
 
 logger = logging.getLogger(__name__)
 
 settings = get_settings().model_copy(update={"scheduler_enabled": False})
+if settings.fabric_enabled:
+    settings = settings.model_copy(
+        update={
+            "checkpoint_db_path": Path(tempfile.gettempdir()) / "lsplatform-http" / "status.db",
+        }
+    )
 checkpoint_store = CheckpointStore(settings.checkpoint_db_path)
 bronze_writer = build_bronze_writer(settings)
 fastapi_app = create_app(
@@ -33,23 +43,30 @@ async def run_configured_ingestions() -> None:
         raise RuntimeError("Azure timer started but no vendor is fully configured")
 
     logger.info("Azure timer ingestion started vendors=%s", ",".join(jobs))
+    semaphore = asyncio.Semaphore(
+        settings.fabric_max_concurrent_vendors if settings.fabric_enabled else 8
+    )
+
+    async def invoke(job: Callable[[], Awaitable[object]]) -> object:
+        async with semaphore:
+            return await job()
+
     results = await asyncio.gather(
-        *(job() for job in jobs.values()),
+        *(invoke(job) for job in jobs.values()),
         return_exceptions=True,
     )
     failed_vendors = [
         vendor
         for vendor, result in zip(jobs, results, strict=True)
         if isinstance(result, BaseException)
+        or (isinstance(result, RunSummary) and result.status != RunStatus.SUCCEEDED)
     ]
     if failed_vendors:
         logger.error(
             "Azure timer ingestion failed vendors=%s",
             ",".join(failed_vendors),
         )
-        raise RuntimeError(
-            f"Azure timer ingestion failed for: {', '.join(failed_vendors)}"
-        )
+        raise RuntimeError(f"Azure timer ingestion failed for: {', '.join(failed_vendors)}")
     logger.info("Azure timer ingestion finished vendors=%s", ",".join(jobs))
 
 

@@ -3,7 +3,6 @@ from __future__ import annotations
 import pytest
 
 from app.clients.coursera_client import CourseraResponseContractError
-from tests.support.mocks.coursera import course_payload, enrollment_payload, token_payload
 from app.schemas.coursera import (
     extra_field_paths,
     validate_course_detail,
@@ -11,13 +10,13 @@ from app.schemas.coursera import (
     validate_learning_history,
     validate_token,
 )
+from tests.support.mocks.coursera import course_payload, enrollment_payload, token_payload
 
 
 def content_response(*content_ids: str) -> dict[str, object]:
     return {
         "elements": [
-            course_payload(content_id, f"Course {content_id}")
-            for content_id in content_ids
+            course_payload(content_id, f"Course {content_id}") for content_id in content_ids
         ],
         "paging": {"next": "2", "total": 27407},
         "linked": {},
@@ -38,9 +37,7 @@ def test_course_list_and_detail_contracts() -> None:
     course_list = validate_course_list(content_response("course-1", "course-2"))
     detail_payload = content_response("course-1")
     detail_payload["paging"] = {}
-    detail = validate_course_detail(
-        detail_payload, expected_content_id="course-1"
-    )
+    detail = validate_course_detail(detail_payload, expected_id="Course~course-1")
 
     assert [item.content_id for item in course_list.elements] == [
         "course-1",
@@ -52,9 +49,7 @@ def test_course_list_and_detail_contracts() -> None:
 
 def test_incomplete_enrollment_accepts_absent_completion_fields() -> None:
     payload = {
-        "elements": [
-            enrollment_payload("enrollment-1", "course-1", completed=False)
-        ],
+        "elements": [enrollment_payload("enrollment-1", "course-1", completed=False)],
         "paging": {"next": "52", "total": 22597},
         "linked": {},
     }
@@ -75,13 +70,36 @@ def test_missing_required_course_field_fails_contract() -> None:
         validate_course_list(payload)
 
 
-def test_course_detail_content_id_must_match_request() -> None:
+def test_course_detail_id_must_match_request() -> None:
     payload = content_response("different-course")
-    with pytest.raises(CourseraResponseContractError, match="contentId:mismatch"):
+    with pytest.raises(CourseraResponseContractError, match="id:mismatch"):
         validate_course_detail(
             payload,
-            expected_content_id="requested-course",
+            expected_id="Course~requested-course",
         )
+
+
+def test_course_detail_accepts_optional_vendor_fields() -> None:
+    payload = content_response("course-1")
+    payload["paging"] = {}
+    element = payload["elements"][0]  # type: ignore[index]
+    element.pop("difficultyLevel")
+    element.pop("lastUpdatedAt")
+    element["partners"][0].pop("logoUrl")
+    definition = element["extraMetadata"]["definition"]
+    definition.pop("skills")
+    definition.pop("estimatedLearningTime")
+    definition.pop("domainTypes")
+
+    detail = validate_course_detail(payload, expected_id="Course~course-1")
+
+    content = detail.elements[0]
+    assert content.difficulty_level is None
+    assert content.last_updated_at is None
+    assert content.partners[0].logo_url is None
+    assert content.extra_metadata.definition.skills == []
+    assert content.extra_metadata.definition.estimated_learning_time is None
+    assert content.extra_metadata.definition.domain_types == []
 
 
 def test_additive_nested_fields_are_reported_by_path() -> None:

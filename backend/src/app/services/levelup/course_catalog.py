@@ -35,7 +35,8 @@ async def ingest_course_catalog(
 ) -> None:
     page_size = settings.levelup_page_size
     watermark = await checkpoints.get_watermark(VENDOR, DOMAIN)
-    offset = await checkpoints.next_offset(run_id, DOMAIN, page_size)
+    # Absorb's `_offset` is a zero-based page index, not a row offset.
+    offset = await checkpoints.next_offset(run_id, DOMAIN, 1)
     pages = 0
     discovered_course_ids: list[str] = []
     received_timestamps: list[str] = []
@@ -100,14 +101,10 @@ async def ingest_course_catalog(
         discovered_course_ids.extend(course_ids)
         selected_ids = set(course_ids)
         received_timestamps.extend(
-            course.date_edited
-            for course in contract.courses
-            if course.id in selected_ids
+            course.date_edited for course in contract.courses if course.id in selected_ids
         )
 
-        await checkpoints.record_completed_page(
-            run_id, DOMAIN, offset, records_count
-        )
+        await checkpoints.record_completed_page(run_id, DOMAIN, offset, records_count)
         pages += 1
         logger.debug(
             "LevelUP catalog page stored run_id=%s page=%d offset=%d "
@@ -120,7 +117,7 @@ async def ingest_course_catalog(
         )
         if is_last_page(payload, records_count, offset, page_size):
             break
-        offset += page_size
+        offset += 1
 
     await checkpoints.remember_entity_keys(
         VENDOR,
@@ -144,14 +141,11 @@ def include_course(course: object) -> bool:
         return False
     vendor = course.get("vendor")
     return not (
-        isinstance(vendor, str)
-        and vendor.strip().casefold() == "linkedin learning".casefold()
+        isinstance(vendor, str) and vendor.strip().casefold() == "linkedin learning".casefold()
     )
 
 
-def _catalog_params(
-    page_size: int, offset: int, watermark: str | None
-) -> dict[str, int | str]:
+def _catalog_params(page_size: int, offset: int, watermark: str | None) -> dict[str, int | str]:
     filter_value = "vendor ne 'LinkedIn Learning'"
     if watermark is not None:
         filter_value = f"{filter_value} and {incremental_filter(watermark)}"

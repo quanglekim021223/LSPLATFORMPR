@@ -10,7 +10,7 @@ def is_last_page(
     total_items = payload.get("totalItems")
     returned_items = payload.get("returnedItems")
     if isinstance(total_items, int) and isinstance(returned_items, int):
-        return returned_items == 0 or offset + returned_items >= total_items
+        return returned_items == 0 or offset * page_size + returned_items >= total_items
     return records_returned < page_size
 
 

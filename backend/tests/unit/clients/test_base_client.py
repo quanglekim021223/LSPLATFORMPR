@@ -19,9 +19,7 @@ async def test_retryable_statuses_honor_retry_after(status_code: int) -> None:
         nonlocal attempts
         attempts += 1
         if attempts == 1:
-            return httpx.Response(
-                status_code, headers={"Retry-After": "0"}, request=request
-            )
+            return httpx.Response(status_code, headers={"Retry-After": "0"}, request=request)
         return response(request, 200, {"ok": True})
 
     async def capture_sleep(seconds: float) -> None:
@@ -49,9 +47,9 @@ async def test_timeout_is_retried() -> None:
         return response(request, 200, {})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        result = await RetryingHttpClient(
-            client, 1, sleep=no_sleep, jitter=lambda: 0
-        ).request("GET", "https://example.test/resource")
+        result = await RetryingHttpClient(client, 1, sleep=no_sleep, jitter=lambda: 0).request(
+            "GET", "https://example.test/resource"
+        )
     assert result.status_code == 200
     assert attempts == 2
 
@@ -92,9 +90,7 @@ async def test_request_log_has_metadata_without_query_or_credentials(
         )
 
     messages = "\n".join(
-        record.getMessage()
-        for record in caplog.records
-        if record.name == "app.clients.base_client"
+        record.getMessage() for record in caplog.records if record.name == "app.clients.base_client"
     )
     assert result.status_code == 200
     assert "method=GET" in messages

@@ -88,7 +88,7 @@ def settings_factory(tmp_path: Path) -> Callable[..., Settings]:
             "coursera_username": "test-coursera-user",
             "coursera_password": "test-coursera-password",
             "coursera_org_id": "test-org",
-            "coursera_content_detail_path_template": ("/{org_id}/contents/{content_id}/detail"),
+            "coursera_content_detail_path_template": "/{org_id}/contents/{id}",
             "coursera_page_size": 2,
             "coursera_max_concurrency": 2,
             "coursera_history_daily_overlap_days": 3,

@@ -9,10 +9,9 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 
-from tests.support.mocks.coursera import course_payload, enrollment_payload, token_payload
 from app.models import RunStatus
 from app.repositories import CheckpointStore
-from app.services.coursera.course_catalog import CATALOG_DOMAIN
+from app.services.coursera.course_catalog import CATALOG_DOMAIN, DETAIL_DOMAIN
 from app.services.coursera.learning_history import (
     DAILY_SYNC_SCOPE,
     FULL_SYNC_SCOPE,
@@ -20,6 +19,7 @@ from app.services.coursera.learning_history import (
 )
 from app.services.coursera.service import _monthly_sync_due, run_coursera_ingestion
 from tests.conftest import no_sleep, response
+from tests.support.mocks.coursera import course_payload, enrollment_payload, token_payload
 
 
 @pytest.mark.asyncio
@@ -89,14 +89,13 @@ async def test_full_pipeline_pagination_raw_and_detail_concurrency(
                 200,
                 {"elements": elements, "paging": paging, "linked": {}},
             )
-        if path.startswith("/test-org/contents/") and path.endswith("/detail"):
+        if path.startswith("/test-org/contents/"):
             active_details += 1
             maximum_details = max(maximum_details, active_details)
             await asyncio.sleep(0.01)
             active_details -= 1
-            content_id = path.removeprefix("/test-org/contents/").removesuffix(
-                "/detail"
-            )
+            content_key = path.removeprefix("/test-org/contents/")
+            content_id = content_key.split("~", 1)[-1]
             return response(
                 request,
                 200,
@@ -192,7 +191,7 @@ async def test_one_detail_failure_is_isolated(
                 200,
                 {"elements": [], "paging": {"total": 0}, "linked": {}},
             )
-        if "/bad/" in path:
+        if path.endswith("/Course~bad"):
             return response(request, 404, {"error": "missing"})
         return response(
             request,
@@ -216,6 +215,7 @@ async def test_one_detail_failure_is_isolated(
     assert summary.courses_failed == 1
     assert summary.records_by_domain["course_detail"] == 1
     assert await store.get_watermark("coursera", CATALOG_DOMAIN) is None
+    assert await store.get_watermark("coursera", DETAIL_DOMAIN) is None
 
 
 @pytest.mark.asyncio
@@ -254,21 +254,23 @@ async def test_second_run_uses_catalog_and_daily_history_watermarks(
     )
     assert first.status == RunStatus.SUCCEEDED
     catalog_watermark = await store.get_watermark("coursera", CATALOG_DOMAIN)
-    history_watermark = await store.get_watermark(
-        "coursera", "learning_history", DAILY_SYNC_SCOPE
-    )
+    detail_watermark = await store.get_watermark("coursera", DETAIL_DOMAIN)
+    history_watermark = await store.get_watermark("coursera", "learning_history", DAILY_SYNC_SCOPE)
     assert catalog_watermark is not None
+    assert detail_watermark == catalog_watermark
     assert history_watermark is not None
     assert len(catalog_watermark) == 10
     assert len(history_watermark) == 13
     assert "modifiedSinceTimestamp" not in catalog_requests[0]
     assert "lastActivityAfter" not in history_requests[0]
-    assert await store.get_watermark(
-        "coursera", "learning_history", WEEKLY_SYNC_SCOPE
-    ) == history_watermark
-    assert await store.get_watermark(
-        "coursera", "learning_history", FULL_SYNC_SCOPE
-    ) == history_watermark
+    assert (
+        await store.get_watermark("coursera", "learning_history", WEEKLY_SYNC_SCOPE)
+        == history_watermark
+    )
+    assert (
+        await store.get_watermark("coursera", "learning_history", FULL_SYNC_SCOPE)
+        == history_watermark
+    )
 
     catalog_requests.clear()
     history_requests.clear()
@@ -283,6 +285,41 @@ async def test_second_run_uses_catalog_and_daily_history_watermarks(
     assert catalog_requests[0]["modifiedSinceTimestamp"] == catalog_watermark
     assert int(history_requests[0]["lastActivityAfter"]) == int(history_watermark) - (
         3 * 24 * 60 * 60 * 1000
+    )
+
+
+@pytest.mark.asyncio
+async def test_missing_detail_watermark_forces_one_time_full_catalog_backfill(
+    settings_factory: Callable[..., object],
+) -> None:
+    settings = settings_factory()
+    store = CheckpointStore(settings.checkpoint_db_path)  # type: ignore[attr-defined]
+    await store.initialize()
+    await store.set_watermark("coursera", CATALOG_DOMAIN, "1700000000", "old-run")
+    catalog_requests: list[dict[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/oauth2/client_credentials/token":
+            return response(request, 200, token_payload("token"))
+        if request.url.path == "/test-org/contents":
+            catalog_requests.append(dict(request.url.params))
+        return response(
+            request,
+            200,
+            {"elements": [], "paging": {"total": 0}, "linked": {}},
+        )
+
+    summary = await run_coursera_ingestion(
+        settings,  # type: ignore[arg-type]
+        checkpoint_store=store,
+        transport=httpx.MockTransport(handler),
+        sleep=no_sleep,
+    )
+
+    assert summary.status == RunStatus.SUCCEEDED
+    assert "modifiedSinceTimestamp" not in catalog_requests[0]
+    assert await store.get_watermark("coursera", DETAIL_DOMAIN) == await store.get_watermark(
+        "coursera", CATALOG_DOMAIN
     )
 
 
@@ -326,22 +363,14 @@ async def test_weekly_history_sync_reads_configured_lookback(
     )
 
     assert summary.status == RunStatus.SUCCEEDED
-    new_daily = await store.get_watermark(
-        "coursera", "learning_history", DAILY_SYNC_SCOPE
-    )
+    new_daily = await store.get_watermark("coursera", "learning_history", DAILY_SYNC_SCOPE)
     assert new_daily is not None
-    assert int(new_daily) - int(history_params["lastActivityAfter"]) == (
-        90 * 24 * 60 * 60 * 1000
-    )
-    assert await store.get_watermark(
-        "coursera", "learning_history", WEEKLY_SYNC_SCOPE
-    ) == new_daily
+    assert int(new_daily) - int(history_params["lastActivityAfter"]) == (90 * 24 * 60 * 60 * 1000)
+    assert await store.get_watermark("coursera", "learning_history", WEEKLY_SYNC_SCOPE) == new_daily
 
 
 def test_monthly_history_sync_uses_ingestion_timezone_calendar_month() -> None:
-    last_sync = str(
-        int(datetime(2025, 12, 31, 17, 0, tzinfo=UTC).timestamp() * 1000)
-    )
+    last_sync = str(int(datetime(2025, 12, 31, 17, 0, tzinfo=UTC).timestamp() * 1000))
 
     assert not _monthly_sync_due(
         last_sync,
@@ -383,7 +412,7 @@ async def test_removed_catalog_content_is_stored_without_detail_request(
                 200,
                 {"elements": [], "paging": {"total": 0}, "linked": {}},
             )
-        if "/contents/removed/" in request.url.path:
+        if request.url.path.endswith("/contents/Course~removed"):
             detail_calls += 1
         raise AssertionError(request.url)
 
@@ -416,9 +445,7 @@ async def test_failed_history_does_not_advance_daily_watermark(
     await store.set_watermark(
         "coursera", "learning_history", recent_milliseconds, "run", WEEKLY_SYNC_SCOPE
     )
-    await store.set_watermark(
-        "coursera", "learning_history", old_daily, "run", DAILY_SYNC_SCOPE
-    )
+    await store.set_watermark("coursera", "learning_history", old_daily, "run", DAILY_SYNC_SCOPE)
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/oauth2/client_credentials/token":
@@ -439,9 +466,7 @@ async def test_failed_history_does_not_advance_daily_watermark(
     )
 
     assert summary.status == RunStatus.PARTIAL_FAILURE
-    assert await store.get_watermark(
-        "coursera", "learning_history", DAILY_SYNC_SCOPE
-    ) == old_daily
+    assert await store.get_watermark("coursera", "learning_history", DAILY_SYNC_SCOPE) == old_daily
 
 
 @pytest.mark.asyncio

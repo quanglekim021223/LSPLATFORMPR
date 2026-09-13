@@ -48,8 +48,8 @@ class ADLSGen2BronzeWriter:
             account_url=f"https://{self.account_name}.dfs.core.windows.net",
             credential=self._credential,
         )
-        self._file_system_client: FileSystemClient = (
-            self._service_client.get_file_system_client(self.file_system)
+        self._file_system_client: FileSystemClient = self._service_client.get_file_system_client(
+            self.file_system
         )
         self._manifest_lock = Lock()
 
@@ -103,7 +103,7 @@ class ADLSGen2BronzeWriter:
         )
 
     def _write_file(self, file: BinaryFileWrite) -> StorageWriteResult:
-        if not file.raw_payload:
+        if not file.raw_payload and file.records_count != 0:
             raise ValueError("Refusing to write an empty raw payload")
         if Path(file.file_name).name != file.file_name:
             raise ValueError("Binary Bronze file_name must not contain a path")
@@ -169,12 +169,10 @@ class ADLSGen2BronzeWriter:
                 existing = final_client.download_file().readall()
                 if payload_sha256(existing) == sha256:
                     temporary_client.delete_file()
-                    return str(final_client.url)
+                    return final_client.url
                 final_client.delete_file()
-            renamed = temporary_client.rename_file(
-                f"{self.file_system}/{final_path}"
-            )
-            return str(renamed.url)
+            renamed = temporary_client.rename_file(f"{self.file_system}/{final_path}")
+            return renamed.url
         except BaseException:
             try:
                 temporary_client.delete_file()
@@ -198,11 +196,7 @@ class ADLSGen2BronzeWriter:
             value = json.loads(payload)
         except (ResourceNotFoundError, json.JSONDecodeError, UnicodeDecodeError):
             return {}
-        return (
-            {str(key): item for key, item in value.items()}
-            if isinstance(value, dict)
-            else {}
-        )
+        return {str(key): item for key, item in value.items()} if isinstance(value, dict) else {}
 
     def _upload_manifest(self, path: str, manifest: dict[str, Any]) -> None:
         payload = json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8")

@@ -50,7 +50,7 @@ class TaxonomyNamedEntity(SkillUpContractModel):
 class TaxonomySkillDefinition(SkillUpContractModel):
     id: StrictInt
     name: StrictStr
-    description: StrictStr
+    description: StrictStr | None
 
 
 class SkillTaxonomyItem(SkillUpContractModel):
@@ -62,7 +62,7 @@ class SkillTaxonomyItem(SkillUpContractModel):
     skill_classification: SkillClassification
     skill: TaxonomySkillDefinition
     display_name: StrictStr
-    description: StrictStr
+    description: StrictStr | None
     is_critical: StrictBool
     taxonomy_skill_tags: list[Any]
     skill_rubrics: Any | None
@@ -70,7 +70,7 @@ class SkillTaxonomyItem(SkillUpContractModel):
 
 class SkillTaxonomyResponse(SkillUpContractModel):
     items: list[SkillTaxonomyItem]
-    page_number: PositiveInt
+    page_number: NonNegativeInt
     total_pages: NonNegativeInt
     total_count: NonNegativeInt
     has_previous_page: StrictBool
@@ -110,9 +110,7 @@ class EmployeeSkill(SkillUpContractModel):
     manager_validation_score: StrictNumber | None
     weighted_proficiency_score: StrictNumber
     multi_rater_validation_score: StrictNumber | None
-    weighted_ai_inference_score: StrictNumber | None = Field(
-        alias="weightedAIInferenceScore"
-    )
+    weighted_ai_inference_score: StrictNumber | None = Field(alias="weightedAIInferenceScore")
     experience_in_months: StrictInt | None
     ai_inferred_ratings: list[Any] = Field(alias="aiInferredRatings")
     is_job_profile_skill: StrictBool
@@ -123,7 +121,7 @@ class EmployeeSkill(SkillUpContractModel):
 
 class SkillInventoryItem(SkillUpContractModel):
     employee_id: StrictInt
-    external_employee_id: StrictStr
+    external_employee_id: StrictStr | None
     email: StrictStr
     full_name: StrictStr
     skills: list[EmployeeSkill]
@@ -131,7 +129,7 @@ class SkillInventoryItem(SkillUpContractModel):
 
 class SkillInventoryResponse(SkillUpContractModel):
     items: list[SkillInventoryItem]
-    page_number: PositiveInt
+    page_number: NonNegativeInt
     total_pages: NonNegativeInt
     total_count: NonNegativeInt
     has_previous_page: StrictBool
@@ -148,6 +146,13 @@ class SkillInventoryResponse(SkillUpContractModel):
             self.has_next_page,
         )
         return self
+
+
+class SkillUpSnapshotResponse(SkillUpContractModel):
+    items: list[dict[str, Any]]
+    page_number: NonNegativeInt | None = None
+    total_count: NonNegativeInt
+    has_next_page: StrictBool
 
 
 class AssessmentSection(SkillUpContractModel):
@@ -193,7 +198,7 @@ class AssessmentReport(SkillUpContractModel):
 
 class AssessmentHistoryResponse(SkillUpContractModel):
     reports: list[AssessmentReport]
-    page_number: PositiveInt
+    page_number: NonNegativeInt
     total_pages: NonNegativeInt
     total_count: NonNegativeInt
     has_previous_page: StrictBool
@@ -220,6 +225,43 @@ def validate_skill_inventory(payload: Any) -> SkillInventoryResponse:
     return _validate(payload, SkillInventoryResponse, "Skill Inventory")
 
 
+def validate_snapshot_page(
+    payload: Any,
+    *,
+    id_field: str,
+    requested_page: int,
+    page_size: int,
+    contract_name: str,
+) -> SkillUpSnapshotResponse:
+    contract = _validate(payload, SkillUpSnapshotResponse, contract_name)
+    if contract.page_number is not None and contract.page_number != requested_page:
+        raise SkillUpResponseContractError(f"SkillUp {contract_name} returned an unexpected page")
+    if len(contract.items) > page_size:
+        raise SkillUpResponseContractError(
+            f"SkillUp {contract_name} response exceeds requested PageSize"
+        )
+    if not contract.items and (contract.has_next_page or contract.total_count > 0):
+        raise SkillUpResponseContractError(
+            f"SkillUp {contract_name} returned an unexpected empty page"
+        )
+    identifiers: list[int] = []
+    for item in contract.items:
+        identifier = item.get(id_field)
+        if type(identifier) is not int:
+            raise SkillUpResponseContractError(
+                f"SkillUp {contract_name} item is missing {id_field}"
+            )
+        skills = item.get("skills")
+        if not isinstance(skills, list) or any(not isinstance(skill, dict) for skill in skills):
+            raise SkillUpResponseContractError(f"SkillUp {contract_name} item has invalid skills")
+        identifiers.append(identifier)
+    if len(identifiers) != len(set(identifiers)):
+        raise SkillUpResponseContractError(
+            f"SkillUp {contract_name} contains duplicate IDs in one page"
+        )
+    return contract
+
+
 def validate_assessment_history(
     payload: Any, *, require_sections: bool = False
 ) -> AssessmentHistoryResponse:
@@ -244,10 +286,7 @@ def _visit_extra_fields(value: object, prefix: str, paths: list[str]) -> None:
         return
     if not isinstance(value, SkillUpContractModel):
         return
-    paths.extend(
-        f"{prefix}.{name}" if prefix else name
-        for name in (value.model_extra or {})
-    )
+    paths.extend(f"{prefix}.{name}" if prefix else name for name in (value.model_extra or {}))
     for name, field_value in value:
         field = type(value).model_fields[name]
         alias = field.alias or name
@@ -255,9 +294,7 @@ def _visit_extra_fields(value: object, prefix: str, paths: list[str]) -> None:
         _visit_extra_fields(field_value, child_prefix, paths)
 
 
-def _validate(
-    payload: Any, model: type[ModelT], contract_name: str
-) -> ModelT:
+def _validate(payload: Any, model: type[ModelT], contract_name: str) -> ModelT:
     try:
         return model.model_validate(payload)
     except ValidationError as exc:
@@ -282,6 +319,14 @@ def _validate_page_metadata(
     has_previous_page: bool,
     has_next_page: bool,
 ) -> None:
+    if page_number == 0:
+        if (
+            total_pages == total_count == actual_count == 0
+            and not has_previous_page
+            and not has_next_page
+        ):
+            return
+        raise ValueError("Page zero is valid only for an empty result")
     if total_count < actual_count:
         raise ValueError("totalCount must not be smaller than response records")
     if has_previous_page != (page_number > 1):

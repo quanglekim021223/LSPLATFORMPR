@@ -9,9 +9,9 @@ import pytest
 
 from app.clients.harvard_catalog_client import HarvardCatalogClient
 from app.core.config import Settings
-from tests.support.mocks.harvard import token_payload
 from app.models.harvard import vendor_config
 from tests.conftest import no_sleep, response
+from tests.support.mocks.harvard import token_payload
 
 
 @pytest.mark.asyncio
@@ -30,17 +30,13 @@ async def test_basic_auth_form_and_refreshes_401_exactly_once(
                 request.headers["Authorization"].removeprefix("Basic ")
             ).decode()
             assert credentials == "test-hmm-client:test-hmm-secret"
-            assert request.headers["Content-Type"].startswith(
-                "application/x-www-form-urlencoded"
-            )
+            assert request.headers["Content-Type"].startswith("application/x-www-form-urlencoded")
             form = parse_qs(request.content.decode())
             assert form == {
                 "grant_type": ["client_credentials"],
                 "scope": ["hbp.org.api/catalog.read"],
             }
-            return response(
-                request, 200, token_payload(f"token-{token_calls}")
-            )
+            return response(request, 200, token_payload(f"token-{token_calls}"))
 
         get_tokens.append(request.headers["Authorization"])
         if len(get_tokens) == 1:
@@ -73,9 +69,7 @@ async def test_second_401_is_returned_without_another_refresh(
         nonlocal token_calls, get_calls
         if request.method == "POST":
             token_calls += 1
-            return response(
-                request, 200, token_payload(f"token-{token_calls}")
-            )
+            return response(request, 200, token_payload(f"token-{token_calls}"))
         get_calls += 1
         return response(request, 401, {"message": "still unauthorized"})
 

@@ -22,6 +22,7 @@ def test_function_app_key_names() -> None:
         "HARVARD_SFTP_HOST": "sftp.example.test",
         "HARVARD_SFTP_PORT": "2222",
         "LEVELUP_KEY": "fake-levelup-key",
+        "LEVELUP_USER_NAME": "fake-levelup-user",
         "SKILLUP_KEY": "fake-skillup-key",
         "LINKEDIN_CLIENT_ID": "fake-linkedin-id",
         "LINKEDIN_CLIENT_SECRET": "fake-linkedin-secret",
@@ -39,6 +40,7 @@ def test_function_app_key_names() -> None:
         "harvard_sftp_username": "HARVARD_SFTP_USER_NAME",
         "harvard_sftp_password": "HARVARD_SFTP_PASSWORD",
         "levelup_api_key": "LEVELUP_KEY",
+        "levelup_username": "LEVELUP_USER_NAME",
         "skillup_api_key": "SKILLUP_KEY",
         "linkedin_client_id": "LINKEDIN_CLIENT_ID",
         "linkedin_client_secret": "LINKEDIN_CLIENT_SECRET",
@@ -55,11 +57,43 @@ def test_function_app_key_names() -> None:
     assert settings.linkedin_grant_type == "client_credentials"
 
 
-@pytest.mark.parametrize("field", [
-    "levelup_api_key", "skillup_api_key", "coursera_username",
-    "harvard_sftp_username", "harvard_hmm_client_id", "harvard_hmm_client_secret",
-    "harvard_spark_client_id", "harvard_spark_client_secret",
-])
+def test_fabric_target_is_read_from_function_app_settings() -> None:
+    values = {
+        "FABRIC_ENABLED": "true",
+        "FABRIC_WORKSPACE_ID": "851dacd8-2ad0-42a1-8817-55d2a7682bc6",
+        "FABRIC_LAKEHOUSE_ID": "3535e0e3-a2a0-4387-82e6-1e7d8cbd1a62",
+        "FABRIC_SCHEMA": "dbo",
+        "FABRIC_STATE_ACCOUNT_URL": "https://stateaccount.blob.core.windows.net",
+        "FABRIC_STATE_CONTAINER": "fabric-ingestion-state",
+        "FABRIC_MAX_CONCURRENT_VENDORS": "1",
+        "FABRIC_ALLOW_INITIAL_PULL": "false",
+    }
+    with patch.dict(os.environ, values, clear=True):
+        settings = Settings(_env_file=None)
+    assert settings.fabric_workspace_id == values["FABRIC_WORKSPACE_ID"]
+    assert settings.fabric_lakehouse_id == values["FABRIC_LAKEHOUSE_ID"]
+    assert settings.fabric_schema == values["FABRIC_SCHEMA"]
+    assert settings.fabric_state_account_url == values["FABRIC_STATE_ACCOUNT_URL"]
+    assert settings.fabric_state_container == values["FABRIC_STATE_CONTAINER"]
+    assert settings.fabric_enabled is True
+    assert settings.fabric_max_concurrent_vendors == 1
+    assert settings.fabric_allow_initial_pull is False
+    settings.validate_fabric_runtime()
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "levelup_api_key",
+        "skillup_api_key",
+        "coursera_username",
+        "harvard_sftp_username",
+        "harvard_hmm_client_id",
+        "harvard_hmm_client_secret",
+        "harvard_spark_client_id",
+        "harvard_spark_client_secret",
+    ],
+)
 def test_legacy_names_and_constructor_still_work(field: str) -> None:
     with patch.dict(os.environ, {field.upper(): "legacy-test-value"}, clear=True):
         settings = Settings(_env_file=None)
@@ -71,9 +105,13 @@ def test_legacy_names_and_constructor_still_work(field: str) -> None:
 
 @pytest.mark.parametrize("token", ["new-fams-token", ""])
 def test_fams_token_runtime_configuration(token: str) -> None:
-    with patch.dict(os.environ, {
-        "FAMS_TOKEN": token,
-    }, clear=True):
+    with patch.dict(
+        os.environ,
+        {
+            "FAMS_TOKEN": token,
+        },
+        clear=True,
+    ):
         settings = Settings(_env_file=None)
     assert settings.fams_token.get_secret_value() == token
     assert settings.fams_configured == bool(token)
@@ -86,12 +124,16 @@ def test_fams_token_runtime_configuration(token: str) -> None:
 
 
 def test_explicit_harvard_credentials_override_shared_keys() -> None:
-    with patch.dict(os.environ, {
-        "HARVARD_API_USER_NAME": "shared-user",
-        "HARVARD_API_PASSWORD": "shared-password",
-        "HARVARD_HMM_CLIENT_ID": "hmm-user",
-        "HARVARD_HMM_CLIENT_SECRET": "hmm-password",
-    }, clear=True):
+    with patch.dict(
+        os.environ,
+        {
+            "HARVARD_API_USER_NAME": "shared-user",
+            "HARVARD_API_PASSWORD": "shared-password",
+            "HARVARD_HMM_CLIENT_ID": "hmm-user",
+            "HARVARD_HMM_CLIENT_SECRET": "hmm-password",
+        },
+        clear=True,
+    ):
         settings = Settings(_env_file=None)
     assert settings.harvard_hmm_client_id.get_secret_value() == "hmm-user"
     assert settings.harvard_hmm_client_secret.get_secret_value() == "hmm-password"

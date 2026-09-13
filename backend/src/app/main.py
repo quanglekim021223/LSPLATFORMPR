@@ -1,12 +1,14 @@
 from __future__ import annotations
- 
+
 import logging
+import tempfile
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
- 
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
- 
+
 from app.api.v1.router import build_api_router
 from app.config.scheduler import ScheduledJob, build_scheduler
 from app.core.config import Settings, get_settings
@@ -24,16 +26,18 @@ from app.services.datacamp.service import run_datacamp_ingestion
 from app.services.fams.service import run_fams_ingestion
 from app.services.harvard.hmm_service import run_harvard_hmm_ingestion
 from app.services.harvard.spark_service import run_harvard_spark_ingestion
+from app.services.ingestion_coordinator import IngestionCoordinator
 from app.services.levelup.service import run_levelup_ingestion
 from app.services.linkedin.service import run_linkedin_ingestion
 from app.services.skillup.service import run_skillup_ingestion
-from app.services.ingestion_coordinator import IngestionCoordinator
- 
+
 logger = logging.getLogger(__name__)
 IngestionRunner = Callable[..., Awaitable[object]]
- 
- 
+
+
 def build_bronze_writer(config: Settings) -> BronzeWriter:
+    if config.fabric_enabled:
+        return LocalBronzeWriter(Path(tempfile.gettempdir()) / "lsplatform-http" / "bronze")
     if config.bronze_storage_type == "local":
         return LocalBronzeWriter(config.bronze_local_path)
     return ADLSGen2BronzeWriter(
@@ -41,8 +45,8 @@ def build_bronze_writer(config: Settings) -> BronzeWriter:
         file_system=config.adls_file_system,
         base_path=config.adls_base_path,
     )
- 
- 
+
+
 def build_ingestion_jobs(
     config: Settings,
     store: CheckpointStore,
@@ -62,13 +66,29 @@ def build_ingestion_jobs(
         ),
         ("fams", config.fams_configured, run_fams_ingestion),
     )
+    if config.fabric_enabled:
+        from app.fabric_job import run_fabric_ingestion
+
+        config.validate_fabric_runtime()
+        available = {vendor: runner for vendor, configured, runner in runners if configured}
+        missing = set(config.fabric_vendors) - set(available)
+        if missing:
+            raise ValueError(f"Fabric vendors missing configuration: {sorted(missing)}")
+
+        def bind(vendor: str, runner: IngestionRunner) -> ScheduledJob:
+            async def job() -> object:
+                return await run_fabric_ingestion(config, vendor, runner)
+
+            return job
+
+        return {vendor: bind(vendor, available[vendor]) for vendor in config.fabric_vendors}
     return {
         vendor: _bind_scheduled_job(runner, config, store, writer)
         for vendor, configured, runner in runners
         if configured
     }
- 
- 
+
+
 def _bind_scheduled_job(
     runner: IngestionRunner,
     config: Settings,
@@ -81,10 +101,10 @@ def _bind_scheduled_job(
             checkpoint_store=store,
             bronze_writer=writer,
         )
- 
+
     return scheduled_ingestion
- 
- 
+
+
 def create_app(
     settings: Settings | None = None,
     *,
@@ -93,6 +113,12 @@ def create_app(
     ingestion_jobs: dict[str, ScheduledJob] | None = None,
 ) -> FastAPI:
     config = settings or get_settings()
+    if config.fabric_enabled:
+        config = config.model_copy(
+            update={
+                "checkpoint_db_path": Path(tempfile.gettempdir()) / "lsplatform-http" / "status.db",
+            }
+        )
     _configure_application_logging(config.log_level)
     store = checkpoint_store or CheckpointStore(config.checkpoint_db_path)
     writer = bronze_writer or build_bronze_writer(config)
@@ -101,7 +127,7 @@ def create_app(
         configured_jobs,
         progress_reader=store.latest_run,
     )
- 
+
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
         _configure_application_logging(config.log_level)
@@ -130,7 +156,7 @@ def create_app(
             await coordinator.shutdown()
             if scheduler is not None:
                 scheduler.shutdown(wait=False)
- 
+
     application = FastAPI(
         title="FSA Learning Vendor Ingestion",
         version="0.1.0",
@@ -144,10 +170,10 @@ def create_app(
         allow_headers=["Authorization", "Content-Type"],
         expose_headers=["Content-Disposition"],
     )
- 
+
     application.include_router(build_api_router(store, config, writer, coordinator))
- 
+
     return application
- 
- 
+
+
 app = create_app()
