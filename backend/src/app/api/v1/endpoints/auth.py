@@ -10,7 +10,7 @@ from app.core.config import Settings
 
 
 class LoginRequest(BaseModel):
-    userid: str
+    username: str
     password: str
 
 
@@ -25,7 +25,7 @@ def build_auth_router(settings: Settings) -> APIRouter:
     @router.post("/login")
     async def login(request: LoginRequest) -> TokenResponse:
         username_matches = compare_digest(
-            request.userid.encode(),
+            request.username.encode(),
             settings.auth_admin_username.encode(),
         )
         password_matches = verify_password(
@@ -40,7 +40,7 @@ def build_auth_router(settings: Settings) -> APIRouter:
             )
 
         token = create_access_token(
-            user_id=request.userid,
+            user_id=request.username,
             secret_key=settings.auth_jwt_secret.get_secret_value(),
             expire_minutes=settings.auth_token_expire_minutes,
         )

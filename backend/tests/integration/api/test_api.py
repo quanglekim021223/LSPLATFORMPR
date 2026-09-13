@@ -72,16 +72,24 @@ async def test_health_ready_latest_and_scheduler_disabled_in_test(
             unauthorized = await client.get("/jobs/levelup/latest")
             bad_login = await client.post(
                 "/auth/login",
-                json={"userid": TEST_ADMIN_USERNAME, "password": "wrong"},
+                json={"username": TEST_ADMIN_USERNAME, "password": "wrong"},
+            )
+            unknown_user = await client.post(
+                "/auth/login",
+                json={"username": "unknown", "password": TEST_ADMIN_PASSWORD},
+            )
+            legacy_userid = await client.post(
+                "/auth/login",
+                json={"userid": TEST_ADMIN_USERNAME, "password": TEST_ADMIN_PASSWORD},
             )
             registration = await client.post(
                 "/auth/register",
-                json={"userid": "new-admin", "password": "password"},
+                json={"username": "new-admin", "password": "password"},
             )
             login = await client.post(
                 "/auth/login",
                 json={
-                    "userid": TEST_ADMIN_USERNAME,
+                    "username": TEST_ADMIN_USERNAME,
                     "password": TEST_ADMIN_PASSWORD,
                 },
             )
@@ -119,6 +127,8 @@ async def test_health_ready_latest_and_scheduler_disabled_in_test(
                 "message": "Unauthorized",
                 "detail": "Invalid credentials",
             }
+            assert unknown_user.status_code == 401
+            assert legacy_userid.status_code == 422
             assert registration.status_code == 404
             assert login.status_code == 200
             assert login.json()["token_type"] == "Bearer"

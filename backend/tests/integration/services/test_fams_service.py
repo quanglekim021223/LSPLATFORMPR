@@ -252,7 +252,7 @@ async def test_filtered_configuration_errors_are_saved_in_latest_run(
             login = await client.post(
                 "/auth/login",
                 json={
-                    "userid": TEST_ADMIN_USERNAME,
+                    "username": TEST_ADMIN_USERNAME,
                     "password": TEST_ADMIN_PASSWORD,
                 },
             )
