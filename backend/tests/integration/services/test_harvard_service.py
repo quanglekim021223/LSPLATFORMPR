@@ -717,12 +717,41 @@ async def test_missing_catalog_configuration_only_fails_catalog_branch(
     assert list(settings.bronze_local_path.glob("harvard_hmm/learning_history/**/*.csv"))
 
 
-def test_sftp_transport_requires_known_hosts(
+@pytest.mark.asyncio
+async def test_sftp_transport_allows_missing_known_hosts(
     settings_factory: Callable[..., Settings],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings = settings_factory(harvard_sftp_known_hosts=None)
-    with pytest.raises(ValueError, match="host-key verification"):
-        AsyncSSHSFTPTransport(settings)
+    connect_arguments: dict[str, Any] = {}
+
+    class FakeSFTP:
+        async def __aenter__(self) -> FakeSFTP:
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+    class FakeConnection:
+        async def __aenter__(self) -> FakeConnection:
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        def start_sftp_client(self) -> FakeSFTP:
+            return FakeSFTP()
+
+    def connect(host: str, **kwargs: Any) -> FakeConnection:
+        connect_arguments.update({"host": host, **kwargs})
+        return FakeConnection()
+
+    monkeypatch.setitem(sys.modules, "asyncssh", SimpleNamespace(connect=connect))
+
+    async with AsyncSSHSFTPTransport(settings):
+        pass
+
+    assert connect_arguments["known_hosts"] is None
 
 
 @pytest.mark.asyncio

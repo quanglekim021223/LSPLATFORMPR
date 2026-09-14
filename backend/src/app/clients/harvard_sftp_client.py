@@ -21,8 +21,6 @@ class AsyncSSHSFTPTransport:
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         jitter: Callable[[], float] = random.random,
     ) -> None:
-        if settings.harvard_sftp_known_hosts is None:
-            raise ValueError("HARVARD_SFTP_KNOWN_HOSTS is required for host-key verification")
         self.settings = settings
         self._stack: AsyncExitStack | None = None
         self._sftp: Any = None
@@ -58,7 +56,11 @@ class AsyncSSHSFTPTransport:
                     port=self.settings.harvard_sftp_port,
                     username=self.settings.harvard_sftp_username.get_secret_value(),
                     password=self.settings.harvard_sftp_password.get_secret_value(),
-                    known_hosts=str(self.settings.harvard_sftp_known_hosts),
+                    known_hosts=(
+                        str(self.settings.harvard_sftp_known_hosts)
+                        if self.settings.harvard_sftp_known_hosts is not None
+                        else None
+                    ),
                 )
             )
             self._sftp = await stack.enter_async_context(connection.start_sftp_client())

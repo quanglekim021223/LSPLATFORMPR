@@ -575,7 +575,6 @@ class Settings(BaseSettings):
             "HARVARD_SFTP_USERNAME": self.harvard_sftp_username.get_secret_value(),
             "HARVARD_SFTP_PASSWORD": self.harvard_sftp_password.get_secret_value(),
             "HARVARD_SFTP_REMOTE_DIR": self.harvard_sftp_remote_dir,
-            "HARVARD_SFTP_KNOWN_HOSTS": self.harvard_sftp_known_hosts,
         }
         return [name for name, value in values.items() if not value]
 

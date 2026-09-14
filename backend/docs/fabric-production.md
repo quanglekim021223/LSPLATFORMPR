@@ -131,8 +131,8 @@ trong bootstrap; runtime không tự gán URL theo tài khoản dev:
   `LINKEDIN_CLIENT_SECRET`, `LINKEDIN_HISTORY_START_TIME`,
   detail query không bắt buộc khi bật Fabric.
 - Harvard: credentials API/SFTP, `HARVARD_ORGID` (hoặc org key riêng HMM/Spark),
-  `HARVARD_SFTP_REMOTE_DIR`, `HARVARD_SFTP_KNOWN_HOSTS` trỏ tới file host keys
-  được tin cậy và có sẵn trong runtime. Cấu hình `HARVARD_HMM_HISTORY_START_DATE`
+  `HARVARD_SFTP_REMOTE_DIR`. Có thể cấu hình thêm `HARVARD_SFTP_KNOWN_HOSTS`
+  trỏ tới file host keys được tin cậy và có sẵn trong runtime. Cấu hình `HARVARD_HMM_HISTORY_START_DATE`
   và `HARVARD_SPARK_HISTORY_START_DATE` nếu muốn giới hạn khoảng kiểm tra.
   Fabric quét file thực sự có trên SFTP đến ngày báo cáo gần nhất, so metadata
   để nhận cả file cũ bị sửa; để trống sẽ quét tất cả file còn lưu.
