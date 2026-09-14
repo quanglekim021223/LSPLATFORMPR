@@ -66,6 +66,29 @@ def build_ingestion_jobs(
         ),
         ("fams", config.fams_configured, run_fams_ingestion),
     )
+    if config.fabric_enabled:
+        from app.fabric_job import run_fabric_ingestion
+
+        config.validate_fabric_runtime()
+        available = {
+            vendor: runner
+            for vendor, configured, runner in runners
+            if configured
+        }
+        missing = set(config.fabric_vendors) - set(available)
+        if missing:
+            raise ValueError(f"Fabric vendors missing configuration: {sorted(missing)}")
+
+        def bind(vendor: str, runner: IngestionRunner) -> ScheduledJob:
+            async def job() -> object:
+                return await run_fabric_ingestion(config, vendor, runner)
+
+            return job
+
+        return {
+            vendor: bind(vendor, available[vendor])
+            for vendor in config.fabric_vendors
+        }
     return {
         vendor: _bind_scheduled_job(runner, config, store, writer)
         for vendor, configured, runner in runners

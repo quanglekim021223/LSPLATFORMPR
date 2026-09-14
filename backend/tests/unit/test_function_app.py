@@ -47,6 +47,35 @@ def test_timer_job_registry_contains_all_eight_vendors(
     }
 
 
+async def test_fabric_job_registry_uses_selected_vendor_and_fabric_runner(
+    monkeypatch: pytest.MonkeyPatch,
+    settings_factory: Callable[..., Settings],
+) -> None:
+    fabric_run = AsyncMock(return_value=object())
+    monkeypatch.setattr("app.fabric_job.run_fabric_ingestion", fabric_run)
+    settings = settings_factory(
+        fabric_enabled=True,
+        fabric_workspace_id="851dacd8-2ad0-42a1-8817-55d2a7682bc6",
+        fabric_lakehouse_id="3535e0e3-a2a0-4387-82e6-1e7d8cbd1a62",
+        fabric_state_account_url="https://stateaccount.blob.core.windows.net",
+        fabric_vendors=["levelup"],
+    )
+
+    jobs = build_ingestion_jobs(
+        settings,
+        function_app.checkpoint_store,
+        function_app.bronze_writer,
+    )
+
+    assert set(jobs) == {"levelup"}
+    await jobs["levelup"]()
+    fabric_run.assert_awaited_once()
+    call_settings, vendor, runner = fabric_run.await_args.args
+    assert call_settings is settings
+    assert vendor == "levelup"
+    assert runner.__name__ == "run_levelup_ingestion"
+
+
 async def test_timer_runs_every_configured_vendor_job(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
