@@ -191,7 +191,7 @@ async def test_one_detail_failure_is_isolated(
                 200,
                 {"elements": [], "paging": {"total": 0}, "linked": {}},
             )
-        if path.endswith("/Course~bad"):
+        if path.endswith("/bad"):
             return response(request, 404, {"error": "missing"})
         return response(
             request,
@@ -412,7 +412,7 @@ async def test_removed_catalog_content_is_stored_without_detail_request(
                 200,
                 {"elements": [], "paging": {"total": 0}, "linked": {}},
             )
-        if request.url.path.endswith("/contents/Course~removed"):
+        if request.url.path.endswith("/contents/removed"):
             detail_calls += 1
         raise AssertionError(request.url)
 

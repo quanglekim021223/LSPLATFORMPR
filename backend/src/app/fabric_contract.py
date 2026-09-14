@@ -63,7 +63,7 @@ BUSINESS_KEYS: dict[str, tuple[str, ...]] = {
     "linkedin_course_catalog": ("urn",),
     "linkedin_learning_history": ("learnerdetails", "contentdetails"),
     "harvard_hmm_course_catalog": ("productid",),
-    "harvard_hmm_learning_history": ("eventdate", "username", "eventname", "product_id"),
+    "harvard_hmm_learning_history": ("eventdate", "username", "eventname", "product"),
     "harvard_spark_course_catalog": ("productid",),
     "harvard_spark_learning_history": (
         "event_date",
@@ -72,7 +72,7 @@ BUSINESS_KEYS: dict[str, tuple[str, ...]] = {
         "product_id",
     ),
     "fams_training_classes": ("id",),
-    "fams_training_students": ("coursecode", "account", "email"),
+    "fams_training_students": ("coursecode", "account"),
 }
 
 

@@ -160,6 +160,7 @@ class CheckpointStore:
                     last_seen_run_id TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     is_active INTEGER NOT NULL DEFAULT 1,
+                    content_hash TEXT,
                     PRIMARY KEY (vendor, data_domain, entity_key)
                 );
                 CREATE INDEX IF NOT EXISTS idx_runs_vendor_started
@@ -197,6 +198,8 @@ class CheckpointStore:
                 connection.execute(
                     "ALTER TABLE vendor_entity_keys ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1"
                 )
+            if "content_hash" not in entity_columns:
+                connection.execute("ALTER TABLE vendor_entity_keys ADD COLUMN content_hash TEXT")
 
     async def is_ready(self) -> bool:
         try:
@@ -735,6 +738,63 @@ class CheckpointStore:
                 (vendor, data_domain),
             ).fetchall()
             return [str(row["entity_key"]) for row in rows]
+
+    async def entity_fingerprints(self, vendor: str, data_domain: str) -> dict[str, str]:
+        return await asyncio.to_thread(self._entity_fingerprints, vendor, data_domain)
+
+    def _entity_fingerprints(self, vendor: str, data_domain: str) -> dict[str, str]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT entity_key, content_hash FROM vendor_entity_keys
+                WHERE vendor = ? AND data_domain = ? AND content_hash IS NOT NULL
+                """,
+                (vendor, data_domain),
+            ).fetchall()
+            return {str(row["entity_key"]): str(row["content_hash"]) for row in rows}
+
+    async def remember_entity_fingerprints(
+        self,
+        vendor: str,
+        data_domain: str,
+        fingerprints: dict[str, str],
+        run_id: str,
+    ) -> None:
+        if fingerprints:
+            await asyncio.to_thread(
+                self._remember_entity_fingerprints,
+                vendor,
+                data_domain,
+                fingerprints,
+                run_id,
+            )
+
+    def _remember_entity_fingerprints(
+        self,
+        vendor: str,
+        data_domain: str,
+        fingerprints: dict[str, str],
+        run_id: str,
+    ) -> None:
+        now = _now()
+        with self._connect() as connection:
+            connection.executemany(
+                """
+                INSERT INTO vendor_entity_keys(
+                    vendor, data_domain, entity_key, first_seen_run_id,
+                    last_seen_run_id, updated_at, is_active, content_hash
+                ) VALUES (?, ?, ?, ?, ?, ?, 1, ?)
+                ON CONFLICT(vendor, data_domain, entity_key) DO UPDATE SET
+                    last_seen_run_id = excluded.last_seen_run_id,
+                    updated_at = excluded.updated_at,
+                    is_active = 1,
+                    content_hash = excluded.content_hash
+                """,
+                (
+                    (vendor, data_domain, key, run_id, run_id, now, fingerprint)
+                    for key, fingerprint in fingerprints.items()
+                ),
+            )
 
     async def deactivate_entity_key_if_stale(
         self,

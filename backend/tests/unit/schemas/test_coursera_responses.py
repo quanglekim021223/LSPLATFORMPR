@@ -37,7 +37,7 @@ def test_course_list_and_detail_contracts() -> None:
     course_list = validate_course_list(content_response("course-1", "course-2"))
     detail_payload = content_response("course-1")
     detail_payload["paging"] = {}
-    detail = validate_course_detail(detail_payload, expected_id="Course~course-1")
+    detail = validate_course_detail(detail_payload, expected_id="course-1")
 
     assert [item.content_id for item in course_list.elements] == [
         "course-1",
@@ -72,10 +72,10 @@ def test_missing_required_course_field_fails_contract() -> None:
 
 def test_course_detail_id_must_match_request() -> None:
     payload = content_response("different-course")
-    with pytest.raises(CourseraResponseContractError, match="id:mismatch"):
+    with pytest.raises(CourseraResponseContractError, match="contentId:mismatch"):
         validate_course_detail(
             payload,
-            expected_id="Course~requested-course",
+            expected_id="requested-course",
         )
 
 
@@ -91,7 +91,7 @@ def test_course_detail_accepts_optional_vendor_fields() -> None:
     definition.pop("estimatedLearningTime")
     definition.pop("domainTypes")
 
-    detail = validate_course_detail(payload, expected_id="Course~course-1")
+    detail = validate_course_detail(payload, expected_id="course-1")
 
     content = detail.elements[0]
     assert content.difficulty_level is None

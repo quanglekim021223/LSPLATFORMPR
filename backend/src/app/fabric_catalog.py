@@ -41,10 +41,13 @@ def _coursera_detail_ids(records: list[dict[str, Any]]) -> list[str]:
             for change in changes
         ):
             continue
-        content_id = record.get("id")
-        if not isinstance(content_id, str) or not content_id:
+        typed_id = record.get("id")
+        content_id = record.get("contentId")
+        if not isinstance(typed_id, str) or not typed_id:
             raise ValueError("Coursera catalog record is missing id")
-        if content_id.partition("~")[0] in COURSE_DETAIL_CONTENT_TYPES:
+        if not isinstance(content_id, str) or not content_id:
+            raise ValueError("Coursera catalog record is missing contentId")
+        if typed_id.partition("~")[0] in COURSE_DETAIL_CONTENT_TYPES:
             ids.append(content_id)
     return ids
 

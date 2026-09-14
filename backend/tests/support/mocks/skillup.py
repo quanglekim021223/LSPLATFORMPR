@@ -251,6 +251,8 @@ if _GENERATED is not None:
     _TAXONOMY = _GENERATED["taxonomy"]
     _SKILL_PROFILES = _GENERATED["skill_profiles"]
     _REPORTS = _GENERATED["reports"]
+    _LEARNING_RESOURCES = _GENERATED.get("learning_resources", _LEARNING_RESOURCES)
+    _CERTIFICATES = _GENERATED.get("certificates", _CERTIFICATES)
     _TAXONOMY_MODIFIED_ON = {
         int(key): value for key, value in _GENERATED["taxonomy_modified_on"].items()
     }

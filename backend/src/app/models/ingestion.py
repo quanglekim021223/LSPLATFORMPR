@@ -43,6 +43,8 @@ class PageWrite:
     request_parameters: dict[str, Any]
     fetched_at: datetime
     course_id: str | None = None
+    source_records_count: int | None = None
+    selected_record_indexes: dict[str, tuple[int, ...]] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,6 +60,8 @@ class BinaryFileWrite:
     remote_modified_time: datetime
     downloaded_at: datetime
     records_count: int = 0
+    source_records_count: int | None = None
+    selected_record_indexes: dict[str, tuple[int, ...]] | None = None
 
 
 @dataclass(slots=True)

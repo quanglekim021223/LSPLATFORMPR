@@ -6,12 +6,15 @@ from datetime import UTC, datetime
 
 from app.clients.datacamp_client import DataCampClient, is_retryable_error
 from app.core.security import sanitize_text
+from app.fabric_contract import records_from_bytes
 from app.models import PageWrite
 from app.repositories import BronzeWriter, CheckpointStore
 from app.schemas.datacamp import extra_field_paths, validate_archived_catalog
+from app.services.record_delta import RecordDelta
 
 DOMAIN = "course_catalog_archived"
 CONTENT_FINGERPRINT_SCOPE = "content_fingerprint"
+TABLE = "datacamp_course_catalog_archived"
 logger = logging.getLogger(__name__)
 
 
@@ -33,29 +36,41 @@ async def ingest_archived_courses(
                 ",".join(extras),
             )
         fingerprint = hashlib.sha256(raw_payload).hexdigest()
+        delta = await RecordDelta.load(checkpoints, "datacamp", TABLE)
         previous_fingerprint = await checkpoints.get_watermark(
             "datacamp",
             DOMAIN,
             CONTENT_FINGERPRINT_SCOPE,
         )
         if previous_fingerprint == fingerprint:
+            if not delta.has_state:
+                records = records_from_bytes(raw_payload, "data")
+                selection = delta.select(records)
+                if selection.indexes:
+                    await delta.commit(selection, run_id)
             await checkpoints.record_completed_page(run_id, DOMAIN, 1, 0)
             await checkpoints.mark_domain(run_id, DOMAIN, "completed")
             return
-        await writer.write_page(
-            PageWrite(
-                vendor="datacamp",
-                data_domain=DOMAIN,
-                ingestion_date=ingestion_date,
-                run_id=run_id,
-                offset=1,
-                raw_payload=raw_payload,
-                records_count=records_count,
-                request_parameters={},
-                fetched_at=datetime.now(UTC),
+        records = records_from_bytes(raw_payload, "data")
+        selection = delta.select(records)
+        if selection.indexes:
+            await writer.write_page(
+                PageWrite(
+                    vendor="datacamp",
+                    data_domain=DOMAIN,
+                    ingestion_date=ingestion_date,
+                    run_id=run_id,
+                    offset=1,
+                    raw_payload=raw_payload,
+                    records_count=len(selection.indexes),
+                    source_records_count=records_count,
+                    selected_record_indexes={"data": selection.indexes},
+                    request_parameters={},
+                    fetched_at=datetime.now(UTC),
+                )
             )
-        )
-        await checkpoints.record_completed_page(run_id, DOMAIN, 1, records_count)
+            await delta.commit(selection, run_id)
+        await checkpoints.record_completed_page(run_id, DOMAIN, 1, len(selection.indexes))
         await checkpoints.set_watermark(
             "datacamp",
             DOMAIN,

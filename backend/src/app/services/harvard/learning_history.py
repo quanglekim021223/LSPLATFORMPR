@@ -7,6 +7,7 @@ from datetime import UTC, date, datetime, time, timedelta
 
 from app.core.config import Settings
 from app.core.security import sanitize_text
+from app.fabric_contract import records_from_bytes
 from app.models import BinaryFileWrite
 from app.models.harvard import (
     HarvardVendorConfig,
@@ -16,6 +17,7 @@ from app.models.harvard import (
 )
 from app.repositories import BronzeWriter, CheckpointStore
 from app.schemas.harvard import HarvardResponseContractError, validate_history_csv
+from app.services.record_delta import RecordDelta
 
 DOMAIN = "learning_history"
 
@@ -45,6 +47,12 @@ async def ingest_learning_history(
     )
     listed_files = await _listed_files(settings, vendor, transport, checkpoints, run_id)
     metadata_by_path = {item.remote_path: item for item in listed_files}
+    delta = await RecordDelta.load(
+        checkpoints,
+        vendor.vendor,
+        f"{vendor.vendor}_learning_history",
+    )
+    seed_existing = not delta.has_state
 
     failures: list[tuple[str, bool]] = []
     report_dates = _report_dates(
@@ -62,6 +70,8 @@ async def ingest_learning_history(
             report_date,
             last_report_date,
             metadata_by_path,
+            delta,
+            seed_existing,
             now=now,
             sleep=sleep,
         )
@@ -177,6 +187,8 @@ async def _ingest_report_date(
     report_date: date,
     last_report_date: date,
     metadata_by_path: dict[str, RemoteFileMetadata],
+    delta: RecordDelta,
+    seed_existing: bool,
     *,
     now: Callable[[], datetime],
     sleep: Callable[[float], Awaitable[None]],
@@ -184,7 +196,10 @@ async def _ingest_report_date(
     file_name = f"{vendor.report_filename_prefix}{report_date:%Y%m%d}.csv"
     remote_path = posixpath.join(settings.harvard_sftp_remote_dir, file_name)
     metadata = metadata_by_path.get(remote_path)
-    if await _source_file_is_current(checkpoints, vendor, remote_path, metadata):
+    source_is_current = await _source_file_is_current(
+        checkpoints, vendor, remote_path, metadata
+    )
+    if source_is_current and not seed_existing:
         return None
     offset = int(report_date.strftime("%Y%m%d"))
     try:
@@ -197,22 +212,30 @@ async def _ingest_report_date(
             now=now,
             sleep=sleep,
         )
-        records_count = validate_history_csv(remote_file.content, vendor.vendor)
-        await writer.write_file(
-            BinaryFileWrite(
-                vendor=vendor.vendor,
-                data_domain=DOMAIN,
-                ingestion_date=ingestion_date,
-                run_id=run_id,
-                raw_payload=remote_file.content,
-                file_name=file_name,
-                remote_path=remote_file.remote_path,
-                file_size=remote_file.size,
-                remote_modified_time=remote_file.modified_at,
-                downloaded_at=datetime.now(UTC),
-                records_count=records_count,
+        source_records_count = validate_history_csv(remote_file.content, vendor.vendor)
+        records = records_from_bytes(remote_file.content, "csv")
+        selection = delta.select(records)
+        if not source_is_current and selection.indexes:
+            await writer.write_file(
+                BinaryFileWrite(
+                    vendor=vendor.vendor,
+                    data_domain=DOMAIN,
+                    ingestion_date=ingestion_date,
+                    run_id=run_id,
+                    raw_payload=remote_file.content,
+                    file_name=file_name,
+                    remote_path=remote_file.remote_path,
+                    file_size=remote_file.size,
+                    remote_modified_time=remote_file.modified_at,
+                    downloaded_at=datetime.now(UTC),
+                    records_count=len(selection.indexes),
+                    source_records_count=source_records_count,
+                    selected_record_indexes={"csv": selection.indexes},
+                )
             )
-        )
+        if selection.indexes:
+            await delta.commit(selection, run_id)
+        records_count = 0 if source_is_current else len(selection.indexes)
         await checkpoints.record_completed_page(run_id, DOMAIN, offset, records_count)
         await checkpoints.record_completed_source_file(
             vendor.vendor,

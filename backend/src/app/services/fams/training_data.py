@@ -15,10 +15,13 @@ from app.core.security import sanitize_text
 from app.models import PageWrite
 from app.repositories import BronzeWriter, CheckpointStore
 from app.schemas.fams import extra_field_paths, validate_training_data
+from app.services.record_delta import RecordDelta
 
 DOMAIN = "training_data"
 VENDOR = "fams"
 CONTENT_FINGERPRINT_SCOPE = "content_fingerprint"
+CLASS_TABLE = "fams_training_classes"
+STUDENT_TABLE = "fams_training_students"
 logger = logging.getLogger(__name__)
 
 
@@ -91,8 +94,18 @@ async def ingest_training_data(
             DOMAIN,
             fingerprint_scope,
         )
+        class_delta = await RecordDelta.load(checkpoints, VENDOR, CLASS_TABLE)
+        student_delta = await RecordDelta.load(checkpoints, VENDOR, STUDENT_TABLE)
 
         if previous_fingerprint == fingerprint:
+            if not class_delta.has_state:
+                class_selection = class_delta.select(class_list)
+                if class_selection.indexes:
+                    await class_delta.commit(class_selection, run_id)
+            if not student_delta.has_state:
+                student_selection = student_delta.select(student_list)
+                if student_selection.indexes:
+                    await student_delta.commit(student_selection, run_id)
             logger.info(
                 "FAMS training data unchanged class_count=%d student_count=%d",
                 class_count,
@@ -102,19 +115,30 @@ async def ingest_training_data(
             await checkpoints.mark_domain(run_id, DOMAIN, "completed")
             return
 
-        await writer.write_page(
-            PageWrite(
-                vendor=VENDOR,
-                data_domain=DOMAIN,
-                ingestion_date=ingestion_date,
-                run_id=run_id,
-                offset=offset,
-                raw_payload=raw_payload,
-                records_count=class_count + student_count,
-                request_parameters=request_parameters,
-                fetched_at=datetime.now(UTC),
+        class_selection = class_delta.select(class_list)
+        student_selection = student_delta.select(student_list)
+        changed_count = len(class_selection.indexes) + len(student_selection.indexes)
+        if changed_count:
+            await writer.write_page(
+                PageWrite(
+                    vendor=VENDOR,
+                    data_domain=DOMAIN,
+                    ingestion_date=ingestion_date,
+                    run_id=run_id,
+                    offset=offset,
+                    raw_payload=raw_payload,
+                    records_count=changed_count,
+                    source_records_count=class_count + student_count,
+                    selected_record_indexes={
+                        "data.classList": class_selection.indexes,
+                        "data.studentList": student_selection.indexes,
+                    },
+                    request_parameters=request_parameters,
+                    fetched_at=datetime.now(UTC),
+                )
             )
-        )
+            await class_delta.commit(class_selection, run_id)
+            await student_delta.commit(student_selection, run_id)
         logger.debug(
             "FAMS training data received class_count=%d student_count=%d",
             class_count,
@@ -124,7 +148,7 @@ async def ingest_training_data(
             run_id,
             DOMAIN,
             offset,
-            class_count + student_count,
+            changed_count,
         )
         await checkpoints.set_watermark(
             VENDOR,

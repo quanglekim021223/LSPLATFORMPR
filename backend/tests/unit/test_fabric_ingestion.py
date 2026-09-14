@@ -113,6 +113,43 @@ def test_skillup_snapshot_pages_build_both_bronze_tables(tmp_path):
     assert "learningmaterialid" not in resource_columns
 
 
+def test_build_batch_materializes_only_selected_raw_records(tmp_path):
+    run_id = "incremental-run"
+    raw_root = tmp_path / "raw"
+    table_root = tmp_path / "tables"
+    directory = raw_root / "datacamp" / "course_catalog_live" / f"run_id={run_id}"
+    directory.mkdir(parents=True)
+    payload = json.dumps(
+        {"data": [{"id": "old", "title": "Old"}, {"id": "new", "title": "New"}]}
+    ).encode()
+    (directory / "offset=000001.json").write_bytes(payload)
+    (directory / "manifest.json").write_text(
+        json.dumps(
+            {
+                "run_id": run_id,
+                "data_domain": "course_catalog_live",
+                "pages": [
+                    {
+                        "file": "offset=000001.json",
+                        "sha256": hashlib.sha256(payload).hexdigest(),
+                        "records_count": 1,
+                        "source_records_count": 2,
+                        "selected_record_indexes": {"data": [1]},
+                        "fetched_at": "2026-09-14T00:00:00+00:00",
+                    }
+                ],
+            }
+        )
+    )
+
+    assert build_batch(raw_root, table_root, "datacamp", run_id) == {
+        "datacamp_course_catalog_live": 1
+    }
+    rows = pq.read_table(table_root / "datacamp_course_catalog_live").to_pylist()
+    assert len(rows) == 1
+    assert rows[0]["id"] == "new"
+
+
 def test_raw_catalog_paging_rejects_silent_truncation():
     from app.fabric_catalog import next_catalog_page
 

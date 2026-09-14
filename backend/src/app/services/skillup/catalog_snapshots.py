@@ -12,12 +12,17 @@ from app.core.security import sanitize_text
 from app.models import PageWrite
 from app.repositories import BronzeWriter, CheckpointStore
 from app.schemas.skillup import validate_snapshot_page
+from app.services.record_delta import RecordDelta
 from app.services.skillup.page_progress import PageProgress
 
 VENDOR = "skillup"
 LEARNING_RESOURCES = "learning_resources"
 CERTIFICATES = "certificates"
 CONTENT_FINGERPRINT_SCOPE = "content_fingerprint"
+TABLES = {
+    LEARNING_RESOURCES: "skillup_learning_resources",
+    CERTIFICATES: "skillup_certificates",
+}
 logger = logging.getLogger(__name__)
 
 
@@ -81,6 +86,8 @@ async def _ingest_snapshot(
     page_number = await checkpoints.next_page_number(run_id, domain)
     progress = PageProgress()
     fingerprints: list[tuple[str, str]] = []
+    delta = await RecordDelta.load(checkpoints, VENDOR, TABLES[domain])
+    seed_existing = not delta.has_state
     try:
         while True:
             params: dict[str, Any] = {
@@ -112,25 +119,37 @@ async def _ingest_snapshot(
             scope = f"{CONTENT_FINGERPRINT_SCOPE}:{page_number}"
             previous = await checkpoints.get_watermark(VENDOR, domain, scope)
             changed = previous != fingerprint
+            written_records = 0
             if changed:
-                await writer.write_page(
-                    PageWrite(
-                        vendor=VENDOR,
-                        data_domain=domain,
-                        ingestion_date=ingestion_date,
-                        run_id=run_id,
-                        offset=page_number,
-                        raw_payload=raw_payload,
-                        records_count=records_count,
-                        request_parameters=params,
-                        fetched_at=datetime.now(UTC),
+                selection = delta.select(contract.items)
+                if selection.indexes:
+                    await writer.write_page(
+                        PageWrite(
+                            vendor=VENDOR,
+                            data_domain=domain,
+                            ingestion_date=ingestion_date,
+                            run_id=run_id,
+                            offset=page_number,
+                            raw_payload=raw_payload,
+                            records_count=len(selection.indexes),
+                            source_records_count=records_count,
+                            selected_record_indexes={"items": selection.indexes},
+                            request_parameters=params,
+                            fetched_at=datetime.now(UTC),
+                        )
                     )
-                )
+                    await delta.commit(selection, run_id)
+                    written_records = len(selection.indexes)
+            elif seed_existing:
+                selection = delta.select(contract.items)
+                if selection.indexes:
+                    # Upgrade old page-only checkpoints without replaying Bronze.
+                    await delta.commit(selection, run_id)
             await checkpoints.record_completed_page(
                 run_id,
                 domain,
                 page_number,
-                records_count if changed else 0,
+                written_records,
             )
             fingerprints.append((scope, fingerprint))
             if not contract.has_next_page:

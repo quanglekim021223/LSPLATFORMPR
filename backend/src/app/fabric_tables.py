@@ -193,10 +193,25 @@ def _build_entry(
     raw = _verified_raw(manifest_path, entry)
     ingested_at = entry_ingested_at(entry)
     total = 0
+    source_total = 0
+    selected = entry.get("selected_record_indexes")
+    if selected is not None and not isinstance(selected, dict):
+        raise ValueError("Invalid raw record selection")
     for table, record_path in mappings:
         if not raw:
             continue
         records = records_from_bytes(raw, record_path)
+        source_total += len(records)
+        indexes = selected.get(record_path) if selected is not None else None
+        if indexes is not None:
+            if (
+                not isinstance(indexes, list)
+                or any(not isinstance(index, int) for index in indexes)
+                or any(index < 0 or index >= len(records) for index in indexes)
+                or len(indexes) != len(set(indexes))
+            ):
+                raise ValueError("Invalid selected record index")
+            records = [records[index] for index in indexes]
         total += len(records)
         if records:
             _write_records(
@@ -209,6 +224,9 @@ def _build_entry(
                 vendor=vendor,
                 domain=domain,
             )
+    expected_source_total = entry.get("source_records_count", source_total)
+    if source_total != expected_source_total:
+        raise ValueError("Raw source record count mismatch")
     if total != entry["records_count"]:
         raise ValueError("Raw record count mismatch")
 

@@ -278,7 +278,7 @@ async def ingest_course_detail(
 
 def _content_route_ids(elements: list[CourseraContent]) -> list[str]:
     return [
-        element.id
+        element.content_id
         for element in elements
         if element.id.partition("~")[0] in COURSE_DETAIL_CONTENT_TYPES
         if not element.changes or any(change.change_type != "REMOVED" for change in element.changes)

@@ -60,6 +60,10 @@ def merge_page_manifest(
         "fetched_at": page.fetched_at.isoformat(),
         "sha256": sha256,
     }
+    if page.source_records_count is not None:
+        pages[page.offset]["source_records_count"] = page.source_records_count
+    if page.selected_record_indexes is not None:
+        pages[page.offset]["selected_record_indexes"] = page.selected_record_indexes
     manifest["pages"] = [pages[offset] for offset in sorted(pages)]
     manifest["records_count"] = sum(int(item.get("records_count", 0)) for item in pages.values())
     manifest["updated_at"] = page.fetched_at.isoformat()
@@ -91,6 +95,10 @@ def merge_file_manifest(
         "sha256": sha256,
         "records_count": file.records_count,
     }
+    if file.source_records_count is not None:
+        entry["source_records_count"] = file.source_records_count
+    if file.selected_record_indexes is not None:
+        entry["selected_record_indexes"] = file.selected_record_indexes
     files = {
         str(item["remote_path"]): item
         for item in manifest.get("files", [])

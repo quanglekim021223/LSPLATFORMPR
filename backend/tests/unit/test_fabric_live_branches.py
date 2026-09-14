@@ -17,7 +17,11 @@ async def test_fabric_catalog_filters_without_optional_details(settings_factory,
     settings = settings_factory(fabric_enabled=True)
     payload = {
         "elements": [
-            {"id": "Course~one" if vendor == "coursera" else "one", "optional_missing": None}
+            {
+                "id": "Course~one" if vendor == "coursera" else "one",
+                "contentId": "one" if vendor == "coursera" else None,
+                "optional_missing": None,
+            }
         ],
         "paging": {"total": 1, "links": []},
     }
@@ -36,11 +40,11 @@ async def test_fabric_catalog_filters_without_optional_details(settings_factory,
                 (detail, json.dumps(detail).encode()),
             ]
         )
-        client.content_detail_path.return_value = "/test-org/contents/Course~one"
+        client.content_detail_path.return_value = "/test-org/contents/one"
     else:
         client.get_json = AsyncMock(return_value=(payload, json.dumps(payload).encode()))
     store, writer = AsyncMock(), AsyncMock()
-    store.courses_to_process.return_value = ["Course~one"] if vendor == "coursera" else []
+    store.courses_to_process.return_value = ["one"] if vendor == "coursera" else []
     pipeline = coursera_catalog if vendor == "coursera" else linkedin_catalog
     kwarg = "modified_since_timestamp" if vendor == "coursera" else "last_modified_after"
     result = await pipeline(
@@ -64,7 +68,7 @@ async def test_fabric_catalog_filters_without_optional_details(settings_factory,
     store.set_watermark.assert_awaited_once_with(vendor, "course_catalog", "456", "run")
     assert writer.write_page.await_count == (2 if vendor == "coursera" else 1)
     if vendor == "coursera":
-        store.add_courses.assert_awaited_once_with("run", ["Course~one"])
+        store.add_courses.assert_awaited_once_with("run", ["one"])
 
 
 def test_empty_skillup_page_zero_is_valid():

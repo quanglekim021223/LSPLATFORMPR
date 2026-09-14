@@ -197,9 +197,9 @@ def validate_course_detail(payload: Any, *, expected_id: str) -> CourseraContent
             "Coursera Course Detail contract validation failed: elements must "
             "contain exactly one course"
         )
-    if contract.elements[0].id != expected_id:
+    if contract.elements[0].content_id != expected_id:
         raise CourseraResponseContractError(
-            "Coursera Course Detail contract validation failed: id:mismatch"
+            "Coursera Course Detail contract validation failed: contentId:mismatch"
         )
     return contract
 

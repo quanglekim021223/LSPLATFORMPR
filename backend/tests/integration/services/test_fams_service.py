@@ -370,7 +370,7 @@ async def test_unchanged_full_response_is_not_written_twice(
 
 
 @pytest.mark.asyncio
-async def test_changed_full_response_creates_new_bronze_snapshot(
+async def test_changed_full_response_writes_only_changed_record(
     settings_factory: Callable[..., object],
 ) -> None:
     settings = settings_factory()
@@ -400,7 +400,7 @@ async def test_changed_full_response_creates_new_bronze_snapshot(
 
     assert first.status == RunStatus.SUCCEEDED
     assert second.status == RunStatus.SUCCEEDED
-    assert second.records_by_domain == {"training_data": 5}
+    assert second.records_by_domain == {"training_data": 1}
     assert (
         len(
             list(
@@ -411,6 +411,17 @@ async def test_changed_full_response_creates_new_bronze_snapshot(
         )
         == 2
     )
+    manifests = list(
+        settings.bronze_local_path.rglob("manifest.json")  # type: ignore[attr-defined]
+    )
+    latest = max(manifests, key=lambda path: path.stat().st_mtime_ns)
+    entry = json.loads(latest.read_text(encoding="utf-8"))["pages"][0]
+    assert entry["records_count"] == 1
+    assert entry["source_records_count"] == 5
+    assert entry["selected_record_indexes"] == {
+        "data.classList": [0],
+        "data.studentList": [],
+    }
 
 
 @pytest.mark.asyncio
