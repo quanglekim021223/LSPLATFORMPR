@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -67,6 +68,7 @@ def test_fabric_target_is_read_from_function_app_settings() -> None:
         "FABRIC_STATE_CONTAINER": "fabric-ingestion-state",
         "FABRIC_MAX_CONCURRENT_VENDORS": "1",
         "FABRIC_ALLOW_INITIAL_PULL": "false",
+        "CHECKPOINT_DB_PATH": "/tmp/fsa_ingestion.db",
     }
     with patch.dict(os.environ, values, clear=True):
         settings = Settings(_env_file=None)
@@ -78,6 +80,7 @@ def test_fabric_target_is_read_from_function_app_settings() -> None:
     assert settings.fabric_enabled is True
     assert settings.fabric_max_concurrent_vendors == 1
     assert settings.fabric_allow_initial_pull is False
+    assert settings.checkpoint_db_path == Path(values["CHECKPOINT_DB_PATH"])
     settings.validate_fabric_runtime()
 
 

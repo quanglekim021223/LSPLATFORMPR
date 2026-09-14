@@ -87,6 +87,7 @@ FABRIC_LAKEHOUSE_ID=3535e0e3-a2a0-4387-82e6-1e7d8cbd1a62
 FABRIC_SCHEMA=dbo
 FABRIC_STATE_ACCOUNT_URL=https://fsadataingestfunctionapp.blob.core.windows.net
 FABRIC_STATE_CONTAINER=fabric-ingestion-state
+CHECKPOINT_DB_PATH=/tmp/fsa_ingestion.db
 ```
 
 Ảnh cấu hình ngày 2026-09-12 cho thấy container `fabric-ingestion-state` đã được
@@ -106,6 +107,8 @@ Delta hoạt động end-to-end.
   test; mặc định là cả 8 vendor, thiếu cấu hình sẽ báo lỗi thay vì bỏ qua.
 - `FABRIC_MAX_CONCURRENT_VENDORS=1`: giới hạn concurrency của timer.
 - `FABRIC_ALLOW_INITIAL_PULL=false`: từ chối tự full-pull khi checkpoint mất.
+- `CHECKPOINT_DB_PATH=/tmp/fsa_ingestion.db`: SQLite cục bộ của từng Function
+  instance; checkpoint Fabric bền vững vẫn nằm trong Blob state.
 - `AzureWebJobs.scheduled_vendor_ingestion.Disabled=true` trong lúc rollout.
 - `INGESTION_TIMER_SCHEDULE`: Azure NCRONTAB 6 trường, ví dụ `0 0 22 * * *`
   cho 05:00 Việt Nam hằng ngày nếu host dùng UTC.
@@ -151,17 +154,15 @@ Không chọn đại checkpoint của một mock test. Checkpoint phải tương
 Từ `backend/`, sau khi đặt Fabric target trong environment và đăng nhập Azure:
 
 ```bash
-PYTHONPATH=src ../.venv/bin/python scripts/fabric_seed.py \
+../.venv/bin/python -m app.fabric_seed \
   --vendor levelup \
   --checkpoint /absolute/path/to/audited/checkpoint.db \
   --confirm-already-published
 ```
 
-Lệnh cũ `../.venv/bin/python -m app.fabric_seed` vẫn được giữ để tương thích.
 Lệnh chỉ seed Blob state trống, kiểm tra latest run thành công, watermark/domain,
 full-sync scope cho history và inventory của LevelUP. Nó không ghi bảng Fabric
-và không overwrite checkpoint đã tồn tại. Nếu dùng checkout chưa cài package,
-thêm `PYTHONPATH=src` trước lệnh Python.
+và không overwrite checkpoint đã tồn tại.
 
 Một số `fabric_runs/<batch>/checkpoint.db` bootstrap chỉ chứa một domain hoặc
 chưa có các watermark `full_sync`: lệnh sẽ từ chối. Cần hợp nhất/migrate dựa trên

@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import tempfile
 from collections.abc import Awaitable, Callable
-from pathlib import Path
 
 import azure.functions as func
 
@@ -16,12 +14,6 @@ from app.repositories import CheckpointStore
 logger = logging.getLogger(__name__)
 
 settings = get_settings().model_copy(update={"scheduler_enabled": False})
-if settings.fabric_enabled:
-    settings = settings.model_copy(
-        update={
-            "checkpoint_db_path": Path(tempfile.gettempdir()) / "lsplatform-http" / "status.db",
-        }
-    )
 checkpoint_store = CheckpointStore(settings.checkpoint_db_path)
 bronze_writer = build_bronze_writer(settings)
 fastapi_app = create_app(
