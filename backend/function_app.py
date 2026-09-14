@@ -10,17 +10,31 @@ from app.core.config import get_settings
 from app.main import build_bronze_writer, build_ingestion_jobs, create_app
 from app.models import RunStatus, RunSummary
 from app.repositories import CheckpointStore
+from app.services.azure_ingestion_backend import AzureIngestionBackend
+from app.services.ingestion_coordinator import QueuedIngestion
 
 logger = logging.getLogger(__name__)
 
 settings = get_settings().model_copy(update={"scheduler_enabled": False})
 checkpoint_store = CheckpointStore(settings.checkpoint_db_path)
 bronze_writer = build_bronze_writer(settings)
+storage_connection = settings.azure_web_jobs_storage.get_secret_value()
+ingestion_backend = (
+    AzureIngestionBackend(
+        storage_connection,
+        settings.ingestion_queue_name,
+        settings.ingestion_status_container,
+    )
+    if storage_connection
+    else None
+)
 fastapi_app = create_app(
     settings,
     checkpoint_store=checkpoint_store,
     bronze_writer=bronze_writer,
+    ingestion_backend=ingestion_backend,
 )
+ingestion_coordinator = fastapi_app.state.ingestion_coordinator
 
 app = func.AsgiFunctionApp(
     app=fastapi_app,
@@ -72,3 +86,13 @@ async def scheduled_vendor_ingestion(timer: func.TimerRequest) -> None:
     if timer.past_due:
         logger.warning("Azure ingestion timer is past due")
     await run_configured_ingestions()
+
+
+@app.queue_trigger(
+    arg_name="message",
+    queue_name="%INGESTION_QUEUE_NAME%",
+    connection="AzureWebJobsStorage",
+)
+async def manual_vendor_ingestion(message: func.QueueMessage) -> None:
+    queued = QueuedIngestion.model_validate_json(message.get_body())
+    await ingestion_coordinator.run_queued(queued)

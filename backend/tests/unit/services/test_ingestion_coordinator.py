@@ -9,8 +9,29 @@ from app.models import RunStatus, RunSummary
 from app.services.ingestion_coordinator import (
     IngestionAlreadyRunning,
     IngestionCoordinator,
+    IngestionState,
     IngestionStatus,
+    QueuedIngestion,
 )
+
+
+class FakeDurableBackend:
+    def __init__(self) -> None:
+        self.states: dict[str, IngestionState] = {}
+        self.messages: list[QueuedIngestion] = []
+
+    async def create(self, state: IngestionState) -> None:
+        self.states[state.job_id] = state.model_copy(deep=True)
+
+    async def save(self, state: IngestionState) -> None:
+        self.states[state.job_id] = state.model_copy(deep=True)
+
+    async def get(self, job_id: str) -> IngestionState | None:
+        state = self.states.get(job_id)
+        return state.model_copy(deep=True) if state is not None else None
+
+    async def enqueue(self, message: QueuedIngestion) -> None:
+        self.messages.append(message.model_copy(deep=True))
 
 
 def summary(vendor: str, status: RunStatus, records: int = 1) -> RunSummary:
@@ -121,3 +142,26 @@ async def test_refreshes_running_vendor_progress_from_persisted_run() -> None:
 
     release.set()
     assert await wait_for_terminal(coordinator, started.job_id) == IngestionStatus.SUCCEEDED
+
+
+@pytest.mark.asyncio
+async def test_durable_backend_tracks_job_across_coordinator_instances() -> None:
+    backend = FakeDurableBackend()
+
+    async def levelup() -> RunSummary:
+        return summary("levelup", RunStatus.SUCCEEDED, 3)
+
+    submitter = IngestionCoordinator({"levelup": levelup}, backend=backend)
+    worker = IngestionCoordinator({"levelup": levelup}, backend=backend)
+
+    started = await submitter.start(["levelup"])
+    assert started.status == IngestionStatus.QUEUED
+    assert len(backend.messages) == 1
+
+    await worker.run_queued(backend.messages[0])
+    completed = await submitter.get(started.job_id)
+
+    assert completed is not None
+    assert completed.status == IngestionStatus.SUCCEEDED
+    assert completed.vendor_runs[0].run_id == "levelup-run"
+    assert completed.total_records == 3

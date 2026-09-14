@@ -13,7 +13,7 @@ from app.main import build_ingestion_jobs
 from app.models import RunStatus, RunSummary
 
 
-def test_function_app_registers_asgi_and_timer_triggers() -> None:
+def test_function_app_registers_asgi_timer_and_queue_triggers() -> None:
     functions = {
         function.get_function_name(): function for function in function_app.app.get_functions()
     }
@@ -23,6 +23,9 @@ def test_function_app_registers_asgi_and_timer_triggers() -> None:
     assert timer_binding["schedule"] == "%INGESTION_TIMER_SCHEDULE%"
     assert timer_binding["runOnStartup"] is False
     assert timer_binding["useMonitor"] is True
+    queue_binding = functions["manual_vendor_ingestion"].get_dict_repr()["bindings"][0]
+    assert queue_binding["queueName"] == "%INGESTION_QUEUE_NAME%"
+    assert queue_binding["connection"] == "AzureWebJobsStorage"
     assert function_app.settings.scheduler_enabled is False
 
 
@@ -149,6 +152,20 @@ async def test_timer_logs_when_invocation_is_past_due(
 
     run_ingestions.assert_awaited_once()
     assert "Azure ingestion timer is past due" in caplog.text
+
+
+async def test_queue_trigger_runs_persisted_job(monkeypatch: pytest.MonkeyPatch) -> None:
+    run_queued = AsyncMock()
+    monkeypatch.setattr(function_app.ingestion_coordinator, "run_queued", run_queued)
+    message = SimpleNamespace(
+        get_body=lambda: b'{"job_id":"job-1","vendors":["skillup"]}'
+    )
+
+    await function_app.manual_vendor_ingestion(message)
+
+    queued = run_queued.await_args.args[0]
+    assert queued.job_id == "job-1"
+    assert queued.vendors == ["skillup"]
 
 
 @pytest.mark.parametrize("status", [RunStatus.PARTIAL_FAILURE, RunStatus.FAILED])

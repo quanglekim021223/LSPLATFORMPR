@@ -99,7 +99,7 @@ _SKILL_PROFILES: list[dict[str, Any]] = [
                         "classificationName": "Technical Skill",
                     },
                 },
-                "selfValidationScore": 3,
+                "selfValidationScore": None,
                 "iMochaValidationScore": None,
                 "managerValidationScore": None,
                 "weightedProficiencyScore": 3.0,

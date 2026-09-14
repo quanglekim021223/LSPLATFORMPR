@@ -28,7 +28,7 @@ from app.services.datacamp.service import run_datacamp_ingestion
 from app.services.fams.service import run_fams_ingestion
 from app.services.harvard.hmm_service import run_harvard_hmm_ingestion
 from app.services.harvard.spark_service import run_harvard_spark_ingestion
-from app.services.ingestion_coordinator import IngestionCoordinator
+from app.services.ingestion_coordinator import IngestionBackend, IngestionCoordinator
 from app.services.levelup.service import run_levelup_ingestion
 from app.services.linkedin.service import run_linkedin_ingestion
 from app.services.skillup.service import run_skillup_ingestion
@@ -118,6 +118,7 @@ def create_app(
     checkpoint_store: CheckpointStore | None = None,
     bronze_writer: BronzeWriter | None = None,
     ingestion_jobs: dict[str, ScheduledJob] | None = None,
+    ingestion_backend: IngestionBackend | None = None,
 ) -> FastAPI:
     config = settings or get_settings()
     _configure_application_logging(config.log_level)
@@ -126,7 +127,8 @@ def create_app(
     configured_jobs = ingestion_jobs or build_ingestion_jobs(config, store, writer)
     coordinator = IngestionCoordinator(
         configured_jobs,
-        progress_reader=store.latest_run,
+        progress_reader=None if ingestion_backend is not None else store.latest_run,
+        backend=ingestion_backend,
     )
  
     @asynccontextmanager
@@ -163,6 +165,10 @@ def create_app(
         version="0.1.0",
         lifespan=lifespan,
     )
+    application.state.settings = config
+    application.state.checkpoint_store = store
+    application.state.bronze_writer = writer
+    application.state.ingestion_coordinator = coordinator
     application.add_middleware(
         CORSMiddleware,
         allow_origins=config.cors_allowed_origins,

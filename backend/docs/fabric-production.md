@@ -112,6 +112,10 @@ Delta hoạt động end-to-end.
 - `AzureWebJobs.scheduled_vendor_ingestion.Disabled=true` trong lúc rollout.
 - `INGESTION_TIMER_SCHEDULE`: Azure NCRONTAB 6 trường, ví dụ `0 0 22 * * *`
   cho 05:00 Việt Nam hằng ngày nếu host dùng UTC.
+- `INGESTION_QUEUE_NAME=vendor-ingestion`: queue cho endpoint Run Now.
+- `INGESTION_STATUS_CONTAINER=ingestion-job-status`: Blob container lưu trạng thái
+  job để `GET /ingestions/{job_id}` đọc được từ mọi Function instance. Queue và
+  container dùng connection `AzureWebJobsStorage` và được tạo khi cần.
 
 Code production đọc target từ các biến trên. Không còn Workspace/Lakehouse ID
 hardcode trong source.

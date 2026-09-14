@@ -47,6 +47,13 @@ class Settings(BaseSettings):
     auth_jwt_secret: SecretStr = Field(default=SecretStr(""))
     auth_token_expire_minutes: int = Field(default=60, ge=1, le=1440)
 
+    azure_web_jobs_storage: SecretStr = Field(
+        default=SecretStr(""),
+        validation_alias=AliasChoices("AzureWebJobsStorage", "azure_web_jobs_storage"),
+    )
+    ingestion_queue_name: str = "vendor-ingestion"
+    ingestion_status_container: str = "ingestion-job-status"
+
     levelup_base_url: str = ""
     levelup_auth_path: str = "/authenticate"
     levelup_courses_path: str = "/courses"
@@ -70,7 +77,9 @@ class Settings(BaseSettings):
         default=SecretStr(""),
         validation_alias=AliasChoices("SKILLUP_KEY", "skillup_api_key"),
     )
-    skillup_page_size: int = Field(default=100, ge=1, le=100)
+    # Skill taxonomy rejects PageSize values above 50. The setting is shared by
+    # all SkillUp domains, so keep the global limit at the strictest endpoint.
+    skillup_page_size: int = Field(default=50, ge=1, le=50)
     skillup_assessment_start_date: str = "2000-01-01T00:00:00Z"
     skillup_assessment_daily_overlap_days: int = Field(default=3, ge=0)
     skillup_assessment_weekly_sync_interval_days: int = Field(default=7, ge=1)

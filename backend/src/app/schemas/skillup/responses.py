@@ -105,7 +105,7 @@ class InventorySkillDefinition(SkillUpContractModel):
 
 class EmployeeSkill(SkillUpContractModel):
     skill: InventorySkillDefinition
-    self_validation_score: StrictNumber
+    self_validation_score: StrictNumber | None
     i_mocha_validation_score: StrictNumber | None = Field(alias="iMochaValidationScore")
     manager_validation_score: StrictNumber | None
     weighted_proficiency_score: StrictNumber

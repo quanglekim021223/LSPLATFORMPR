@@ -12,6 +12,7 @@ from app.core.config import Settings
 
 def test_function_app_key_names() -> None:
     values = {
+        "AzureWebJobsStorage": "UseDevelopmentStorage=true",
         "COURSERA_USER_NAME": "fake-coursera-user",
         "COURSERA_PASSWORD": "fake-coursera-password",
         "DATACAMP_TOKEN": "fake-datacamp-token",
@@ -30,6 +31,7 @@ def test_function_app_key_names() -> None:
         "LINKEDIN_GRANT_TYPE": "client_credentials",
     }
     mapping = {
+        "azure_web_jobs_storage": "AzureWebJobsStorage",
         "coursera_username": "COURSERA_USER_NAME",
         "coursera_password": "COURSERA_PASSWORD",
         "datacamp_token": "DATACAMP_TOKEN",
@@ -56,6 +58,18 @@ def test_function_app_key_names() -> None:
     assert settings.harvard_sftp_host == values["HARVARD_SFTP_HOST"]
     assert settings.harvard_sftp_port == 2222
     assert settings.linkedin_grant_type == "client_credentials"
+
+
+def test_manual_ingestion_storage_names_come_from_function_settings() -> None:
+    values = {
+        "INGESTION_QUEUE_NAME": "manual-jobs",
+        "INGESTION_STATUS_CONTAINER": "manual-job-status",
+    }
+    with patch.dict(os.environ, values, clear=True):
+        settings = Settings(_env_file=None)
+
+    assert settings.ingestion_queue_name == values["INGESTION_QUEUE_NAME"]
+    assert settings.ingestion_status_container == values["INGESTION_STATUS_CONTAINER"]
 
 
 def test_fabric_target_is_read_from_function_app_settings() -> None:

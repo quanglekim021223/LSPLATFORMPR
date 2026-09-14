@@ -6,6 +6,8 @@
     "APP_ENV": "local",
     "SCHEDULER_ENABLED": "false",
     "INGESTION_TIMER_SCHEDULE": "0 0 22 * * *",
+    "INGESTION_QUEUE_NAME": "vendor-ingestion",
+    "INGESTION_STATUS_CONTAINER": "ingestion-job-status",
     "BRONZE_STORAGE_TYPE": "local",
     "BRONZE_LOCAL_PATH": "./data/bronze",
     "CHECKPOINT_DB_PATH": "/tmp/fsa_ingestion.db",

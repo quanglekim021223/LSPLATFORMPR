@@ -5,6 +5,7 @@ import logging
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime
 from enum import StrEnum
+from typing import Protocol
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -57,6 +58,21 @@ class IngestionState(BaseModel):
     error_message: str | None = None
 
 
+class QueuedIngestion(BaseModel):
+    job_id: str
+    vendors: list[str]
+
+
+class IngestionBackend(Protocol):
+    async def create(self, state: IngestionState) -> None: ...
+
+    async def save(self, state: IngestionState) -> None: ...
+
+    async def get(self, job_id: str) -> IngestionState | None: ...
+
+    async def enqueue(self, message: QueuedIngestion) -> None: ...
+
+
 class IngestionAlreadyRunning(RuntimeError):
     def __init__(self, job_id: str) -> None:
         self.job_id = job_id
@@ -75,9 +91,11 @@ class IngestionCoordinator:
         jobs: dict[str, IngestionJob],
         *,
         progress_reader: ProgressReader | None = None,
+        backend: IngestionBackend | None = None,
     ) -> None:
         self._jobs = jobs
         self._progress_reader = progress_reader
+        self._backend = backend
         self._states: dict[str, IngestionState] = {}
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._active_job_id: str | None = None
@@ -107,6 +125,19 @@ class IngestionCoordinator:
                 created_at=datetime.now(UTC),
                 vendor_runs=[VendorIngestionState(vendor=vendor) for vendor in unique_vendors],
             )
+            if self._backend is not None:
+                await self._backend.create(state)
+                try:
+                    await self._backend.enqueue(
+                        QueuedIngestion(job_id=job_id, vendors=unique_vendors)
+                    )
+                except Exception:
+                    state.status = IngestionStatus.FAILED
+                    state.finished_at = datetime.now(UTC)
+                    state.error_message = "Failed to queue ingestion job"
+                    await self._backend.save(state)
+                    raise
+                return state.model_copy(deep=True)
             self._states[job_id] = state
             self._active_job_id = job_id
             self._tasks[job_id] = asyncio.create_task(
@@ -115,10 +146,30 @@ class IngestionCoordinator:
             return state.model_copy(deep=True)
 
     async def get(self, job_id: str) -> IngestionState | None:
-        state = self._states.get(job_id)
+        state = (
+            await self._backend.get(job_id)
+            if self._backend is not None
+            else self._states.get(job_id)
+        )
         if state is not None:
             await self._refresh_progress(state)
         return state.model_copy(deep=True) if state is not None else None
+
+    async def run_queued(self, message: QueuedIngestion) -> IngestionState:
+        if self._backend is None:
+            raise RuntimeError("Durable ingestion backend is not configured")
+        state = await self._backend.get(message.job_id)
+        if state is None:
+            raise ValueError(f"Ingestion job {message.job_id} is missing durable state")
+        if [item.vendor for item in state.vendor_runs] != message.vendors:
+            raise ValueError(f"Ingestion job {message.job_id} vendor mismatch")
+        if state.status == IngestionStatus.SUCCEEDED:
+            return state
+        await self._run(state)
+        completed = await self._backend.get(message.job_id)
+        if completed is None or completed.status != IngestionStatus.SUCCEEDED:
+            raise RuntimeError(f"Ingestion job {message.job_id} did not succeed")
+        return completed
 
     async def _refresh_progress(self, state: IngestionState) -> None:
         if self._progress_reader is None or state.started_at is None:
@@ -160,6 +211,14 @@ class IngestionCoordinator:
     async def _run(self, state: IngestionState) -> None:
         state.status = IngestionStatus.RUNNING
         state.started_at = datetime.now(UTC)
+        state.finished_at = None
+        state.error_message = None
+        for vendor in state.vendor_runs:
+            vendor.status = IngestionStatus.RUNNING
+            vendor.started_at = state.started_at
+            vendor.finished_at = None
+            vendor.error_message = None
+        await self._persist(state)
         try:
             await asyncio.gather(*(self._run_vendor(vendor) for vendor in state.vendor_runs))
             state.total_records = sum(vendor.total_records for vendor in state.vendor_runs)
@@ -182,8 +241,13 @@ class IngestionCoordinator:
             raise
         finally:
             state.finished_at = datetime.now(UTC)
+            await self._persist(state)
             if self._active_job_id == state.job_id:
                 self._active_job_id = None
+
+    async def _persist(self, state: IngestionState) -> None:
+        if self._backend is not None:
+            await self._backend.save(state)
 
     async def _run_vendor(self, vendor_state: VendorIngestionState) -> None:
         vendor_state.status = IngestionStatus.RUNNING
