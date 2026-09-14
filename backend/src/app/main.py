@@ -4,6 +4,7 @@ import logging
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from http import HTTPStatus
+from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -110,6 +111,25 @@ def _bind_scheduled_job(
         )
  
     return scheduled_ingestion
+
+
+def _start_scheduler(
+    config: Settings,
+    configured_jobs: dict[str, ScheduledJob],
+) -> Any | None:
+    if not config.scheduler_may_run:
+        return None
+    if not configured_jobs:
+        raise ValueError("Scheduler enabled but no vendor is fully configured")
+    scheduler = build_scheduler(config, configured_jobs)
+    scheduler.start()
+    logger.info(
+        "Vendor scheduler started vendors=%s schedule=%s timezone=%s",
+        ",".join(configured_jobs),
+        config.ingestion_time,
+        config.ingestion_timezone,
+    )
+    return scheduler
  
  
 def create_app(
@@ -136,18 +156,7 @@ def create_app(
         _configure_application_logging(config.log_level)
         config.validate_auth_runtime()
         await store.initialize()
-        scheduler = None
-        if config.scheduler_may_run:
-            if not configured_jobs:
-                raise ValueError("Scheduler enabled but no vendor is fully configured")
-            scheduler = build_scheduler(config, configured_jobs)
-            scheduler.start()
-            logger.info(
-                "Vendor scheduler started vendors=%s schedule=%s timezone=%s",
-                ",".join(configured_jobs),
-                config.ingestion_time,
-                config.ingestion_timezone,
-            )
+        scheduler = _start_scheduler(config, configured_jobs)
         application.state.settings = config
         application.state.checkpoint_store = store
         application.state.bronze_writer = writer
