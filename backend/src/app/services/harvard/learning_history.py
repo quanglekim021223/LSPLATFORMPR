@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import posixpath
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 
 from app.core.config import Settings
@@ -24,6 +25,12 @@ DOMAIN = "learning_history"
 
 class HarvardHistoryIngestionError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True, slots=True)
+class _Polling:
+    now: Callable[[], datetime]
+    sleep: Callable[[float], Awaitable[None]]
 
 
 async def ingest_learning_history(
@@ -55,6 +62,7 @@ async def ingest_learning_history(
     seed_existing = not delta.has_state
 
     failures: list[tuple[str, bool]] = []
+    polling = _Polling(now, sleep)
     report_dates = _report_dates(
         settings, vendor, listed_files, first_report_date, last_report_date
     )
@@ -72,8 +80,7 @@ async def ingest_learning_history(
             metadata_by_path,
             delta,
             seed_existing,
-            now=now,
-            sleep=sleep,
+            polling=polling,
         )
         if failure is not None:
             failures.append(failure)
@@ -190,8 +197,7 @@ async def _ingest_report_date(
     delta: RecordDelta,
     seed_existing: bool,
     *,
-    now: Callable[[], datetime],
-    sleep: Callable[[float], Awaitable[None]],
+    polling: _Polling,
 ) -> tuple[str, bool] | None:
     file_name = f"{vendor.report_filename_prefix}{report_date:%Y%m%d}.csv"
     remote_path = posixpath.join(settings.harvard_sftp_remote_dir, file_name)
@@ -209,8 +215,8 @@ async def _ingest_report_date(
             remote_path,
             file_name,
             poll=report_date == last_report_date,
-            now=now,
-            sleep=sleep,
+            now=polling.now,
+            sleep=polling.sleep,
         )
         source_records_count = validate_history_csv(remote_file.content, vendor.vendor)
         records = records_from_bytes(remote_file.content, "csv")

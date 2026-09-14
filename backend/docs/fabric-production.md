@@ -151,12 +151,13 @@ Không chọn đại checkpoint của một mock test. Checkpoint phải tương
 Từ `backend/`, sau khi đặt Fabric target trong environment và đăng nhập Azure:
 
 ```bash
-../.venv/bin/python -m app.fabric_seed \
+PYTHONPATH=src ../.venv/bin/python scripts/fabric_seed.py \
   --vendor levelup \
   --checkpoint /absolute/path/to/audited/checkpoint.db \
   --confirm-already-published
 ```
 
+Lệnh cũ `../.venv/bin/python -m app.fabric_seed` vẫn được giữ để tương thích.
 Lệnh chỉ seed Blob state trống, kiểm tra latest run thành công, watermark/domain,
 full-sync scope cho history và inventory của LevelUP. Nó không ghi bảng Fabric
 và không overwrite checkpoint đã tồn tại. Nếu dùng checkout chưa cài package,

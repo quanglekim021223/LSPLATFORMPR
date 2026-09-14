@@ -52,6 +52,18 @@ def _coursera_detail_ids(records: list[dict[str, Any]]) -> list[str]:
     return ids
 
 
+async def _record_catalog_page(
+    store: Any,
+    vendor: str,
+    run_id: str,
+    start: int,
+    records: list[dict[str, Any]],
+) -> None:
+    await store.record_completed_page(run_id, "course_catalog", start, len(records))
+    if vendor == "coursera":
+        await store.add_courses(run_id, _coursera_detail_ids(records))
+
+
 async def ingest_raw_catalog(
     settings: Any,
     client: Any,
@@ -110,9 +122,7 @@ async def ingest_raw_catalog(
                 fetched_at=datetime.now(UTC),
             )
         )
-        await store.record_completed_page(run_id, "course_catalog", start, len(records))
-        if vendor == "coursera":
-            await store.add_courses(run_id, _coursera_detail_ids(records))
+        await _record_catalog_page(store, vendor, run_id, start, records)
         if following is None:
             break
         start = following

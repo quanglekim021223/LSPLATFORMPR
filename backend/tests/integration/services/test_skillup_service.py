@@ -293,7 +293,8 @@ async def test_skillup_snapshot_only_writes_changed_pages(
         payload = valid_response(request.url.path)
         if request.url.path == "/learning/materials" and changed:
             item = payload["items"]
-            assert isinstance(item, list) and isinstance(item[0], dict)
+            assert isinstance(item, list)
+            assert isinstance(item[0], dict)
             item[0]["title"] = "Updated Python Foundations"
         return response(request, 200, payload)
 

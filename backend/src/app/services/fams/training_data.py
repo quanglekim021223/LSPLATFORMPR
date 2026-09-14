@@ -60,6 +60,18 @@ def _fingerprint_scope(filters: Mapping[str, str] | None) -> str:
     return f"{CONTENT_FINGERPRINT_SCOPE}:filtered:{filter_hash}"
 
 
+async def _seed_delta_state(
+    delta: RecordDelta,
+    records: list[Any],
+    run_id: str,
+) -> None:
+    if delta.has_state:
+        return
+    selection = delta.select(records)
+    if selection.indexes:
+        await delta.commit(selection, run_id)
+
+
 async def ingest_training_data(
     client: FAMSClient,
     checkpoints: CheckpointStore,
@@ -98,14 +110,8 @@ async def ingest_training_data(
         student_delta = await RecordDelta.load(checkpoints, VENDOR, STUDENT_TABLE)
 
         if previous_fingerprint == fingerprint:
-            if not class_delta.has_state:
-                class_selection = class_delta.select(class_list)
-                if class_selection.indexes:
-                    await class_delta.commit(class_selection, run_id)
-            if not student_delta.has_state:
-                student_selection = student_delta.select(student_list)
-                if student_selection.indexes:
-                    await student_delta.commit(student_selection, run_id)
+            await _seed_delta_state(class_delta, class_list, run_id)
+            await _seed_delta_state(student_delta, student_list, run_id)
             logger.info(
                 "FAMS training data unchanged class_count=%d student_count=%d",
                 class_count,

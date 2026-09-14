@@ -108,6 +108,10 @@ def publisher_at(root, *, fail_after_write=False):
     return publish
 
 
+def no_op_publisher(*_args):
+    pass
+
+
 def test_incremental_run_restores_deleted_bronze_record_without_full_pull(tmp_path):
     state, calls = State(), []
     records = [{"id": str(index), "name": "original"} for index in range(50_000)]
@@ -171,13 +175,9 @@ def test_checkpoint_and_delta_retry_after_ambiguous_publish(tmp_path):
     records = [{"id": str(i), "name": "original", "skills": [1, 2]} for i in range(50)]
     first = runner_for(records, calls)
     publish = publisher_at(tmp_path / "fabric")
+    failing_publish = publisher_at(tmp_path / "fabric", fail_after_write=True)
     with pytest.raises(RuntimeError, match="lost response"):
-        execute_at(
-            tmp_path / "first",
-            state,
-            first,
-            publisher_at(tmp_path / "fabric", fail_after_write=True),
-        )
+        execute_at(tmp_path / "first", state, first, failing_publish)
     assert DeltaTable(tmp_path / "fabric" / TABLE).count() == 50
     # A new process/temp directory replays the pending batch without re-pulling.
     execute_at(tmp_path / "retry", state, first, publish)
@@ -223,30 +223,26 @@ def test_partial_ingestion_never_publishes_or_advances_checkpoint(tmp_path, stat
     publish = publisher_at(tmp_path / "fabric")
     execute_at(tmp_path / "first", state, runner_for([{"id": "1"}], calls), publish)
     committed = state.payload
+    failed_runner = runner_for([{"id": "2"}], calls, status=status)
     with pytest.raises(RuntimeError, match="did not complete"):
-        execute_at(
-            tmp_path / "failed", state, runner_for([{"id": "2"}], calls, status=status), publish
-        )
+        execute_at(tmp_path / "failed", state, failed_runner, publish)
     assert state.payload == committed
     assert DeltaTable(tmp_path / "fabric" / TABLE).count() == 1
 
 
 def test_missing_checkpoint_does_not_accidentally_full_pull(tmp_path):
     state, calls = State(), []
+    runner = runner_for([], calls)
     with pytest.raises(RuntimeError, match="Missing durable checkpoint"):
-        execute_at(tmp_path / "first", state, runner_for([], calls), lambda *_: None, allow=False)
+        execute_at(tmp_path / "first", state, runner, no_op_publisher, allow=False)
     assert calls == []
 
 
 def test_missing_raw_fails_before_checkpoint_commit(tmp_path):
     state, calls = State(), []
+    runner = runner_for([{"id": "1"}], calls, write=False)
     with pytest.raises(ValueError, match="Prepared count differs"):
-        execute_at(
-            tmp_path / "missing",
-            state,
-            runner_for([{"id": "1"}], calls, write=False),
-            lambda *_: None,
-        )
+        execute_at(tmp_path / "missing", state, runner, no_op_publisher)
     assert state.payload is None
 
 

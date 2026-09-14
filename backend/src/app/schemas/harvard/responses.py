@@ -17,6 +17,7 @@ from pydantic import (
 NonNegativeInt = Annotated[int, Field(strict=True, ge=0)]
 PositiveInt = Annotated[int, Field(strict=True, gt=0)]
 ModelT = TypeVar("ModelT", bound="HarvardContractModel")
+PRODUCT_ID_HEADER = "Product ID"
 
 
 class HarvardResponseContractError(RuntimeError):
@@ -80,7 +81,7 @@ class HarvardHMMHistoryRow(HarvardCSVModel):
     event_name: StrictStr = Field(alias="EventName")
     title: StrictStr = Field(alias="Title")
     product: StrictStr = Field(
-        alias="Product", validation_alias=AliasChoices("Product", "Product ID")
+        alias="Product", validation_alias=AliasChoices("Product", PRODUCT_ID_HEADER)
     )
 
 
@@ -94,7 +95,7 @@ class HarvardSparkHistoryRow(HarvardCSVModel):
     event_name: StrictStr = Field(alias="Event Name")
     title: StrictStr = Field(alias="Title")
     asset_type: StrictStr = Field(alias="Asset Type")
-    product_id: StrictStr = Field(alias="Product ID")
+    product_id: StrictStr = Field(alias=PRODUCT_ID_HEADER)
     skills: StrictStr = Field(alias="Skills")
     duration: StrictStr = Field(alias="Duration")
     registration_date: StrictStr = Field(alias="Registration Date", pattern=r"^\d{4}-\d{2}-\d{2}$")
@@ -130,8 +131,11 @@ def validate_history_csv(payload: bytes, vendor: str) -> int:
         ) from exc
     reader = csv.DictReader(io.StringIO(text, newline=""))
     expected_headers = [field.alias or name for name, field in model.model_fields.items()]
-    if vendor == "harvard_hmm" and reader.fieldnames == [*expected_headers[:-1], "Product ID"]:
-        expected_headers[-1] = "Product ID"
+    if vendor == "harvard_hmm" and reader.fieldnames == [
+        *expected_headers[:-1],
+        PRODUCT_ID_HEADER,
+    ]:
+        expected_headers[-1] = PRODUCT_ID_HEADER
     if reader.fieldnames != expected_headers:
         raise HarvardResponseContractError(
             "Harvard Learning History contract validation failed: CSV headers mismatch"

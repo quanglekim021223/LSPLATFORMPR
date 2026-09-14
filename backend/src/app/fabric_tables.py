@@ -179,6 +179,22 @@ def _write_records(
         counts[table] = counts.get(table, 0) + len(chunk)
 
 
+def _selected_records(
+    records: list[dict[str, Any]],
+    indexes: object,
+) -> list[dict[str, Any]]:
+    if indexes is None:
+        return records
+    if (
+        not isinstance(indexes, list)
+        or any(not isinstance(index, int) for index in indexes)
+        or any(index < 0 or index >= len(records) for index in indexes)
+        or len(indexes) != len(set(indexes))
+    ):
+        raise ValueError("Invalid selected record index")
+    return [records[index] for index in indexes]
+
+
 def _build_entry(
     manifest_path: Path,
     entry: dict[str, Any],
@@ -203,15 +219,7 @@ def _build_entry(
         records = records_from_bytes(raw, record_path)
         source_total += len(records)
         indexes = selected.get(record_path) if selected is not None else None
-        if indexes is not None:
-            if (
-                not isinstance(indexes, list)
-                or any(not isinstance(index, int) for index in indexes)
-                or any(index < 0 or index >= len(records) for index in indexes)
-                or len(indexes) != len(set(indexes))
-            ):
-                raise ValueError("Invalid selected record index")
-            records = [records[index] for index in indexes]
+        records = _selected_records(records, indexes)
         total += len(records)
         if records:
             _write_records(

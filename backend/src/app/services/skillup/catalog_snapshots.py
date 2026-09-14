@@ -26,6 +26,49 @@ TABLES = {
 logger = logging.getLogger(__name__)
 
 
+async def _write_snapshot_delta(
+    writer: BronzeWriter,
+    delta: RecordDelta,
+    records: list[dict[str, Any]],
+    raw_payload: bytes,
+    params: dict[str, Any],
+    domain: str,
+    ingestion_date: str,
+    run_id: str,
+    page_number: int,
+    *,
+    changed: bool,
+    seed_existing: bool,
+) -> int:
+    if not changed and not seed_existing:
+        return 0
+    selection = delta.select(records)
+    if not changed:
+        if selection.indexes:
+            # Upgrade old page-only checkpoints without replaying Bronze.
+            await delta.commit(selection, run_id)
+        return 0
+    if not selection.indexes:
+        return 0
+    await writer.write_page(
+        PageWrite(
+            vendor=VENDOR,
+            data_domain=domain,
+            ingestion_date=ingestion_date,
+            run_id=run_id,
+            offset=page_number,
+            raw_payload=raw_payload,
+            records_count=len(selection.indexes),
+            source_records_count=len(records),
+            selected_record_indexes={"items": selection.indexes},
+            request_parameters=params,
+            fetched_at=datetime.now(UTC),
+        )
+    )
+    await delta.commit(selection, run_id)
+    return len(selection.indexes)
+
+
 async def ingest_learning_resources(
     settings: Settings,
     client: SkillUpClient,
@@ -119,32 +162,19 @@ async def _ingest_snapshot(
             scope = f"{CONTENT_FINGERPRINT_SCOPE}:{page_number}"
             previous = await checkpoints.get_watermark(VENDOR, domain, scope)
             changed = previous != fingerprint
-            written_records = 0
-            if changed:
-                selection = delta.select(contract.items)
-                if selection.indexes:
-                    await writer.write_page(
-                        PageWrite(
-                            vendor=VENDOR,
-                            data_domain=domain,
-                            ingestion_date=ingestion_date,
-                            run_id=run_id,
-                            offset=page_number,
-                            raw_payload=raw_payload,
-                            records_count=len(selection.indexes),
-                            source_records_count=records_count,
-                            selected_record_indexes={"items": selection.indexes},
-                            request_parameters=params,
-                            fetched_at=datetime.now(UTC),
-                        )
-                    )
-                    await delta.commit(selection, run_id)
-                    written_records = len(selection.indexes)
-            elif seed_existing:
-                selection = delta.select(contract.items)
-                if selection.indexes:
-                    # Upgrade old page-only checkpoints without replaying Bronze.
-                    await delta.commit(selection, run_id)
+            written_records = await _write_snapshot_delta(
+                writer,
+                delta,
+                contract.items,
+                raw_payload,
+                params,
+                domain,
+                ingestion_date,
+                run_id,
+                page_number,
+                changed=changed,
+                seed_existing=seed_existing,
+            )
             await checkpoints.record_completed_page(
                 run_id,
                 domain,

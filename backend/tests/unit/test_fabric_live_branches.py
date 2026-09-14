@@ -92,8 +92,9 @@ def test_skillup_detects_silent_page_cap():
     progress.observe(1, 1, 100, 50, True)
     with pytest.raises(ValueError, match="total changed"):
         progress.observe(2, 0, 0, 0, False)
+    capped_progress = PageProgress()
     with pytest.raises(ValueError, match="before the advertised"):
-        PageProgress().observe(1, 1, 100, 50, False)
+        capped_progress.observe(1, 1, 100, 50, False)
 
 
 def test_lost_blob_lease_prevents_state_commit(tmp_path):
