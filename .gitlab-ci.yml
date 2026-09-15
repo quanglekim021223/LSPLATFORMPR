@@ -55,6 +55,7 @@ build-function-dev:
         -r requirements.txt
 
     - cp function_app.py host.json requirements.txt pyproject.toml "$CI_PROJECT_DIR/.function-build/"
+    - cp "$CI_PROJECT_DIR/custom-ca.crt" "$CI_PROJECT_DIR/.function-build/custom-ca.crt"
     - cp -R src "$CI_PROJECT_DIR/.function-build/"
     - python -m compileall -q "$CI_PROJECT_DIR/.function-build/function_app.py" "$CI_PROJECT_DIR/.function-build/src"
 
@@ -103,6 +104,7 @@ build-function-dev:
           names = set(archive.namelist())
 
       required = {
+          'custom-ca.crt',
           'host.json',
           'function_app.py',
           'requirements.txt',
@@ -166,3 +168,12 @@ deploy-dev:
         --name "$FUNCTIONAPP_NAME" \
         --src "$CI_PROJECT_DIR/functionapp.zip" \
         --build-remote false
+
+    - |
+      az functionapp config appsettings set \
+        --resource-group "$RESOURCE_GROUP" \
+        --name "$FUNCTIONAPP_NAME" \
+        --settings \
+          SSL_CERT_FILE=/home/site/wwwroot/custom-ca.crt \
+          REQUESTS_CA_BUNDLE=/home/site/wwwroot/custom-ca.crt \
+        --output none

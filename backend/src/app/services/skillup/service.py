@@ -99,7 +99,9 @@ class SkillUpJob:
             ) = await self._assessment_range(start_date, end_date)
             domains = set(await self.checkpoints.domains_to_process(current_run_id))
             tasks: list[Awaitable[None]] = []
+            task_domains: list[str] = []
             if SKILL_TAXONOMY in domains:
+                task_domains.append(SKILL_TAXONOMY)
                 tasks.append(
                     ingest_skill_taxonomy(
                         self.settings,
@@ -112,6 +114,7 @@ class SkillUpJob:
                     )
                 )
             if SKILL_INVENTORY in domains:
+                task_domains.append(SKILL_INVENTORY)
                 tasks.append(
                     ingest_skill_inventory(
                         self.settings,
@@ -125,6 +128,7 @@ class SkillUpJob:
                     )
                 )
             if ASSESSMENT_HISTORY in domains:
+                task_domains.append(ASSESSMENT_HISTORY)
                 tasks.append(
                     ingest_assessment_history(
                         self.settings,
@@ -142,6 +146,7 @@ class SkillUpJob:
                     )
                 )
             if LEARNING_RESOURCES in domains:
+                task_domains.append(LEARNING_RESOURCES)
                 tasks.append(
                     ingest_learning_resources(
                         self.settings,
@@ -153,6 +158,7 @@ class SkillUpJob:
                     )
                 )
             if CERTIFICATES in domains:
+                task_domains.append(CERTIFICATES)
                 tasks.append(
                     ingest_certificates(
                         self.settings,
@@ -165,12 +171,33 @@ class SkillUpJob:
                 )
 
             results = await asyncio.gather(*tasks, return_exceptions=True)
-            errors = [result for result in results if isinstance(result, BaseException)]
+            errors = [
+                (domain, result)
+                for domain, result in zip(task_domains, results, strict=True)
+                if isinstance(result, BaseException)
+            ]
             has_terminal_failures = await self.checkpoints.has_terminal_domain_failures(
                 current_run_id
             )
             if errors or has_terminal_failures:
-                message = f"{len(errors)} SkillUp domain(s) failed in this run"
+                details = []
+                for domain, error in errors:
+                    detail = sanitize_text(error, self.client.sensitive_values())
+                    logger.error(
+                        "SkillUp domain failed run_id=%s domain=%s error_type=%s error=%s",
+                        current_run_id,
+                        domain,
+                        type(error).__name__,
+                        detail,
+                    )
+                    details.append(
+                        f"domain={domain} error_type={type(error).__name__} detail={detail}"
+                    )
+                message = sanitize_text(
+                    "; ".join(details)
+                    or "SkillUp domain checkpoint contains a terminal failure",
+                    self.client.sensitive_values(),
+                )
                 status = (
                     RunStatus.PARTIAL_FAILURE
                     if len(errors) < len(tasks) or has_terminal_failures

@@ -441,6 +441,10 @@ async def test_skillup_domain_failure_does_not_stop_other_domains(
     )
 
     assert summary.status == RunStatus.PARTIAL_FAILURE
+    assert summary.error_message is not None
+    assert "domain=skill_taxonomy" in summary.error_message
+    assert "error_type=HTTPStatusError" in summary.error_message
+    assert "500 Internal Server Error" in summary.error_message
     assert summary.records_by_domain == {
         "assessment_history": 1,
         "certificates": 1,
@@ -479,6 +483,29 @@ async def test_skillup_domain_failure_does_not_stop_other_domains(
         "/learning/materials": 2,
         "/certificates": 2,
     }
+
+
+@pytest.mark.asyncio
+async def test_skillup_failure_detail_redacts_api_key(
+    settings_factory: Callable[..., object],
+) -> None:
+    settings = settings_factory(skillup_api_key="secret-skillup-key")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise RuntimeError(f"request failed api_key={request.headers['x-api-key']}")
+
+    summary = await run_skillup_ingestion(
+        settings,  # type: ignore[arg-type]
+        transport=httpx.MockTransport(handler),
+        sleep=no_sleep,
+    )
+
+    assert summary.status == RunStatus.FAILED
+    assert summary.error_message is not None
+    assert "domain=skill_taxonomy" in summary.error_message
+    assert "error_type=RuntimeError" in summary.error_message
+    assert "secret-skillup-key" not in summary.error_message
+    assert "api_key=[REDACTED]" in summary.error_message
 
 
 @pytest.mark.asyncio
