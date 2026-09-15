@@ -179,6 +179,7 @@ class Settings(BaseSettings):
     fams_base_url: str = "https://fams.fa.edu.vn"
     fams_token: SecretStr = Field(default=SecretStr(""))
     fams_load_mode: Literal["full", "filtered"] = "full"
+    fams_full_start_date: str = "20000101"
     fams_status: str = ""
     fams_site: str = ""
     fams_actual_start_date_from: str = ""
@@ -497,7 +498,17 @@ class Settings(BaseSettings):
         if missing:
             raise ValueError(f"Missing FAMS configuration: {', '.join(missing)}")
 
-        if self.fams_load_mode == "filtered":
+        if self.fams_load_mode == "full":
+            try:
+                datetime.strptime(
+                    self.fams_full_start_date,
+                    "%Y-%m-%d" if "-" in self.fams_full_start_date else "%Y%m%d",
+                )
+            except ValueError as exc:
+                raise ValueError(
+                    "FAMS_FULL_START_DATE must use YYYYMMDD or YYYY-MM-DD"
+                ) from exc
+        else:
             self._validate_fams_filters()
 
     def _missing_fams_configuration(self) -> list[str]:

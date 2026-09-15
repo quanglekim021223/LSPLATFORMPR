@@ -26,7 +26,7 @@ DOMAINS = (DOMAIN,)
 
 def configured_filters(settings: Settings) -> dict[str, str] | None:
     if settings.fams_load_mode == "full":
-        return None
+        return {"actualStartDateFrom": settings.fams_full_start_date}
     values = {
         "status": settings.fams_status,
         "site": settings.fams_site,

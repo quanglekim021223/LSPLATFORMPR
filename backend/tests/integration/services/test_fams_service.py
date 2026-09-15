@@ -84,7 +84,7 @@ async def test_full_load_header_counts_and_exact_raw_bronze(
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/api/fsa-reports/training-data"
-        assert not request.url.params
+        assert dict(request.url.params) == {"actualStartDateFrom": "20000101"}
         assert request.headers["Fsa-Report-Api-Key"] == "test-fams-key"
         assert request.headers["Accept"] == "application/json"
         return httpx.Response(
@@ -152,11 +152,12 @@ async def test_filtered_load_sends_only_configured_filters(
 
 
 @pytest.mark.asyncio
-async def test_full_mode_ignores_all_filter_validation_and_sends_no_params(
+async def test_full_mode_ignores_filter_values_and_sends_only_start_date(
     settings_factory: Callable[..., object],
 ) -> None:
     settings = settings_factory(
         fams_load_mode="full",
+        fams_full_start_date="20000101",
         fams_status="NOT_A_FAMS_STATUS",
         fams_site="HN,,HCM",
         fams_actual_start_date_from="not-a-date",
@@ -167,7 +168,7 @@ async def test_full_mode_ignores_all_filter_validation_and_sends_no_params(
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal calls
         calls += 1
-        assert not request.url.params
+        assert dict(request.url.params) == {"actualStartDateFrom": "20000101"}
         return response(request, 200, _valid_payload())
 
     summary = await run_fams_ingestion(
@@ -178,6 +179,30 @@ async def test_full_mode_ignores_all_filter_validation_and_sends_no_params(
 
     assert summary.status == RunStatus.SUCCEEDED
     assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_full_mode_rejects_invalid_start_date_before_http_request(
+    settings_factory: Callable[..., object],
+) -> None:
+    settings = settings_factory(fams_load_mode="full", fams_full_start_date="not-a-date")
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return response(request, 200, _valid_payload())
+
+    summary = await run_fams_ingestion(
+        settings,  # type: ignore[arg-type]
+        transport=httpx.MockTransport(handler),
+        sleep=no_sleep,
+    )
+
+    assert summary.status == RunStatus.FAILED
+    assert calls == 0
+    assert summary.error_message is not None
+    assert "FAMS_FULL_START_DATE" in summary.error_message
 
 
 @pytest.mark.asyncio

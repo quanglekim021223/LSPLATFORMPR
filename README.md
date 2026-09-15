@@ -229,8 +229,9 @@ response passes its contract, the job compares an order-independent fingerprint 
 and `studentList` with the previous successful Full run. Changed data is stored as one exact raw
 `training_data` page; unchanged data completes successfully with zero new Bronze records and no
 duplicate file. Full and each Filtered parameter set keep separate fingerprints.
-`FAMS_LOAD_MODE=full` sends no query parameters.
-Full mode ignores filter values completely, including their validation. `FAMS_LOAD_MODE=filtered`
+`FAMS_LOAD_MODE=full` sends the required `actualStartDateFrom` query parameter from
+`FAMS_FULL_START_DATE` (default `20000101`) and ignores the filtered-mode values.
+`FAMS_LOAD_MODE=filtered`
 sends only non-empty `FAMS_STATUS`, `FAMS_SITE`,
 `FAMS_ACTUAL_START_DATE_FROM`, and `FAMS_ACTUAL_START_DATE_TO` values. Dates use `YYYYMMDD`.
 Filtered mode requires at least one of these four values; otherwise the job fails before making an

@@ -140,6 +140,21 @@ def test_fams_token_runtime_configuration(token: str) -> None:
         settings.validate_fams_runtime()
 
 
+def test_fams_full_start_date_runtime_configuration() -> None:
+    with patch.dict(
+        os.environ,
+        {
+            "FAMS_TOKEN": "fake-fams-token",
+            "FAMS_FULL_START_DATE": "20200101",
+        },
+        clear=True,
+    ):
+        settings = Settings(_env_file=None)
+
+    assert settings.fams_full_start_date == "20200101"
+    settings.validate_fams_runtime()
+
+
 def test_explicit_harvard_credentials_override_shared_keys() -> None:
     with patch.dict(
         os.environ,
