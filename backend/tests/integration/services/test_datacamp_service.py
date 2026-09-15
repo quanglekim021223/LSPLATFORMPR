@@ -299,6 +299,10 @@ async def test_domain_failure_is_isolated(
     )
 
     assert summary.status == RunStatus.PARTIAL_FAILURE
+    assert summary.error_message is not None
+    assert "domain=course_catalog_live" in summary.error_message
+    assert "error_type=HTTPStatusError" in summary.error_message
+    assert "500" in summary.error_message
     assert summary.records_by_domain == {
         "course_catalog_archived": 1,
         "learning_history": 1,

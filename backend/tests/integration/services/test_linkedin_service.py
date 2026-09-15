@@ -326,6 +326,9 @@ async def test_invalid_contract_fails_without_writing_raw_to_bronze(
     )
 
     assert summary.status == RunStatus.FAILED
+    assert summary.error_message is not None
+    assert "domain=course_catalog" in summary.error_message
+    assert "error_type=LinkedInResponseContractError" in summary.error_message
     assert summary.records_by_domain == {}
     raw_pages = list(settings.bronze_local_path.rglob("*.json"))  # type: ignore[attr-defined]
     response_pages = [path for path in raw_pages if path.name.startswith("offset=")]

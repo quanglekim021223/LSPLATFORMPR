@@ -90,7 +90,18 @@ class LevelUpJob:
                 current_run_id
             )
             if failed or has_terminal_failures:
-                message = f"{len(failed)} LevelUP course(s) failed in this run"
+                sample = failed[0] if failed else None
+                message = sanitize_text(
+                    (
+                        f"domain=learning_history failed_courses={len(failed)} "
+                        f"sample_id={sample.course_id} "
+                        f"detail={sample.error_message or 'unknown'}"
+                        if sample is not None
+                        else "LevelUP course checkpoint contains a terminal failure"
+                    ),
+                    self.client.sensitive_values(),
+                )
+                logger.error("LevelUP domain failed run_id=%s %s", current_run_id, message)
                 return await self.checkpoints.finish_run(
                     current_run_id,
                     RunStatus.PARTIAL_FAILURE,

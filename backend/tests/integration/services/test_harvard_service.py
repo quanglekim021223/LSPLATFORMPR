@@ -672,6 +672,11 @@ async def test_missing_sftp_file_causes_partial_failure_and_redacts_secrets(
     )
 
     assert summary.status == RunStatus.PARTIAL_FAILURE
+    assert summary.error_message is not None
+    assert "domain=learning_history" in summary.error_message
+    assert "error_type=HarvardHistoryIngestionError" in summary.error_message
+    assert "[REDACTED]" in summary.error_message
+    assert "test-sftp-password" not in summary.error_message
     with sqlite3.connect(settings.checkpoint_db_path) as connection:
         error = connection.execute(
             "SELECT error_message FROM checkpoints "
@@ -714,6 +719,10 @@ async def test_missing_catalog_configuration_only_fails_catalog_branch(
     )
 
     assert summary.status == RunStatus.PARTIAL_FAILURE
+    assert summary.error_message is not None
+    assert "domain=course_catalog" in summary.error_message
+    assert "error_type=ValueError" in summary.error_message
+    assert "HARVARD_HMM_CLIENT_ID" in summary.error_message
     assert list(settings.bronze_local_path.glob("harvard_hmm/learning_history/**/*.csv"))
 
 

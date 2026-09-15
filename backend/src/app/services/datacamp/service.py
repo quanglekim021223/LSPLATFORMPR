@@ -113,11 +113,28 @@ class DataCampJob:
                 ),
             ]
             results = await asyncio.gather(*tasks, return_exceptions=True)
-            errors = [result for result in results if isinstance(result, BaseException)]
+            errors = [
+                (domain, result)
+                for domain, result in zip(DOMAINS, results, strict=True)
+                if isinstance(result, BaseException)
+            ]
             has_terminal_failures = await self.checkpoints.has_terminal_domain_failures(
                 current_run_id
             )
             if errors or has_terminal_failures:
+                details = []
+                for domain, error in errors:
+                    detail = sanitize_text(error, self.client.sensitive_values())
+                    logger.error(
+                        "DataCamp domain failed run_id=%s domain=%s error_type=%s detail=%s",
+                        current_run_id,
+                        domain,
+                        type(error).__name__,
+                        detail,
+                    )
+                    details.append(
+                        f"domain={domain} error_type={type(error).__name__} detail={detail}"
+                    )
                 status = (
                     RunStatus.PARTIAL_FAILURE
                     if len(errors) < len(tasks) or has_terminal_failures
@@ -126,7 +143,11 @@ class DataCampJob:
                 return await self.checkpoints.finish_run(
                     current_run_id,
                     status,
-                    f"{len(errors)} DataCamp domain(s) failed in this run",
+                    sanitize_text(
+                        "; ".join(details)
+                        or "DataCamp domain checkpoint contains a terminal failure",
+                        self.client.sensitive_values(),
+                    ),
                 )
             return await self.checkpoints.finish_run(current_run_id, RunStatus.SUCCEEDED)
         except asyncio.CancelledError:

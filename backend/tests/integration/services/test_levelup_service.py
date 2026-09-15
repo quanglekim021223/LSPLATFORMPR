@@ -350,6 +350,10 @@ async def test_one_course_failure_does_not_stop_other_courses(
         sleep=no_sleep,
     )
     assert summary.status == RunStatus.PARTIAL_FAILURE
+    assert summary.error_message is not None
+    assert "domain=learning_history" in summary.error_message
+    assert "failed_courses=1" in summary.error_message
+    assert "400" in summary.error_message
     assert summary.courses_succeeded == 1
     assert summary.courses_failed == 1
     assert sorted(called) == ["/courses/bad/enrollments", "/courses/good/enrollments"]

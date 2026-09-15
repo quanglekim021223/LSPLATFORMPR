@@ -119,7 +119,12 @@ class CourseraJob:
             ]
             catalog_result, history_result = await asyncio.gather(*tasks, return_exceptions=True)
             results = (catalog_result, history_result)
-            errors = [result for result in results if isinstance(result, BaseException)]
+            pipeline_domains = (CATALOG_DOMAIN, LEARNING_HISTORY)
+            errors = [
+                (domain, result)
+                for domain, result in zip(pipeline_domains, results, strict=True)
+                if isinstance(result, BaseException)
+            ]
             failed_details: list[CourseResult] = []
             if isinstance(catalog_result, list):
                 failed_details = [result for result in catalog_result if not result.succeeded]
@@ -131,12 +136,33 @@ class CourseraJob:
                         current_run_id,
                     )
             if errors or failed_details:
+                details = []
+                for domain, error in errors:
+                    detail = sanitize_text(error, self.client.sensitive_values())
+                    logger.error(
+                        "Coursera domain failed run_id=%s domain=%s error_type=%s detail=%s",
+                        current_run_id,
+                        domain,
+                        type(error).__name__,
+                        detail,
+                    )
+                    details.append(
+                        f"domain={domain} error_type={type(error).__name__} detail={detail}"
+                    )
+                if failed_details:
+                    sample = failed_details[0]
+                    details.append(
+                        "domain=course_detail "
+                        f"failed_requests={len(failed_details)} "
+                        f"sample_id={sample.course_id} "
+                        f"detail={sample.error_message or 'unknown'}"
+                    )
                 status = (
                     RunStatus.FAILED if len(errors) == len(tasks) else RunStatus.PARTIAL_FAILURE
                 )
-                message = (
-                    f"{len(errors)} Coursera domain pipeline(s) and "
-                    f"{len(failed_details)} Course Detail request(s) failed"
+                message = sanitize_text(
+                    "; ".join(details),
+                    self.client.sensitive_values(),
                 )
                 return await self.checkpoints.finish_run(current_run_id, status, message)
             return await self.checkpoints.finish_run(current_run_id, RunStatus.SUCCEEDED)

@@ -157,6 +157,9 @@ async def test_non_list_elements_fail_without_entering_bronze(
     )
 
     assert summary.status == RunStatus.FAILED
+    assert summary.error_message is not None
+    assert "domain=course_catalog" in summary.error_message
+    assert "error_type=CourseraResponseContractError" in summary.error_message
     assert summary.records_by_domain == {}
     assert not list(settings.bronze_local_path.rglob("offset=*.json"))  # type: ignore[attr-defined]
 
@@ -211,6 +214,10 @@ async def test_one_detail_failure_is_isolated(
     )
 
     assert summary.status == RunStatus.PARTIAL_FAILURE
+    assert summary.error_message is not None
+    assert "domain=course_detail" in summary.error_message
+    assert "failed_requests=1" in summary.error_message
+    assert "404" in summary.error_message
     assert summary.courses_succeeded == 1
     assert summary.courses_failed == 1
     assert summary.records_by_domain["course_detail"] == 1

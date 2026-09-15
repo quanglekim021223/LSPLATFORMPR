@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import posixpath
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -21,6 +22,7 @@ from app.schemas.harvard import HarvardResponseContractError, validate_history_c
 from app.services.record_delta import RecordDelta
 
 DOMAIN = "learning_history"
+logger = logging.getLogger(__name__)
 
 
 class HarvardHistoryIngestionError(RuntimeError):
@@ -87,7 +89,20 @@ async def ingest_learning_history(
 
     if failures:
         retryable = any(item[1] for item in failures)
-        message = f"{len(failures)} Harvard Learning History file(s) failed"
+        message = sanitize_text(
+            f"{len(failures)} Harvard Learning History file(s) failed; "
+            f"sample_detail={failures[0][0]}",
+            settings.harvard_secrets(vendor.vendor),
+        )
+        logger.error(
+            "Harvard Learning History failed vendor=%s run_id=%s "
+            "failed_files=%d retryable=%s sample_detail=%s",
+            vendor.vendor,
+            run_id,
+            len(failures),
+            retryable,
+            failures[0][0],
+        )
         await checkpoints.mark_domain(
             run_id,
             DOMAIN,

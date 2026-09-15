@@ -75,15 +75,33 @@ class HarvardJob:
                 self._run_history_branch(current_run_id, ingestion_date),
             ]
             results = await asyncio.gather(*tasks, return_exceptions=True)
-            errors = [result for result in results if isinstance(result, BaseException)]
+            errors = [
+                (domain, result)
+                for domain, result in zip(DOMAINS, results, strict=True)
+                if isinstance(result, BaseException)
+            ]
             if errors:
+                details = []
+                for domain, error in errors:
+                    detail = sanitize_text(error, self.sensitive_values())
+                    logger.error(
+                        "%s domain failed run_id=%s domain=%s error_type=%s detail=%s",
+                        self.vendor.display_name,
+                        current_run_id,
+                        domain,
+                        type(error).__name__,
+                        detail,
+                    )
+                    details.append(
+                        f"domain={domain} error_type={type(error).__name__} detail={detail}"
+                    )
                 status = (
                     RunStatus.FAILED if len(errors) == len(tasks) else RunStatus.PARTIAL_FAILURE
                 )
                 return await self.checkpoints.finish_run(
                     current_run_id,
                     status,
-                    f"{len(errors)} {self.vendor.display_name} domain(s) failed",
+                    sanitize_text("; ".join(details), self.sensitive_values()),
                 )
             return await self.checkpoints.finish_run(current_run_id, RunStatus.SUCCEEDED)
         except asyncio.CancelledError:
