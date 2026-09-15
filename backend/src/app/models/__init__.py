@@ -4,6 +4,14 @@ from app.models.ingestion import (
     PageWrite,
     RunStatus,
     RunSummary,
+    SafeIngestionError,
 )
 
-__all__ = ["BinaryFileWrite", "CourseResult", "PageWrite", "RunStatus", "RunSummary"]
+__all__ = [
+    "BinaryFileWrite",
+    "CourseResult",
+    "PageWrite",
+    "RunStatus",
+    "RunSummary",
+    "SafeIngestionError",
+]

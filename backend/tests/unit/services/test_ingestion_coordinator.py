@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.models import RunStatus, RunSummary
+from app.models import RunStatus, RunSummary, SafeIngestionError
 from app.services.ingestion_coordinator import (
     IngestionAlreadyRunning,
     IngestionCoordinator,
@@ -99,6 +99,24 @@ async def test_prevents_duplicate_submission_and_records_backend_error() -> None
     assert failed is not None
     assert failed.vendor_runs[0].status == IngestionStatus.FAILED
     assert failed.vendor_runs[0].error_message is not None
+
+
+@pytest.mark.asyncio
+async def test_exposes_only_safe_operational_diagnostics() -> None:
+    async def safe_failure() -> RunSummary:
+        raise SafeIngestionError(
+            "stage=vendor_pull vendor=levelup error_type=VendorRunFailed detail=HTTP 401"
+        )
+
+    coordinator = IngestionCoordinator({"levelup": safe_failure})
+    started = await coordinator.start(["levelup"])
+
+    assert await wait_for_terminal(coordinator, started.job_id) == IngestionStatus.FAILED
+    failed = await coordinator.get(started.job_id)
+    assert failed is not None
+    assert failed.vendor_runs[0].error_message == (
+        "stage=vendor_pull vendor=levelup error_type=VendorRunFailed detail=HTTP 401"
+    )
 
 
 @pytest.mark.asyncio

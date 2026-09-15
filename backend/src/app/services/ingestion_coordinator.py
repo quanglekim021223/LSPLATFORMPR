@@ -10,7 +10,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-from app.models import RunSummary
+from app.models import RunSummary, SafeIngestionError
 
 logger = logging.getLogger(__name__)
 IngestionJob = Callable[[], Awaitable[object]]
@@ -209,6 +209,11 @@ class IngestionCoordinator:
             await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _run(self, state: IngestionState) -> None:
+        logger.info(
+            "Manual ingestion started job_id=%s vendors=%s",
+            state.job_id,
+            ",".join(vendor.vendor for vendor in state.vendor_runs),
+        )
         state.status = IngestionStatus.RUNNING
         state.started_at = datetime.now(UTC)
         state.finished_at = None
@@ -242,6 +247,12 @@ class IngestionCoordinator:
         finally:
             state.finished_at = datetime.now(UTC)
             await self._persist(state)
+            logger.info(
+                "Manual ingestion finished job_id=%s status=%s records=%d",
+                state.job_id,
+                state.status.value,
+                state.total_records,
+            )
             if self._active_job_id == state.job_id:
                 self._active_job_id = None
 
@@ -250,6 +261,7 @@ class IngestionCoordinator:
             await self._backend.save(state)
 
     async def _run_vendor(self, vendor_state: VendorIngestionState) -> None:
+        logger.info("Manual vendor ingestion started vendor=%s", vendor_state.vendor)
         vendor_state.status = IngestionStatus.RUNNING
         vendor_state.started_at = datetime.now(UTC)
         try:
@@ -268,10 +280,26 @@ class IngestionCoordinator:
         except asyncio.CancelledError:
             vendor_state.status = IngestionStatus.CANCELLED
             raise
-        except Exception:
-            logger.exception("Manual ingestion failed vendor=%s", vendor_state.vendor)
+        except Exception as exc:
             vendor_state.status = IngestionStatus.FAILED
-            vendor_state.error_message = "Vendor ingestion failed before producing a run summary"
+            vendor_state.error_message = (
+                str(exc)
+                if isinstance(exc, SafeIngestionError)
+                else "Vendor ingestion failed before producing a run summary"
+            )
+            logger.error(
+                "Manual vendor ingestion failed vendor=%s error_type=%s diagnostic=%s",
+                vendor_state.vendor,
+                type(exc).__name__,
+                vendor_state.error_message,
+            )
         finally:
             if vendor_state.finished_at is None:
                 vendor_state.finished_at = datetime.now(UTC)
+            logger.info(
+                "Manual vendor ingestion finished vendor=%s status=%s run_id=%s records=%d",
+                vendor_state.vendor,
+                vendor_state.status.value,
+                vendor_state.run_id or "none",
+                vendor_state.total_records,
+            )

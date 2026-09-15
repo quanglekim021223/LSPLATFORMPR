@@ -37,6 +37,7 @@ def table_row(
     run_id: str,
     source_vendor: str,
     source_domain: str,
+    source_file: str | None = None,
 ) -> dict[str, str | None]:
     row: dict[str, str | None] = {}
     for key, value in record.items():
@@ -52,6 +53,8 @@ def table_row(
             "_source_domain": source_domain,
         }
     )
+    if source_file is not None:
+        row["_source_file"] = source_file
     return row
 
 
@@ -60,6 +63,13 @@ def entry_ingested_at(entry: dict[str, Any]) -> str:
     if not isinstance(value, str) or not value:
         raise ValueError("Raw manifest entry is missing its ingestion timestamp")
     return value
+
+
+def source_file_type(mappings: tuple[tuple[str, str], ...]) -> str:
+    formats = {"csv" if record_path == "csv" else "json" for _, record_path in mappings}
+    if len(formats) != 1:
+        raise ValueError("Bronze domain mixes source file types")
+    return formats.pop()
 
 
 def _skillup_skills(record: dict[str, Any]) -> list[dict[str, Any]]:
@@ -159,6 +169,7 @@ def _write_records(
     run_id: str,
     vendor: str,
     domain: str,
+    source_file: str | None,
 ) -> None:
     destination = output / table
     destination.mkdir(parents=True, exist_ok=True)
@@ -171,6 +182,7 @@ def _write_records(
                 run_id=run_id,
                 source_vendor=vendor,
                 source_domain=domain,
+                source_file=source_file,
             )
             for row in records[offset : offset + 25_000]
         ]
@@ -208,6 +220,7 @@ def _build_entry(
 ) -> None:
     raw = _verified_raw(manifest_path, entry)
     ingested_at = entry_ingested_at(entry)
+    source_file = source_file_type(mappings)
     total = 0
     source_total = 0
     selected = entry.get("selected_record_indexes")
@@ -231,6 +244,7 @@ def _build_entry(
                 run_id=run_id,
                 vendor=vendor,
                 domain=domain,
+                source_file=source_file,
             )
     expected_source_total = entry.get("source_records_count", source_total)
     if source_total != expected_source_total:

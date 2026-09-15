@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from uuid import uuid4
@@ -10,7 +11,7 @@ import pytest
 from deltalake import DeltaTable
 
 from app.core.config import Settings
-from app.fabric_job import execute, publish_tables
+from app.fabric_job import diagnostic_stage, execute, publish_tables
 from app.fabric_state import unpack_state
 from app.fabric_tables import (
     append_table,
@@ -44,7 +45,9 @@ class State:
         self.payload = path.read_bytes()
 
 
-def runner_for(records, calls, *, status=RunStatus.SUCCEEDED, write=True):
+def runner_for(
+    records, calls, *, status=RunStatus.SUCCEEDED, write=True, error_message=None
+):
     async def runner(config, checkpoint_store, bronze_writer):
         calls.append(await read_watermark(checkpoint_store))
         assert config.history_periodic_resync_enabled is False
@@ -66,7 +69,7 @@ def runner_for(records, calls, *, status=RunStatus.SUCCEEDED, write=True):
             )
         await checkpoint_store.record_completed_page(run_id, "course_catalog", 0, len(records))
         await checkpoint_store.set_watermark("levelup", "course_catalog", str(len(calls)), run_id)
-        return await checkpoint_store.finish_run(run_id, status)
+        return await checkpoint_store.finish_run(run_id, status, error_message)
 
     return runner
 
@@ -176,7 +179,7 @@ def test_checkpoint_and_delta_retry_after_ambiguous_publish(tmp_path):
     first = runner_for(records, calls)
     publish = publisher_at(tmp_path / "fabric")
     failing_publish = publisher_at(tmp_path / "fabric", fail_after_write=True)
-    with pytest.raises(RuntimeError, match="lost response"):
+    with pytest.raises(RuntimeError, match="stage=fabric_publish.*RuntimeError"):
         execute_at(tmp_path / "first", state, first, failing_publish)
     assert DeltaTable(tmp_path / "fabric" / TABLE).count() == 50
     # A new process/temp directory replays the pending batch without re-pulling.
@@ -209,7 +212,7 @@ def test_checkpoint_failure_retries_without_appending_twice(tmp_path):
     state.fail_commit = True
     runner = runner_for([{"id": "1"}], calls)
     publish = publisher_at(tmp_path / "fabric")
-    with pytest.raises(RuntimeError, match="checkpoint unavailable"):
+    with pytest.raises(RuntimeError, match="stage=checkpoint_commit.*RuntimeError"):
         execute_at(tmp_path / "first", state, runner, publish)
     state.fail_commit = False
     execute_at(tmp_path / "retry", state, runner, publish)
@@ -224,7 +227,7 @@ def test_partial_ingestion_never_publishes_or_advances_checkpoint(tmp_path, stat
     execute_at(tmp_path / "first", state, runner_for([{"id": "1"}], calls), publish)
     committed = state.payload
     failed_runner = runner_for([{"id": "2"}], calls, status=status)
-    with pytest.raises(RuntimeError, match="did not complete"):
+    with pytest.raises(RuntimeError, match="stage=vendor_pull.*VendorRunFailed"):
         execute_at(tmp_path / "failed", state, failed_runner, publish)
     assert state.payload == committed
     assert DeltaTable(tmp_path / "fabric" / TABLE).count() == 1
@@ -233,15 +236,47 @@ def test_partial_ingestion_never_publishes_or_advances_checkpoint(tmp_path, stat
 def test_missing_checkpoint_does_not_accidentally_full_pull(tmp_path):
     state, calls = State(), []
     runner = runner_for([], calls)
-    with pytest.raises(RuntimeError, match="Missing durable checkpoint"):
+    with pytest.raises(RuntimeError, match="MissingDurableCheckpoint"):
         execute_at(tmp_path / "first", state, runner, no_op_publisher, allow=False)
     assert calls == []
+
+
+def test_failed_vendor_exposes_sanitized_diagnostic(tmp_path):
+    state, calls = State(), []
+    runner = runner_for(
+        [],
+        calls,
+        status=RunStatus.FAILED,
+        error_message="HTTP 401 password=should-not-appear",
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        execute_at(tmp_path / "failed", state, runner, no_op_publisher)
+
+    message = str(exc_info.value)
+    assert "stage=vendor_pull" in message
+    assert "HTTP 401" in message
+    assert "should-not-appear" not in message
+
+
+def test_stage_log_contains_location_without_raw_exception(caplog):
+    with caplog.at_level(logging.INFO), pytest.raises(RuntimeError) as exc_info:
+        with diagnostic_stage("levelup", "fabric_publish"):
+            raise RuntimeError("password=must-not-be-logged")
+
+    logs = caplog.text
+    assert "Fabric stage started vendor=levelup stage=fabric_publish" in logs
+    assert "Fabric stage failed vendor=levelup stage=fabric_publish" in logs
+    assert "error_type=RuntimeError" in logs
+    assert "location=test_fabric_job.py" in logs
+    assert "must-not-be-logged" not in logs
+    assert "stage=fabric_publish" in str(exc_info.value)
 
 
 def test_missing_raw_fails_before_checkpoint_commit(tmp_path):
     state, calls = State(), []
     runner = runner_for([{"id": "1"}], calls, write=False)
-    with pytest.raises(ValueError, match="Prepared count differs"):
+    with pytest.raises(RuntimeError, match="stage=bronze_batch.*RecordCountMismatch"):
         execute_at(tmp_path / "missing", state, runner, no_op_publisher)
     assert state.payload is None
 

@@ -95,4 +95,18 @@ async def scheduled_vendor_ingestion(timer: func.TimerRequest) -> None:
 )
 async def manual_vendor_ingestion(message: func.QueueMessage) -> None:
     queued = QueuedIngestion.model_validate_json(message.get_body())
-    await ingestion_coordinator.run_queued(queued)
+    logger.info(
+        "Azure queue ingestion received job_id=%s vendors=%s",
+        queued.job_id,
+        ",".join(queued.vendors),
+    )
+    try:
+        await ingestion_coordinator.run_queued(queued)
+    except Exception as exc:
+        logger.error(
+            "Azure queue ingestion failed job_id=%s error_type=%s",
+            queued.job_id,
+            type(exc).__name__,
+        )
+        raise
+    logger.info("Azure queue ingestion completed job_id=%s", queued.job_id)

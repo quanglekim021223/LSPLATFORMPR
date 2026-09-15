@@ -15,6 +15,10 @@ class RunStatus(StrEnum):
     FAILED = "failed"
 
 
+class SafeIngestionError(RuntimeError):
+    """An operational diagnostic that is safe to expose in job status."""
+
+
 class RunSummary(BaseModel):
     run_id: str
     vendor: str = "levelup"
