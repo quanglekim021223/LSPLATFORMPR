@@ -70,7 +70,11 @@ build-function-dev:
           function.get_function_name()
           for function in function_app.app.get_functions()
       )
-      expected = ['http_app_func', 'scheduled_vendor_ingestion']
+      expected = [
+          'http_app_func',
+          'manual_vendor_ingestion',
+          'scheduled_vendor_ingestion',
+      ]
       assert names == expected, f'Unexpected Azure Functions: {names}'
       print(f'Function entrypoint verified: {names}')
       "
